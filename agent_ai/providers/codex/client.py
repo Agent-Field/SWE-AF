@@ -13,7 +13,11 @@ from typing import IO, Any, Type, TypeVar
 
 from pydantic import BaseModel
 
-from agent_ai.providers.codex.adapter import build_codex_command, parse_codex_jsonl
+from agent_ai.providers.codex.adapter import (
+    build_codex_command,
+    normalize_schema_for_codex,
+    parse_codex_jsonl,
+)
 from agent_ai.types import AgentResponse, Message, Metrics, TextContent, Tool
 
 T = TypeVar("T", bound=BaseModel)
@@ -158,8 +162,9 @@ class CodexProviderClient:
         if output_schema:
             output_schema_path = _tmp_path(effective_cwd, "codex_schema")
             temp_files.append(output_schema_path)
+            schema_obj = normalize_schema_for_codex(output_schema.model_json_schema())
             with open(output_schema_path, "w", encoding="utf-8") as f:
-                json.dump(output_schema.model_json_schema(), f, indent=2)
+                json.dump(schema_obj, f, indent=2)
 
         final_prompt = prompt
         if effective_system:

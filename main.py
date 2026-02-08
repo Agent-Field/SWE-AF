@@ -210,6 +210,7 @@ async def plan(
         additional_context=additional_context,
         model=pm_model,
         permission_mode=permission_mode,
+        ai_provider=ai_provider,
     )
 
     # 2. Architect designs the solution
@@ -221,6 +222,7 @@ async def plan(
         artifacts_dir=artifacts_dir,
         model=architect_model,
         permission_mode=permission_mode,
+        ai_provider=ai_provider,
     )
 
     # 3. Tech Lead review loop
@@ -235,6 +237,7 @@ async def plan(
             revision_number=i,
             model=tech_lead_model,
             permission_mode=permission_mode,
+            ai_provider=ai_provider,
         )
         if review["approved"]:
             break
@@ -248,6 +251,7 @@ async def plan(
                 feedback=review["feedback"],
                 model=architect_model,
                 permission_mode=permission_mode,
+                ai_provider=ai_provider,
             )
 
     # Force-approve if we exhausted iterations
@@ -271,6 +275,7 @@ async def plan(
         artifacts_dir=artifacts_dir,
         model=sprint_planner_model,
         permission_mode=permission_mode,
+        ai_provider=ai_provider,
     )
     issues = sprint_result["issues"]
     rationale = sprint_result["rationale"]
@@ -314,6 +319,7 @@ async def plan(
             sibling_issues=siblings,
             model=issue_writer_model,
             permission_mode=permission_mode,
+            ai_provider=ai_provider,
         ))
     writer_results = await asyncio.gather(*writer_tasks, return_exceptions=True)
 

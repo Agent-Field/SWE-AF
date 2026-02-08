@@ -1,7 +1,7 @@
 """Internal reasoners for the SWE planning pipeline.
 
 Each reasoner wraps a single agent role (PM, Architect, Tech Lead, Sprint Planner)
-and uses ClaudeAI for actual AI execution. The @router.reasoner() decorator provides
+and uses AgentAI for actual AI execution. The @router.reasoner() decorator provides
 FastAPI endpoints, workflow DAG tracking, and observability via router.note().
 """
 
@@ -13,8 +13,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from claude_ai import ClaudeAI, ClaudeAIConfig
-from claude_ai.types import Tool
+from agent_ai import AgentAI, AgentAIConfig
+from agent_ai.types import Tool
 from execution.schemas import DEFAULT_AGENT_MAX_TURNS
 from prompts.architect import architect_prompts
 from prompts.product_manager import product_manager_prompts
@@ -167,6 +167,7 @@ async def run_product_manager(
     model: str = "sonnet",
     max_turns: int = DEFAULT_AGENT_MAX_TURNS,
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Run the product manager agent to scope a goal into a PRD."""
     router.note("PM starting", tags=["pm", "start"])
@@ -175,8 +176,9 @@ async def run_product_manager(
     paths = _ensure_paths(base)
     log_path = os.path.join(base, "logs", "product_manager.jsonl")
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=max_turns,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
@@ -211,6 +213,7 @@ async def run_architect(
     model: str = "sonnet",
     max_turns: int = DEFAULT_AGENT_MAX_TURNS,
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Run the architect agent to produce a technical architecture."""
     router.note("Architect starting", tags=["architect", "start"])
@@ -219,8 +222,9 @@ async def run_architect(
     paths = _ensure_paths(base)
     log_path = os.path.join(base, "logs", "architect.jsonl")
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=max_turns,
         allowed_tools=[Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP, Tool.BASH],
@@ -257,6 +261,7 @@ async def run_tech_lead(
     model: str = "sonnet",
     max_turns: int = DEFAULT_AGENT_MAX_TURNS,
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Run the tech lead agent to review the architecture against the PRD."""
     router.note("Tech Lead starting", tags=["tech_lead", "start"])
@@ -265,8 +270,9 @@ async def run_tech_lead(
     paths = _ensure_paths(base)
     log_path = os.path.join(base, "logs", "tech_lead.jsonl")
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=max_turns,
         allowed_tools=[Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP],
@@ -301,6 +307,7 @@ async def run_sprint_planner(
     model: str = "sonnet",
     max_turns: int = DEFAULT_AGENT_MAX_TURNS,
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Run the sprint planner to decompose work into executable issues.
 
@@ -316,8 +323,9 @@ async def run_sprint_planner(
     paths = _ensure_paths(base)
     log_path = os.path.join(base, "logs", "sprint_planner.jsonl")
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=max_turns,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP],

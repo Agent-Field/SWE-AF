@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from claude_ai.types import Tool
+from agent_ai.types import Tool
 
 
 @dataclass

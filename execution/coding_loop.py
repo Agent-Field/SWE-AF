@@ -84,6 +84,7 @@ async def run_coding_loop(
             project_context=project_context,
             model=config.coder_model,
             permission_mode=permission_mode,
+            ai_provider=config.ai_provider,
         )
 
         # Track files changed across iterations
@@ -101,6 +102,7 @@ async def run_coding_loop(
             project_context=project_context,
             model=config.qa_model,
             permission_mode=permission_mode,
+            ai_provider=config.ai_provider,
         )
 
         review_task = call_fn(
@@ -112,6 +114,7 @@ async def run_coding_loop(
             project_context=project_context,
             model=config.code_reviewer_model,
             permission_mode=permission_mode,
+            ai_provider=config.ai_provider,
         )
 
         qa_result, review_result = await asyncio.gather(qa_task, review_task)
@@ -140,6 +143,7 @@ async def run_coding_loop(
             artifacts_dir=project_context.get("artifacts_dir", ""),
             model=config.qa_synthesizer_model,
             permission_mode=permission_mode,
+            ai_provider=config.ai_provider,
         )
 
         action = synthesis_result.get("action", "fix")

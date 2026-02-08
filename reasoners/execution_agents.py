@@ -10,8 +10,8 @@ import os
 
 from pydantic import BaseModel
 
-from claude_ai import ClaudeAI, ClaudeAIConfig
-from claude_ai.types import Tool
+from agent_ai import AgentAI, AgentAIConfig
+from agent_ai.types import Tool
 from execution.schemas import (
     DEFAULT_AGENT_MAX_TURNS,
     CodeReviewResult,
@@ -90,6 +90,7 @@ async def run_retry_advisor(
     artifacts_dir: str = "",
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Diagnose a coding agent failure and advise whether to retry.
 
@@ -116,8 +117,9 @@ async def run_retry_advisor(
     log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
     log_path = os.path.join(log_dir, f"retry_advisor_{issue_name}_{attempt_number}.jsonl") if log_dir else None
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
@@ -160,6 +162,7 @@ async def run_replanner(
     failed_issues: list[dict],
     replan_model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Invoke the replanner to decide how to handle unrecoverable failures.
 
@@ -180,8 +183,9 @@ async def run_replanner(
     log_dir = os.path.join(state.artifacts_dir, "logs") if state.artifacts_dir else None
     log_path = os.path.join(log_dir, f"replanner_{state.replan_count}.jsonl") if log_dir else None
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=replan_model,
+        provider=ai_provider,
         cwd=state.repo_path or ".",
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
@@ -239,6 +243,7 @@ async def run_issue_writer(
     sibling_issues: list[dict] | None = None,
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Write a lean issue-*.md file for a new or updated issue.
 
@@ -271,8 +276,9 @@ async def run_issue_writer(
         issue_file_path: str
         success: bool
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP],
@@ -316,6 +322,7 @@ async def run_verifier(
     skipped_issues: list[str],
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Run final acceptance verification against the PRD.
 
@@ -334,8 +341,9 @@ async def run_verifier(
         skipped_issues=skipped_issues,
     )
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
@@ -383,6 +391,7 @@ async def run_git_init(
     artifacts_dir: str = "",
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Initialize git repo and create integration branch for feature work.
 
@@ -398,8 +407,9 @@ async def run_git_init(
 
     task_prompt = git_init_task_prompt(repo_path=repo_path, goal=goal)
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.BASH],
@@ -447,6 +457,7 @@ async def run_workspace_setup(
     level: int = 0,
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Create git worktrees for parallel issue isolation.
 
@@ -472,8 +483,9 @@ async def run_workspace_setup(
         workspaces: list[WorkspaceInfo]
         success: bool
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.BASH],
@@ -514,6 +526,7 @@ async def run_merger(
     level: int = 0,
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Merge level branches into the integration branch with AI conflict resolution.
 
@@ -537,8 +550,9 @@ async def run_merger(
         architecture_summary=architecture_summary,
     )
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.BASH, Tool.READ, Tool.GLOB, Tool.GREP],
@@ -587,6 +601,7 @@ async def run_integration_tester(
     level: int = 0,
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Run integration tests on merged code to verify cross-feature interactions.
 
@@ -609,8 +624,9 @@ async def run_integration_tester(
         conflict_resolutions=conflict_resolutions,
     )
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.BASH, Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP],
@@ -655,6 +671,7 @@ async def run_workspace_cleanup(
     level: int = 0,
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Remove worktrees and optionally delete merged branches.
 
@@ -678,8 +695,9 @@ async def run_workspace_cleanup(
         success: bool
         cleaned: list[str] = []
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=repo_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.BASH],
@@ -723,6 +741,7 @@ async def run_coder(
     project_context: dict = {},
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Implement an issue: write code, tests, and commit.
 
@@ -746,8 +765,9 @@ async def run_coder(
         project_context=project_context,
     )
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=worktree_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[
@@ -797,6 +817,7 @@ async def run_qa(
     project_context: dict = {},
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Review and augment tests, then run the test suite.
 
@@ -820,8 +841,9 @@ async def run_qa(
         project_context=project_context,
     )
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=worktree_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[
@@ -868,6 +890,7 @@ async def run_code_reviewer(
     project_context: dict = {},
     model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Review code quality, security, and requirements adherence (read-only).
 
@@ -891,8 +914,9 @@ async def run_code_reviewer(
         project_context=project_context,
     )
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=worktree_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP],
@@ -941,6 +965,7 @@ async def run_qa_synthesizer(
     artifacts_dir: str = "",
     model: str = "haiku",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Merge QA and review feedback, decide fix/approve/block.
 
@@ -964,8 +989,9 @@ async def run_qa_synthesizer(
         issue_summary=issue_summary,
     )
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=model,
+        provider=ai_provider,
         cwd=worktree_path or ".",
         max_turns=DEFAULT_AGENT_MAX_TURNS,
         allowed_tools=[Tool.WRITE],

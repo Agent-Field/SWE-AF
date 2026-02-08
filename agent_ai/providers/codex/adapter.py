@@ -70,3 +70,25 @@ def parse_codex_jsonl(stdout_text: str) -> tuple[str | None, dict[str, Any] | No
                     usage = turn_usage
 
     return final_text, usage, events
+
+
+def normalize_schema_for_codex(schema: dict[str, Any]) -> dict[str, Any]:
+    """Normalize JSON schema for codex strict-mode requirements.
+
+    Codex structured output currently requires object schemas to explicitly set
+    ``additionalProperties: false``.
+    """
+
+    def _walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            node_type = node.get("type")
+            if node_type == "object" and "additionalProperties" not in node:
+                node["additionalProperties"] = False
+            for key, value in list(node.items()):
+                node[key] = _walk(value)
+        elif isinstance(node, list):
+            return [_walk(v) for v in node]
+        return node
+
+    copied = json.loads(json.dumps(schema))
+    return _walk(copied)

@@ -52,6 +52,7 @@ async def _setup_worktrees(
         worktrees_dir=dag_state.worktrees_dir,
         artifacts_dir=dag_state.artifacts_dir,
         level=dag_state.current_level,
+        ai_provider=config.ai_provider,
     )
 
     if not setup.get("success"):
@@ -140,6 +141,7 @@ async def _merge_level_branches(
         artifacts_dir=dag_state.artifacts_dir,
         level=level_result.level_index,
         model=config.merger_model,
+        ai_provider=config.ai_provider,
     )
 
     merge_result = await call_fn(f"{node_id}.run_merger", **merge_kwargs)
@@ -221,6 +223,7 @@ async def _run_integration_tests(
             artifacts_dir=dag_state.artifacts_dir,
             level=level_result.level_index,
             model=config.integration_tester_model,
+            ai_provider=config.ai_provider,
         )
         if test_result.get("passed"):
             break
@@ -272,6 +275,7 @@ async def _cleanup_worktrees(
                 branches_to_clean=branches_to_clean,
                 artifacts_dir=dag_state.artifacts_dir,
                 level=level,
+                ai_provider=config.ai_provider,
             )
             if result.get("success"):
                 if note_fn:
@@ -485,6 +489,7 @@ async def _execute_single_issue(
                             architecture_path=dag_state.architecture_path,
                             artifacts_dir=dag_state.artifacts_dir,
                             model=config.retry_advisor_model,
+                            ai_provider=config.ai_provider,
                         )
                         if not advice.get("should_retry", False):
                             # Advisor says don't bother retrying
@@ -625,6 +630,7 @@ async def _invoke_replanner_via_call(
         dag_state=dag_state.model_dump(),
         failed_issues=[f.model_dump() for f in unrecoverable],
         replan_model=config.replan_model,
+        ai_provider=config.ai_provider,
     )
     return ReplanDecision(**decision_dict)
 
@@ -684,6 +690,7 @@ async def _write_issue_files_for_replan(
             issues_dir=dag_state.issues_dir,
             repo_path=dag_state.repo_path,
             model=config.issue_writer_model,
+            ai_provider=config.ai_provider,
         )
         for new_issue in issues_to_write
     ]

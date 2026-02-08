@@ -1,12 +1,12 @@
-"""Replanner agent — invokes ClaudeAI to restructure the DAG after failures."""
+"""Replanner agent — invokes AgentAI to restructure the DAG after failures."""
 
 from __future__ import annotations
 
 import os
 from typing import Callable
 
-from claude_ai import ClaudeAI, ClaudeAIConfig
-from claude_ai.types import Tool
+from agent_ai import AgentAI, AgentAIConfig
+from agent_ai.types import Tool
 from execution.schemas import (
     DAGState,
     ExecutionConfig,
@@ -52,8 +52,9 @@ async def invoke_replanner(
     log_dir = os.path.join(dag_state.artifacts_dir, "logs") if dag_state.artifacts_dir else None
     log_path = os.path.join(log_dir, f"replanner_{dag_state.replan_count}.jsonl") if log_dir else None
 
-    ai = ClaudeAI(ClaudeAIConfig(
+    ai = AgentAI(AgentAIConfig(
         model=config.replan_model,
+        provider=config.ai_provider,
         cwd=dag_state.repo_path or ".",
         max_turns=15,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
