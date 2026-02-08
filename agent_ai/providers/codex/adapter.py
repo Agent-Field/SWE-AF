@@ -29,6 +29,8 @@ def build_codex_command(
         codex_bin,
         "exec",
         "--json",
+        "-c",
+        "mcp_servers.figma.enabled=false",
         "--dangerously-bypass-approvals-and-sandbox",
         "-C",
         cwd,
@@ -75,15 +77,21 @@ def parse_codex_jsonl(stdout_text: str) -> tuple[str | None, dict[str, Any] | No
 def normalize_schema_for_codex(schema: dict[str, Any]) -> dict[str, Any]:
     """Normalize JSON schema for codex strict-mode requirements.
 
-    Codex structured output currently requires object schemas to explicitly set
-    ``additionalProperties: false``.
+    Codex structured output currently requires object schemas to:
+    - explicitly set ``additionalProperties: false``
+    - provide ``required`` as an array including all object properties
     """
 
     def _walk(node: Any) -> Any:
         if isinstance(node, dict):
             node_type = node.get("type")
-            if node_type == "object" and "additionalProperties" not in node:
+            if node_type == "object":
                 node["additionalProperties"] = False
+                properties = node.get("properties")
+                if isinstance(properties, dict):
+                    node["required"] = list(properties.keys())
+                else:
+                    node["required"] = []
             for key, value in list(node.items()):
                 node[key] = _walk(value)
         elif isinstance(node, list):

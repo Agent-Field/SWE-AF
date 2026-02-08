@@ -60,6 +60,11 @@ class CodexAdapterTests(unittest.TestCase):
             normalized["properties"]["item"]["additionalProperties"],
             False,
         )
+        self.assertEqual(normalized["required"], ["item"])
+        self.assertEqual(
+            normalized["properties"]["item"]["required"],
+            ["name"],
+        )
 
 
 if __name__ == "__main__":
