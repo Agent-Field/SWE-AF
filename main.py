@@ -37,6 +37,7 @@ async def build(
     additional_context: str = "",
     config: dict = {},
     execute_fn_target: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """End-to-end: plan → execute → verify → optional fix cycle.
 
@@ -47,6 +48,8 @@ async def build(
     cfg = BuildConfig(**config) if config else BuildConfig()
     if execute_fn_target:
         cfg.execute_fn_target = execute_fn_target
+    if ai_provider:
+        cfg.ai_provider = ai_provider
 
     app.note("Build starting", tags=["build", "start"])
 
@@ -64,6 +67,7 @@ async def build(
         sprint_planner_model=cfg.sprint_planner_model,
         issue_writer_model=cfg.issue_writer_model,
         permission_mode=cfg.permission_mode,
+        ai_provider=cfg.ai_provider,
     )
 
     # 1.5 GIT INIT (between plan and execute)
@@ -76,6 +80,7 @@ async def build(
         artifacts_dir=plan_result.get("artifacts_dir", ""),
         model=cfg.git_model,
         permission_mode=cfg.permission_mode,
+        ai_provider=cfg.ai_provider,
     )
     if git_init.get("success"):
         git_config = {
@@ -123,6 +128,7 @@ async def build(
         execute_fn_target=cfg.execute_fn_target,
         config=exec_config,
         git_config=git_config,
+        ai_provider=cfg.ai_provider,
     )
 
     # 3. VERIFY
@@ -139,6 +145,7 @@ async def build(
             skipped_issues=dag_result.get("skipped_issues", []),
             model=cfg.verifier_model,
             permission_mode=cfg.permission_mode,
+            ai_provider=cfg.ai_provider,
         )
 
         if verification.get("passed", False) or cycle >= cfg.max_verify_fix_cycles:
@@ -185,6 +192,7 @@ async def plan(
     sprint_planner_model: str = "sonnet",
     issue_writer_model: str = "sonnet",
     permission_mode: str = "",
+    ai_provider: str = "claude",
 ) -> dict:
     """Run the full planning pipeline.
 
@@ -343,6 +351,7 @@ async def execute(
     config: dict = {},
     git_config: dict | None = None,
     resume: bool = False,
+    ai_provider: str = "claude",
 ) -> dict:
     """Execute a planned DAG with self-healing replanning.
 
@@ -359,7 +368,10 @@ async def execute(
     from execution.dag_executor import run_dag
     from execution.schemas import ExecutionConfig
 
-    exec_config = ExecutionConfig(**config) if config else ExecutionConfig()
+    effective_config = dict(config) if config else {}
+    if ai_provider and "ai_provider" not in effective_config:
+        effective_config["ai_provider"] = ai_provider
+    exec_config = ExecutionConfig(**effective_config) if effective_config else ExecutionConfig()
 
     if execute_fn_target:
         # External coder agent (existing path)

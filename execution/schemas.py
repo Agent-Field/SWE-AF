@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -279,6 +279,7 @@ class BuildConfig(BaseModel):
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
     # Target
     execute_fn_target: str = ""
+    ai_provider: Literal["claude", "codex"] = "claude"
     permission_mode: str = ""
 
 
@@ -313,3 +314,4 @@ class ExecutionConfig(BaseModel):
     qa_synthesizer_model: str = "haiku"
     # Agent limits
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
+    ai_provider: Literal["claude", "codex"] = "claude"

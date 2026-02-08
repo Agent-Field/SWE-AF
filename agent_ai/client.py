@@ -4,20 +4,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Type
+from typing import Literal, Type
 
 from pydantic import BaseModel
 
 from agent_ai.factory import build_provider_client
-from agent_ai.providers.claude import DEFAULT_TOOLS
-from agent_ai.types import AgentResponse
+from agent_ai.types import AgentResponse, Tool
+
+DEFAULT_TOOLS: list[str] = [
+    Tool.READ,
+    Tool.WRITE,
+    Tool.EDIT,
+    Tool.BASH,
+    Tool.GLOB,
+    Tool.GREP,
+]
 
 
 @dataclass
 class AgentAIConfig:
     """Configuration for AgentAI."""
 
-    provider: str = "claude"
+    provider: Literal["claude", "codex"] = "claude"
+    codex_bin: str = "codex"
     model: str = "sonnet"
     cwd: str | Path = "."
     max_turns: int = 10
