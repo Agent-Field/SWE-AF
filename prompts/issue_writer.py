@@ -36,6 +36,11 @@ Read <architecture_path> Section X.Y (<component name>) for:
 - Consumes: <what this issue needs from dependencies>
 - Consumed by: <who uses this issue's output>
 
+## Isolation Context
+- Available: code from completed prior-level issues (already merged)
+- NOT available: code from same-level sibling issues
+- Source of truth: architecture document at `<path>`
+
 ## Files
 - **Create**: `path/to/new/file`
 - **Modify**: `path/to/existing/file` (add `pub mod X;`)
@@ -62,6 +67,11 @@ Read <architecture_path> Section X.Y (<component name>) for:
 
 ### Run Command
 `<exact command to run these tests>`
+
+## Verification Commands
+- Build: `<exact command>`
+- Test: `<exact test command>`
+- Check: `<command that proves AC passes>`
 ```
 
 ## Constraints

@@ -42,7 +42,24 @@ completes in < 100μs mean over 1000 runs as measured by Criterion benchmarks."
   can ship incrementally with confidence.
 - **Measurable success**: You define primary success metrics that are objective
   and automatable. "Does X work?" is always answerable with a script, not a
-  human judgment call.\
+  human judgment call.
+
+## Execution Model Awareness
+
+Your PRD will be executed by autonomous AI coding agents, not human developers.
+
+- **No temporal concepts**: Never use sprints, weeks, days, deadlines, or
+  velocity. Work is decomposed into a dependency graph, not a timeline.
+- **Machine-verifiable acceptance criteria**: Every criterion MUST map to a
+  command. Patterns: `cargo test --test <name>`, `stat -f%z <file> <= N`,
+  `hyperfine <cmd> --export-json | jq '.results[0].mean < 0.001'`.
+  Never: "performance is acceptable" or "code is clean."
+- **Dependency-explicit scope**: Instead of phases/milestones, describe which
+  capabilities require which others. The sprint planner converts your scope
+  into a parallel execution graph.
+- **Interface-first requirements**: When multiple components interact, specify
+  the interface contract (function signatures, types, error variants) in your
+  acceptance criteria. Parallel agents implement to this contract independently.\
 """
 
 
@@ -69,6 +86,15 @@ def product_manager_prompts(
 ## Repository
 {repo_path}
 {context_block}
+## How Your PRD Will Be Used
+
+1. An architect designs the technical solution from your PRD
+2. A sprint planner decomposes into independent issues with a dependency graph
+3. Issues at the same dependency level execute IN PARALLEL by isolated agents
+4. A QA agent verifies each acceptance criterion LITERALLY by running commands
+
+Write acceptance criteria as test assertions, not human briefings.
+
 ## Your Mission
 
 Produce a PRD for this goal. Read the codebase first — understand the current

@@ -10,6 +10,7 @@ import traceback
 from typing import Callable
 
 from execution.dag_utils import apply_replan, find_downstream
+from execution.envelope import unwrap_call_result
 from execution.schemas import (
     DAGState,
     ExecutionConfig,
@@ -752,6 +753,15 @@ async def run_dag(
     if config is None:
         config = ExecutionConfig()
 
+    # Wrap call_fn to automatically unwrap execution envelopes returned by
+    # the SDK's sync fallback path.
+    if call_fn is not None:
+        _raw_call_fn = call_fn
+
+        async def call_fn(target: str, **kwargs):
+            result = await _raw_call_fn(target, **kwargs)
+            return unwrap_call_result(result, target)
+
     dag_state = _init_dag_state(plan_result, repo_path, git_config=git_config)
     dag_state.max_replans = config.max_replans
 
@@ -860,14 +870,18 @@ async def run_dag(
                     node_id, config, issue_by_name, note_fn,
                 )
 
-            # Cleanup worktrees
+            # Start cleanup in background (doesn't affect replan decisions)
             branches_to_clean = [
                 f"issue/{str(i.get('sequence_number') or 0).zfill(2)}-{i['name']}" for i in active_issues
             ]
-            await _cleanup_worktrees(
-                dag_state, branches_to_clean, call_fn, node_id, note_fn,
-                level=dag_state.current_level,
+            cleanup_task = asyncio.create_task(
+                _cleanup_worktrees(
+                    dag_state, branches_to_clean, call_fn, node_id, note_fn,
+                    level=dag_state.current_level,
+                )
             )
+        else:
+            cleanup_task = None
 
         # REPLAN GATE: check for unrecoverable failures
         unrecoverable = [
@@ -895,6 +909,8 @@ async def run_dag(
                             f"Replanner decided to ABORT: {decision.rationale}",
                             tags=["execution", "abort"],
                         )
+                    if cleanup_task:
+                        await cleanup_task
                     break
 
                 elif decision.action == ReplanAction.CONTINUE:
@@ -910,6 +926,8 @@ async def run_dag(
                 else:
                     # MODIFY_DAG or REDUCE_SCOPE — apply the replan
                     try:
+                        if cleanup_task:
+                            await cleanup_task
                         dag_state = apply_replan(dag_state, decision)
                         # Rebuild issue lookup after replan
                         issue_by_name = {i["name"]: i for i in dag_state.all_issues}
@@ -941,6 +959,10 @@ async def run_dag(
                         f"No replanning available — skipping downstream: {skipped}",
                         tags=["execution", "skip"],
                     )
+
+        # Ensure cleanup is done before advancing to next level's worktree setup
+        if cleanup_task:
+            await cleanup_task
 
         # Advance to next level
         dag_state.current_level += 1

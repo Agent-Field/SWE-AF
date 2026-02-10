@@ -118,7 +118,17 @@ Your issue plan may be partially executed if failures occur. Design for resilien
 - **Isolated changes**: Prefer issues that create new files over issues that modify
   many existing files. Isolated changes are easier to reason about after failures.
 - **Fallback-friendly scope**: When possible, define interfaces clearly enough that
-  a simpler alternative could provide the same contracts.\
+  a simpler alternative could provide the same contracts.
+
+## Parallel Isolation Rules
+
+Each issue runs in an isolated git worktree:
+- Agents CANNOT see sibling issues' in-progress work (only merged prior levels)
+- Interface contracts in the architecture are the ONLY shared truth between
+  parallel issues — include exact architecture section references in each issue
+- Acceptance criteria must be locally verifiable within one worktree
+  (no "integrates with module X" unless X is from a prior level)
+- Two parallel issues SHOULD NOT create the same file\
 """
 
 

@@ -16,6 +16,7 @@ from reasoners.pipeline import _assign_sequence_numbers, _compute_levels, _valid
 from schemas import PlanResult, ReviewResult
 
 from agentfield import Agent
+from execution.envelope import unwrap_call_result as _unwrap
 
 NODE_ID = os.getenv("NODE_ID", "swe-planner")
 
@@ -38,6 +39,9 @@ async def build(
     config: dict = {},
     execute_fn_target: str = "",
     ai_provider: str = "claude",
+    model: str = "",
+    max_turns: int = 0,
+    permission_mode: str = "",
 ) -> dict:
     """End-to-end: plan → execute → verify → optional fix cycle.
 
@@ -50,11 +54,34 @@ async def build(
         cfg.execute_fn_target = execute_fn_target
     if ai_provider:
         cfg.ai_provider = ai_provider
+    if permission_mode:
+        cfg.permission_mode = permission_mode
+    if max_turns > 0:
+        cfg.agent_max_turns = max_turns
+    if model:
+        # Convenience override: allow a single top-level model to drive all roles.
+        cfg.pm_model = model
+        cfg.architect_model = model
+        cfg.tech_lead_model = model
+        cfg.sprint_planner_model = model
+        cfg.replan_model = model
+        cfg.retry_advisor_model = model
+        cfg.issue_writer_model = model
+        cfg.verifier_model = model
+        cfg.git_model = model
+        cfg.merger_model = model
+        cfg.integration_tester_model = model
+        cfg.coder_model = model
+        cfg.qa_model = model
+        cfg.code_reviewer_model = model
+        cfg.qa_synthesizer_model = model
 
     app.note("Build starting", tags=["build", "start"])
 
-    # 1. PLAN
-    plan_result = await app.call(
+    # 1. PLAN + GIT INIT (concurrent — no data dependency between them)
+    app.note("Phase 1: Planning + Git init (parallel)", tags=["build", "parallel"])
+
+    plan_coro = app.call(
         f"{NODE_ID}.plan",
         goal=goal,
         repo_path=repo_path,
@@ -70,18 +97,25 @@ async def build(
         ai_provider=cfg.ai_provider,
     )
 
-    # 1.5 GIT INIT (between plan and execute)
-    git_config = None
-    app.note("Phase 1.5: Git initialization", tags=["build", "git_init"])
-    git_init = await app.call(
+    git_init_coro = app.call(
         f"{NODE_ID}.run_git_init",
         repo_path=repo_path,
         goal=goal,
-        artifacts_dir=plan_result.get("artifacts_dir", ""),
+        artifacts_dir=artifacts_dir,
         model=cfg.git_model,
         permission_mode=cfg.permission_mode,
         ai_provider=cfg.ai_provider,
     )
+
+    raw_plan, raw_git = await asyncio.gather(plan_coro, git_init_coro)
+    plan_result = _unwrap(raw_plan, "plan")
+    # git_init failures are non-fatal — unwrap but don't raise
+    try:
+        git_init = _unwrap(raw_git, "run_git_init")
+    except RuntimeError:
+        git_init = raw_git if isinstance(raw_git, dict) else {"success": False, "error_message": str(raw_git)}
+
+    git_config = None
     if git_init.get("success"):
         git_config = {
             "integration_branch": git_init["integration_branch"],
@@ -121,7 +155,7 @@ async def build(
         "agent_max_turns": cfg.agent_max_turns,
     }
 
-    dag_result = await app.call(
+    dag_result = _unwrap(await app.call(
         f"{NODE_ID}.execute",
         plan_result=plan_result,
         repo_path=repo_path,
@@ -129,13 +163,13 @@ async def build(
         config=exec_config,
         git_config=git_config,
         ai_provider=cfg.ai_provider,
-    )
+    ), "execute")
 
     # 3. VERIFY
     verification = None
     for cycle in range(cfg.max_verify_fix_cycles + 1):
         app.note(f"Verification cycle {cycle}", tags=["build", "verify"])
-        verification = await app.call(
+        verification = _unwrap(await app.call(
             f"{NODE_ID}.run_verifier",
             prd=plan_result["prd"],
             repo_path=repo_path,
@@ -146,7 +180,7 @@ async def build(
             model=cfg.verifier_model,
             permission_mode=cfg.permission_mode,
             ai_provider=cfg.ai_provider,
-        )
+        ), "run_verifier")
 
         if verification.get("passed", False) or cycle >= cfg.max_verify_fix_cycles:
             break
@@ -202,7 +236,7 @@ async def plan(
 
     # 1. PM scopes the goal into a PRD
     app.note("Phase 1: Product Manager", tags=["pipeline", "pm"])
-    prd = await app.call(
+    prd = _unwrap(await app.call(
         f"{NODE_ID}.run_product_manager",
         goal=goal,
         repo_path=repo_path,
@@ -211,11 +245,11 @@ async def plan(
         model=pm_model,
         permission_mode=permission_mode,
         ai_provider=ai_provider,
-    )
+    ), "run_product_manager")
 
     # 2. Architect designs the solution
     app.note("Phase 2: Architect", tags=["pipeline", "architect"])
-    arch = await app.call(
+    arch = _unwrap(await app.call(
         f"{NODE_ID}.run_architect",
         prd=prd,
         repo_path=repo_path,
@@ -223,13 +257,13 @@ async def plan(
         model=architect_model,
         permission_mode=permission_mode,
         ai_provider=ai_provider,
-    )
+    ), "run_architect")
 
     # 3. Tech Lead review loop
     review = None
     for i in range(max_review_iterations + 1):
         app.note(f"Phase 3: Tech Lead review (iteration {i})", tags=["pipeline", "tech_lead"])
-        review = await app.call(
+        review = _unwrap(await app.call(
             f"{NODE_ID}.run_tech_lead",
             prd=prd,
             repo_path=repo_path,
@@ -238,12 +272,12 @@ async def plan(
             model=tech_lead_model,
             permission_mode=permission_mode,
             ai_provider=ai_provider,
-        )
+        ), "run_tech_lead")
         if review["approved"]:
             break
         if i < max_review_iterations:
             app.note(f"Architecture revision {i + 1}", tags=["pipeline", "revision"])
-            arch = await app.call(
+            arch = _unwrap(await app.call(
                 f"{NODE_ID}.run_architect",
                 prd=prd,
                 repo_path=repo_path,
@@ -252,7 +286,7 @@ async def plan(
                 model=architect_model,
                 permission_mode=permission_mode,
                 ai_provider=ai_provider,
-            )
+            ), "run_architect (revision)")
 
     # Force-approve if we exhausted iterations
     assert review is not None
@@ -267,7 +301,7 @@ async def plan(
 
     # 4. Sprint planner decomposes into issues
     app.note("Phase 4: Sprint Planner", tags=["pipeline", "sprint_planner"])
-    sprint_result = await app.call(
+    sprint_result = _unwrap(await app.call(
         f"{NODE_ID}.run_sprint_planner",
         prd=prd,
         architecture=arch,
@@ -276,7 +310,7 @@ async def plan(
         model=sprint_planner_model,
         permission_mode=permission_mode,
         ai_provider=ai_provider,
-    )
+    ), "run_sprint_planner")
     issues = sprint_result["issues"]
     rationale = sprint_result["rationale"]
 

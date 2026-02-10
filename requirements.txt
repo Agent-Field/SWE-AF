@@ -1,0 +1,15 @@
+# AgentField SWE Pipeline — Dependencies
+#
+# Install: uv pip install -r requirements.txt
+# The agentfield SDK is installed editable from the monorepo.
+
+# Core
+pydantic>=2.0
+claude-agent-sdk>=0.1.20
+
+# AgentField SDK (editable from monorepo)
+-e ../../code/agentfield/sdk/python
+
+# Transitive deps pinned by agentfield SDK (listed for completeness):
+#   aiohttp, fal-client, fastapi, litellm, psutil, PyYAML,
+#   requests, uvicorn, websockets

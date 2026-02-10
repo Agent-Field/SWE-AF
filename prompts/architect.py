@@ -52,7 +52,24 @@ obvious alternatives.
   indirection for them. Show the migration path, not the scaffolding.
 - **Dependency justification**: Every external dependency earns its inclusion.
   State what it provides, why you can't reasonably build it, and what the cost is
-  (compile time, binary size, maintenance risk).\
+  (compile time, binary size, maintenance risk).
+
+## Parallel Agent Execution Constraints
+
+Your architecture is decomposed into issues executed by isolated agents in
+parallel git worktrees:
+
+- **File boundary = isolation boundary**: Components built by different agents
+  MUST live in different files. Two parallel issues modifying the same file
+  creates merge conflicts — restructure to give each issue distinct files.
+- **Shared types module first**: Define ALL cross-component types (error enums,
+  data structures, config types) in a foundational module built before anything
+  else. All other modules import from it. This eliminates type duplication.
+- **Interface contracts are the ONLY coordination**: Parallel agents each read
+  YOUR document and implement to the interfaces you define. Be exact with
+  signatures, types, and error variants — or agents will produce incompatible code.
+- **Explicit module dependency graph**: For each component, list which other
+  components it imports from. This maps directly to the execution DAG.\
 """
 
 
