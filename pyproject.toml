@@ -1,0 +1,12 @@
+[project]
+name = "agentnode"
+version = "0.1.0"
+description = "Autonomous SWE agent node for AgentField"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "claude-agent-sdk>=0.1.20",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]

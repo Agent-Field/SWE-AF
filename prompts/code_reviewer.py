@@ -61,7 +61,7 @@ def code_reviewer_task_prompt(
     coder_result: dict,
     issue: dict,
     iteration_id: str = "",
-    project_context: dict = {},
+    project_context: dict | None = None,
 ) -> str:
     """Build the task prompt for the code reviewer agent.
 
@@ -72,6 +72,7 @@ def code_reviewer_task_prompt(
         iteration_id: UUID for this iteration's artifact tracking.
         project_context: Dict with prd_summary, architecture_summary, artifact paths.
     """
+    project_context = project_context or {}
     sections: list[str] = []
 
     sections.append("## Issue Under Review")

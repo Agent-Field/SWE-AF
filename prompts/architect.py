@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from schemas import PRD
+from reasoners.schemas import PRD
 
 SYSTEM_PROMPT = """\
 You are a senior Software Architect whose designs ship on time because they are

@@ -20,7 +20,7 @@ from prompts.architect import architect_prompts
 from prompts.product_manager import product_manager_prompts
 from prompts.sprint_planner import sprint_planner_prompts
 from prompts.tech_lead import tech_lead_prompts
-from schemas import (
+from reasoners.schemas import (
     Architecture,
     PlannedIssue,
     PRD,

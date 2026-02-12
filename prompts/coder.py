@@ -76,7 +76,7 @@ def coder_task_prompt(
     worktree_path: str,
     feedback: str = "",
     iteration: int = 1,
-    project_context: dict = {},
+    project_context: dict | None = None,
 ) -> str:
     """Build the task prompt for the coder agent.
 
@@ -87,6 +87,7 @@ def coder_task_prompt(
         iteration: Current iteration number (1-based).
         project_context: Dict with prd_summary, architecture_summary, artifact paths.
     """
+    project_context = project_context or {}
     sections: list[str] = []
 
     sections.append("## Issue to Implement")

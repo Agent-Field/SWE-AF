@@ -859,7 +859,7 @@ async def run_coder(
     feedback: str = "",
     iteration: int = 1,
     iteration_id: str = "",
-    project_context: dict = {},
+    project_context: dict | None = None,
     model: str = "sonnet",
     permission_mode: str = "",
     ai_provider: str = "claude",
@@ -868,6 +868,7 @@ async def run_coder(
 
     Returns a CoderResult dict with files_changed, summary, complete.
     """
+    project_context = project_context or {}
     issue_name = issue.get("name", "?")
     _artifacts_dir = project_context.get("artifacts_dir", "")
     log_dir = os.path.join(_artifacts_dir, "logs") if _artifacts_dir else None
@@ -935,7 +936,7 @@ async def run_qa(
     coder_result: dict,
     issue: dict,
     iteration_id: str = "",
-    project_context: dict = {},
+    project_context: dict | None = None,
     model: str = "sonnet",
     permission_mode: str = "",
     ai_provider: str = "claude",
@@ -944,6 +945,7 @@ async def run_qa(
 
     Returns a QAResult dict with passed, summary, failures_file.
     """
+    project_context = project_context or {}
     issue_name = issue.get("name", "?")
     _artifacts_dir = project_context.get("artifacts_dir", "")
     log_dir = os.path.join(_artifacts_dir, "logs") if _artifacts_dir else None
@@ -1008,7 +1010,7 @@ async def run_code_reviewer(
     coder_result: dict,
     issue: dict,
     iteration_id: str = "",
-    project_context: dict = {},
+    project_context: dict | None = None,
     model: str = "sonnet",
     permission_mode: str = "",
     ai_provider: str = "claude",
@@ -1017,6 +1019,7 @@ async def run_code_reviewer(
 
     Returns a CodeReviewResult dict with approved, blocking, summary, debt_items.
     """
+    project_context = project_context or {}
     issue_name = issue.get("name", "?")
     _artifacts_dir = project_context.get("artifacts_dir", "")
     log_dir = os.path.join(_artifacts_dir, "logs") if _artifacts_dir else None
@@ -1082,7 +1085,7 @@ async def run_qa_synthesizer(
     iteration_history: list[dict],
     iteration_id: str = "",
     worktree_path: str = "",
-    issue_summary: dict = {},
+    issue_summary: dict | None = None,
     artifacts_dir: str = "",
     model: str = "haiku",
     permission_mode: str = "",
@@ -1092,6 +1095,7 @@ async def run_qa_synthesizer(
 
     Returns a QASynthesisResult dict with action, summary, feedback_file.
     """
+    issue_summary = issue_summary or {}
     _issue_name = issue_summary.get("name", "unknown")
     log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
     log_path = os.path.join(log_dir, f"synthesizer_{_issue_name}_iter_{iteration_id}.jsonl") if log_dir else None

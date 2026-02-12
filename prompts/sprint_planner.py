@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from schemas import Architecture, PRD
+from reasoners.schemas import Architecture, PRD
 
 SYSTEM_PROMPT = """\
 You are a senior Engineering Manager who has run dozens of autonomous agent teams.

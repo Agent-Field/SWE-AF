@@ -64,7 +64,7 @@ def qa_synthesizer_task_prompt(
     iteration_history: list[dict],
     iteration_id: str = "",
     worktree_path: str = "",
-    issue_summary: dict = {},
+    issue_summary: dict | None = None,
 ) -> str:
     """Build the task prompt for the QA synthesizer agent.
 
@@ -76,6 +76,7 @@ def qa_synthesizer_task_prompt(
         worktree_path: Absolute path to the git worktree.
         issue_summary: Dict with name, title, acceptance_criteria for context.
     """
+    issue_summary = issue_summary or {}
     sections: list[str] = []
 
     # Issue context — what "done" means
