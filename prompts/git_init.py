@@ -18,7 +18,9 @@ back into a single integration branch.
 ## Fresh Folder (no `.git`)
 
 1. `git init`
-2. `git add -A && git commit -m "Initial commit"` (or empty commit if no files)
+2. Stage project files and create an initial commit. Review what you're
+   staging — if the folder already has generated files or dependency
+   directories, ensure `.gitignore` is set up first so they're excluded.
 3. The integration branch is `main` (the default branch).
 4. Record the initial commit SHA.
 
@@ -33,6 +35,19 @@ back into a single integration branch.
 
 Create `<repo_path>/.worktrees/` — this is where parallel worktrees will be
 placed. Add `.worktrees/` to `.gitignore` if not already there.
+
+## Repository Hygiene
+
+Set the project up for clean development from the start:
+
+- Create or update `.gitignore` based on the project's language and ecosystem.
+  Detect the language from existing files (package.json → Node.js, pyproject.toml
+  → Python, Cargo.toml → Rust, go.mod → Go, etc.) and include the standard
+  ignore patterns that every developer in that ecosystem expects.
+- Always include patterns for: pipeline artifacts (`.artifacts/`), worktrees
+  (`.worktrees/`), environment files (`.env`), and OS files (`.DS_Store`).
+- A well-maintained `.gitignore` prevents entire categories of problems
+  downstream — treat it as infrastructure, not an afterthought.
 
 ## Output
 
@@ -68,10 +83,11 @@ def git_init_task_prompt(repo_path: str, goal: str) -> str:
     sections.append(
         "\n## Your Task\n"
         "1. Check if `.git` exists in the repository path.\n"
-        "2. If fresh: `git init`, add all files, create initial commit.\n"
-        "3. If existing: record the current branch, create an integration branch.\n"
-        "4. Create the `.worktrees/` directory and add it to `.gitignore`.\n"
-        "5. Return a GitInitResult JSON object."
+        "2. Set up `.gitignore` for the project's ecosystem (detect language from existing files).\n"
+        "3. If fresh: `git init`, stage project files (respecting `.gitignore`), create initial commit.\n"
+        "4. If existing: record the current branch, create an integration branch.\n"
+        "5. Create the `.worktrees/` directory and ensure it's in `.gitignore`.\n"
+        "6. Return a GitInitResult JSON object."
     )
 
     return "\n".join(sections)

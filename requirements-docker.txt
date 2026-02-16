@@ -1,0 +1,8 @@
+# AgentField SWE Pipeline — Docker Dependencies
+#
+# Same as requirements.txt minus the editable SDK install.
+# The SDK is installed separately in the Dockerfile from the monorepo copy.
+
+# Core
+pydantic>=2.0
+claude-agent-sdk>=0.1.20

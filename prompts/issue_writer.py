@@ -68,6 +68,12 @@ Read <architecture_path> Section X.Y (<component name>) for:
 ### Run Command
 `<exact command to run these tests>`
 
+## Sprint Planner Guidance
+- Scope: <trivial|small|medium|large>
+- Needs new tests: <true|false>
+- Testing guidance: <specific instructions>
+- Review focus: <what to pay attention to>
+
 ## Verification Commands
 - Build: `<exact command>`
 - Test: `<exact test command>`
@@ -148,6 +154,20 @@ def issue_writer_task_prompt(
     testing_strategy = issue.get("testing_strategy", "")
     if testing_strategy:
         sections.append(f"- **Testing Strategy (from sprint planner)**: {testing_strategy}")
+
+    # Sprint planner guidance
+    guidance = issue.get("guidance") or {}
+    if guidance:
+        sections.append("- **Sprint Planner Guidance**:")
+        if guidance.get("testing_guidance"):
+            sections.append(f"  - Testing: {guidance['testing_guidance']}")
+        if guidance.get("review_focus"):
+            sections.append(f"  - Review focus: {guidance['review_focus']}")
+        if guidance.get("risk_rationale"):
+            sections.append(f"  - Risk: {guidance['risk_rationale']}")
+        sections.append(f"  - Scope: {guidance.get('estimated_scope', 'medium')}")
+        sections.append(f"  - Needs new tests: {guidance.get('needs_new_tests', True)}")
+        sections.append(f"  - Deeper QA: {guidance.get('needs_deeper_qa', False)}")
 
     # Reference documents
     sections.append(f"\n## PRD Summary\n{prd_summary}")

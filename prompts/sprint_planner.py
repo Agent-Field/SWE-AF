@@ -128,7 +128,37 @@ Each issue runs in an isolated git worktree:
   parallel issues — include exact architecture section references in each issue
 - Acceptance criteria must be locally verifiable within one worktree
   (no "integrates with module X" unless X is from a prior level)
-- Two parallel issues SHOULD NOT create the same file\
+- Two parallel issues SHOULD NOT create the same file
+
+## Per-Issue Guidance
+
+For each issue, provide a `guidance` object that shapes how downstream agents
+(coder, reviewer, QA) handle it. This is NOT a rigid tier system — it is
+contextual intelligence flowing through the team.
+
+### Guidance Fields
+
+- **needs_new_tests** (bool, default true): Whether this issue needs new tests.
+  Set to false for documentation, config changes, or version bumps.
+- **estimated_scope** ("trivial" | "small" | "medium" | "large"): Rough scope
+  indicator. "trivial" = 1-line fix, "small" = <20 lines, "medium" = typical
+  feature, "large" = multi-module change.
+- **touches_interfaces** (bool, default false): True if this issue changes public
+  APIs, type signatures, or contracts that other issues depend on.
+- **needs_deeper_qa** (bool, default false): When true, activates the full
+  QA + reviewer + synthesizer path (4 LLM calls). When false (default), only
+  the reviewer runs (2 LLM calls). Most issues (70-80%) should be false.
+  Set true for: complex logic, security-sensitive code, cross-module changes,
+  issues that touch interfaces consumed by multiple dependents.
+- **testing_guidance** (str): Specific, proportional testing instructions.
+  Examples: "Run cargo build only, no new tests needed" for a version bump,
+  "Unit tests for each parser method + edge cases for malformed input" for
+  a parser module. Be concrete.
+- **review_focus** (str): What the reviewer should focus on for THIS issue.
+  Examples: "Verify error handling covers all three failure modes",
+  "Check that the public API matches the architecture spec exactly".
+- **risk_rationale** (str): Brief explanation of why this issue does or does
+  not need deeper QA. Helps downstream agents calibrate their effort.\
 """
 
 
@@ -182,6 +212,15 @@ and acceptance criteria.
 For each issue, include a `testing_strategy` that specifies: (1) exact test
 file paths to create, (2) the test framework, (3) categories of tests (unit,
 functional, edge case), and (4) which PRD acceptance criteria the tests map to.
+
+For each issue, include a `guidance` object with:
+- `needs_new_tests`: false for config/doc changes, true otherwise
+- `estimated_scope`: "trivial", "small", "medium", or "large"
+- `touches_interfaces`: true if changing public APIs or contracts
+- `needs_deeper_qa`: true only for complex/risky issues (~20-30% of issues)
+- `testing_guidance`: specific, proportional instructions (not "write tests")
+- `review_focus`: what the reviewer should check for this specific issue
+- `risk_rationale`: why this issue does/doesn't need deep QA
 
 Minimize the critical path. Maximize parallelism. Every acceptance criterion
 from the PRD must map to at least one issue.

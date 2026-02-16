@@ -1,0 +1,6 @@
+{
+  "name": "node-cli-todo",
+  "version": "1.0.0",
+  "description": "A lightweight command-line todo application in Node.js",
+  "main": "cli.js"
+}

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+import subprocess
 
 from reasoners import router
 from reasoners.pipeline import _assign_sequence_numbers, _compute_levels, _validate_file_conflicts
@@ -30,10 +32,18 @@ app = Agent(
 app.include_router(router)
 
 
+def _repo_name_from_url(url: str) -> str:
+    """Extract repo name from a GitHub URL for auto-deriving repo_path."""
+    # https://github.com/user/my-project.git → my-project
+    match = re.search(r"/([^/]+?)(?:\.git)?$", url.rstrip("/"))
+    return match.group(1) if match else "repo"
+
+
 @app.reasoner()
 async def build(
     goal: str,
-    repo_path: str,
+    repo_path: str = "",
+    repo_url: str = "",
     artifacts_dir: str = ".artifacts",
     additional_context: str = "",
     config: dict | None = None,
@@ -46,10 +56,35 @@ async def build(
     """End-to-end: plan → execute → verify → optional fix cycle.
 
     This is the single entry point. Pass a goal, get working code.
+
+    If ``repo_url`` is provided and ``repo_path`` is empty, the repo is cloned
+    into ``/workspaces/<repo-name>`` automatically (useful in Docker).
     """
     from execution.schemas import ALL_MODEL_FIELDS, BuildConfig, BuildResult
 
     cfg = BuildConfig(**config) if config else BuildConfig()
+
+    # Allow repo_url from config or direct parameter
+    if repo_url:
+        cfg.repo_url = repo_url
+
+    # Auto-derive repo_path from repo_url when not specified
+    if cfg.repo_url and not repo_path:
+        repo_path = f"/workspaces/{_repo_name_from_url(cfg.repo_url)}"
+
+    if not repo_path:
+        raise ValueError("Either repo_path or repo_url must be provided")
+
+    # Clone if repo_url is set and target doesn't exist yet
+    if cfg.repo_url and not os.path.exists(os.path.join(repo_path, ".git")):
+        app.note(f"Cloning {cfg.repo_url} → {repo_path}", tags=["build", "clone"])
+        os.makedirs(repo_path, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", cfg.repo_url, repo_path],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     if execute_fn_target:
         cfg.execute_fn_target = execute_fn_target
     if ai_provider:
@@ -111,6 +146,8 @@ async def build(
             "original_branch": git_init["original_branch"],
             "initial_commit_sha": git_init["initial_commit_sha"],
             "mode": git_init["mode"],
+            "remote_url": git_init.get("remote_url", ""),
+            "remote_default_branch": git_init.get("remote_default_branch", ""),
         }
         app.note(
             f"Git init: mode={git_init['mode']}, branch={git_init['integration_branch']}",
@@ -231,6 +268,73 @@ async def build(
         tags=["build", "complete"],
     )
 
+    # 3b. FINALIZE — clean up repo artifacts before PR
+    app.note("Phase 3b: Repo finalization", tags=["build", "finalize"])
+    try:
+        finalize_result = _unwrap(await app.call(
+            f"{NODE_ID}.run_repo_finalize",
+            repo_path=repo_path,
+            artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
+            model=resolved["git_model"],
+            permission_mode=cfg.permission_mode,
+            ai_provider=cfg.ai_provider,
+        ), "run_repo_finalize")
+        if finalize_result.get("success"):
+            app.note(
+                f"Repo finalized: {finalize_result.get('summary', '')}",
+                tags=["build", "finalize", "complete"],
+            )
+        else:
+            app.note(
+                f"Repo finalize incomplete: {finalize_result.get('summary', '')}",
+                tags=["build", "finalize", "warning"],
+            )
+    except Exception as e:
+        app.note(
+            f"Repo finalize failed (non-blocking): {e}",
+            tags=["build", "finalize", "error"],
+        )
+
+    # 4. PUSH & DRAFT PR (if repo has a remote and PR creation is enabled)
+    pr_url = ""
+    remote_url = git_config.get("remote_url", "") if git_config else ""
+    if remote_url and cfg.enable_github_pr:
+        app.note("Phase 4: Push + Draft PR", tags=["build", "github_pr"])
+        base_branch = (
+            cfg.github_pr_base
+            or (git_config.get("remote_default_branch") if git_config else "")
+            or "main"
+        )
+        build_summary = (
+            f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
+            + (f", verification: {verification.get('summary', '')}" if verification else "")
+        )
+        try:
+            pr_result = _unwrap(await app.call(
+                f"{NODE_ID}.run_github_pr",
+                repo_path=repo_path,
+                integration_branch=git_config["integration_branch"],
+                base_branch=base_branch,
+                goal=goal,
+                build_summary=build_summary,
+                completed_issues=dag_result.get("completed_issues", []),
+                accumulated_debt=dag_result.get("accumulated_debt", []),
+                artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
+                model=resolved["git_model"],
+                permission_mode=cfg.permission_mode,
+                ai_provider=cfg.ai_provider,
+            ), "run_github_pr")
+            pr_url = pr_result.get("pr_url", "")
+            if pr_url:
+                app.note(f"Draft PR created: {pr_url}", tags=["build", "github_pr", "complete"])
+            else:
+                app.note(
+                    f"PR creation failed: {pr_result.get('error_message', 'unknown')}",
+                    tags=["build", "github_pr", "error"],
+                )
+        except Exception as e:
+            app.note(f"PR creation failed: {e}", tags=["build", "github_pr", "error"])
+
     return BuildResult(
         plan_result=plan_result,
         dag_state=dag_result,
@@ -238,6 +342,7 @@ async def build(
         success=success,
         summary=f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
                 + (f", verification: {verification.get('summary', '')}" if verification else ""),
+        pr_url=pr_url,
     ).model_dump()
 
 

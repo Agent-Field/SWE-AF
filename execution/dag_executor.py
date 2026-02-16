@@ -433,6 +433,7 @@ async def _execute_single_issue(
     call_fn: Callable | None = None,
     node_id: str = "swe-planner",
     note_fn: Callable | None = None,
+    memory_fn: Callable | None = None,
 ) -> IssueResult:
     """Execute a single issue with the Issue Advisor adaptation loop.
 
@@ -464,6 +465,7 @@ async def _execute_single_issue(
                 node_id=node_id,
                 config=config,
                 note_fn=note_fn,
+                memory_fn=memory_fn,
             )
         elif execute_fn is not None:
             result = await _run_execute_fn(
@@ -771,6 +773,7 @@ async def _execute_level(
     call_fn: Callable | None = None,
     node_id: str = "swe-planner",
     note_fn: Callable | None = None,
+    memory_fn: Callable | None = None,
 ) -> LevelResult:
     """Execute all issues in a level concurrently.
 
@@ -781,6 +784,7 @@ async def _execute_level(
         _execute_single_issue(
             issue, dag_state, execute_fn, config,
             call_fn=call_fn, node_id=node_id, note_fn=note_fn,
+            memory_fn=memory_fn,
         )
         for issue in active_issues
     ]
@@ -1044,6 +1048,18 @@ async def run_dag(
     # Save initial checkpoint
     _save_checkpoint(dag_state, note_fn)
 
+    # Shared memory store for cross-issue learning within this run.
+    # All issues share the same store via the memory_fn closure.
+    _shared_memory: dict = {}
+
+    async def _memory_fn(action: str, key: str, value=None):
+        if action == "get":
+            return _shared_memory.get(key)
+        elif action == "set":
+            _shared_memory[key] = value
+
+    memory_fn = _memory_fn if call_fn is not None else None
+
     issue_by_name = {i["name"]: i for i in dag_state.all_issues}
 
     while dag_state.current_level < len(dag_state.levels):
@@ -1085,6 +1101,7 @@ async def run_dag(
         level_result = await _execute_level(
             active_issues, execute_fn, dag_state, config, dag_state.current_level,
             call_fn=call_fn, node_id=node_id, note_fn=note_fn,
+            memory_fn=memory_fn,
         )
 
         dag_state.in_flight_issues = []  # level barrier reached

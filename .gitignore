@@ -14,6 +14,7 @@ venv/
 # Environment
 .env
 .env.*
+!.env.example
 .python-version
 
 # OS and editors

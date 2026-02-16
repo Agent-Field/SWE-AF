@@ -1,0 +1,56 @@
+# Application data
+todos.json
+
+# Dependencies
+node_modules/
+npm-debug.log
+npm-error.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Runtime data
+*.pid
+*.seed
+*.pid.lock
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# Build output
+dist/
+build/
+out/
+
+# Pipeline and tooling
+.artifacts/
+.worktrees/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

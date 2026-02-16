@@ -202,6 +202,8 @@ class GitInitResult(BaseModel):
     initial_commit_sha: str  # commit SHA before any work
     success: bool
     error_message: str = ""
+    remote_url: str = ""            # origin URL (set if repo was cloned)
+    remote_default_branch: str = "" # e.g. "main" — for PR base
 
 
 class WorkspaceInfo(BaseModel):
@@ -278,6 +280,10 @@ class CoderResult(BaseModel):
     summary: str = ""
     complete: bool = True
     iteration_id: str = ""
+    tests_passed: bool | None = None       # Self-reported: did tests pass?
+    test_summary: str = ""                 # Brief test run output
+    codebase_learnings: list[str] = []     # Conventions discovered (for shared memory)
+    agent_retro: dict = {}                 # What worked, what didn't (for shared memory)
 
 
 class QAResult(BaseModel):
@@ -453,6 +459,10 @@ class BuildConfig(BaseModel):
     execute_fn_target: str = ""
     ai_provider: Literal["claude", "codex"] = "claude"
     permission_mode: str = ""
+    # GitHub workflow
+    repo_url: str = ""                # GitHub URL to clone
+    enable_github_pr: bool = True     # Create draft PR after build
+    github_pr_base: str = ""          # PR base branch (default: repo's default branch)
     # Issue Advisor
     agent_timeout_seconds: int = 2700
     issue_advisor_model: str = "sonnet"
@@ -513,6 +523,25 @@ class BuildResult(BaseModel):
     verification: dict | None = None
     success: bool
     summary: str
+    pr_url: str = ""
+
+
+class RepoFinalizeResult(BaseModel):
+    """Result of the repo finalization (cleanup) step."""
+
+    success: bool
+    files_removed: list[str] = []
+    gitignore_updated: bool = False
+    summary: str = ""
+
+
+class GitHubPRResult(BaseModel):
+    """Result of pushing and creating a draft PR on GitHub."""
+
+    success: bool
+    pr_url: str = ""
+    pr_number: int = 0
+    error_message: str = ""
 
 
 class ExecutionConfig(BaseModel):

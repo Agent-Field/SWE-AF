@@ -17,6 +17,7 @@ from execution.schemas import (
     AdvisorAction,
     CodeReviewResult,
     CoderResult,
+    GitHubPRResult,
     GitInitResult,
     IntegrationTestResult,
     IssueAdvisorDecision,
@@ -25,6 +26,7 @@ from execution.schemas import (
     QASynthesisResult,
     ReplanAction,
     ReplanDecision,
+    RepoFinalizeResult,
     RetryAdvice,
     VerificationResult,
     WorkspaceInfo,
@@ -39,6 +41,10 @@ from prompts.coder import SYSTEM_PROMPT as CODER_SYSTEM_PROMPT
 from prompts.coder import coder_task_prompt
 from prompts.git_init import SYSTEM_PROMPT as GIT_INIT_SYSTEM_PROMPT
 from prompts.git_init import git_init_task_prompt
+from prompts.github_pr import SYSTEM_PROMPT as GITHUB_PR_SYSTEM_PROMPT
+from prompts.github_pr import github_pr_task_prompt
+from prompts.repo_finalize import SYSTEM_PROMPT as REPO_FINALIZE_SYSTEM_PROMPT
+from prompts.repo_finalize import repo_finalize_task_prompt
 from prompts.integration_tester import SYSTEM_PROMPT as INTEGRATION_TESTER_SYSTEM_PROMPT
 from prompts.integration_tester import integration_tester_task_prompt
 from prompts.issue_writer import SYSTEM_PROMPT as ISSUE_WRITER_SYSTEM_PROMPT
@@ -860,13 +866,15 @@ async def run_coder(
     iteration: int = 1,
     iteration_id: str = "",
     project_context: dict | None = None,
+    memory_context: dict | None = None,
     model: str = "sonnet",
     permission_mode: str = "",
     ai_provider: str = "claude",
 ) -> dict:
     """Implement an issue: write code, tests, and commit.
 
-    Returns a CoderResult dict with files_changed, summary, complete.
+    Returns a CoderResult dict with files_changed, summary, complete,
+    tests_passed, test_summary, codebase_learnings, agent_retro.
     """
     project_context = project_context or {}
     issue_name = issue.get("name", "?")
@@ -885,6 +893,7 @@ async def run_coder(
         feedback=feedback,
         iteration=iteration,
         project_context=project_context,
+        memory_context=memory_context,
     )
 
     ai = AgentAI(AgentAIConfig(
@@ -1011,12 +1020,16 @@ async def run_code_reviewer(
     issue: dict,
     iteration_id: str = "",
     project_context: dict | None = None,
+    qa_ran: bool = False,
+    memory_context: dict | None = None,
     model: str = "sonnet",
     permission_mode: str = "",
     ai_provider: str = "claude",
 ) -> dict:
-    """Review code quality, security, and requirements adherence (read-only).
+    """Review code quality, security, and requirements adherence.
 
+    Has BASH access to independently run tests and verify the coder's work.
+    On the default path (no QA), acts as sole quality gatekeeper.
     Returns a CodeReviewResult dict with approved, blocking, summary, debt_items.
     """
     project_context = project_context or {}
@@ -1036,6 +1049,8 @@ async def run_code_reviewer(
         issue=issue,
         iteration_id=iteration_id,
         project_context=project_context,
+        qa_ran=qa_ran,
+        memory_context=memory_context,
     )
 
     ai = AgentAI(AgentAIConfig(
@@ -1043,7 +1058,7 @@ async def run_code_reviewer(
         provider=ai_provider,
         cwd=worktree_path,
         max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP],
+        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
         permission_mode=permission_mode or None,
     ))
 
@@ -1119,7 +1134,7 @@ async def run_qa_synthesizer(
         provider=ai_provider,
         cwd=worktree_path or ".",
         max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.WRITE],
+        allowed_tools=[],
         permission_mode=permission_mode or None,
     ))
 
@@ -1252,3 +1267,138 @@ async def generate_fix_issues(
         ],
         "summary": "Fix generator failed — all criteria recorded as debt",
     }
+
+
+# ---------------------------------------------------------------------------
+# Repo finalization (post-verification cleanup)
+# ---------------------------------------------------------------------------
+
+
+@router.reasoner()
+async def run_repo_finalize(
+    repo_path: str,
+    artifacts_dir: str = "",
+    model: str = "sonnet",
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+) -> dict:
+    """Clean up the repository after verification — remove artifacts, fortify .gitignore.
+
+    Returns a RepoFinalizeResult dict. Non-blocking: failure does not affect
+    build success.
+    """
+    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
+    log_path = os.path.join(log_dir, "repo_finalize.jsonl") if log_dir else None
+
+    router.note("Repo finalize starting", tags=["repo_finalize", "start"])
+
+    task_prompt = repo_finalize_task_prompt(repo_path=repo_path)
+
+    ai = AgentAI(AgentAIConfig(
+        model=model,
+        provider=ai_provider,
+        cwd=repo_path,
+        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        allowed_tools=[Tool.BASH, Tool.READ, Tool.GLOB, Tool.GREP],
+        permission_mode=permission_mode or None,
+    ))
+
+    try:
+        response = await ai.run(
+            task_prompt,
+            system_prompt=REPO_FINALIZE_SYSTEM_PROMPT,
+            output_schema=RepoFinalizeResult,
+            log_file=log_path,
+        )
+        if response.parsed is not None:
+            router.note(
+                f"Repo finalize complete: {len(response.parsed.files_removed)} files removed, "
+                f"gitignore_updated={response.parsed.gitignore_updated}",
+                tags=["repo_finalize", "complete"],
+            )
+            return response.parsed.model_dump()
+    except Exception as e:
+        router.note(
+            f"Repo finalize agent failed: {e}",
+            tags=["repo_finalize", "error"],
+        )
+
+    return RepoFinalizeResult(
+        success=False,
+        summary="Repo finalize agent failed to produce a valid result.",
+    ).model_dump()
+
+
+# ---------------------------------------------------------------------------
+# GitHub PR creation (Phase B)
+# ---------------------------------------------------------------------------
+
+
+@router.reasoner()
+async def run_github_pr(
+    repo_path: str,
+    integration_branch: str,
+    base_branch: str,
+    goal: str,
+    build_summary: str = "",
+    completed_issues: list[dict] | None = None,
+    accumulated_debt: list[dict] | None = None,
+    artifacts_dir: str = "",
+    model: str = "sonnet",
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+) -> dict:
+    """Push integration branch and create a draft PR on GitHub.
+
+    Returns a GitHubPRResult dict.
+    """
+    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
+    log_path = os.path.join(log_dir, "github_pr.jsonl") if log_dir else None
+
+    router.note(
+        f"GitHub PR: pushing {integration_branch} and creating draft PR",
+        tags=["github_pr", "start"],
+    )
+
+    task_prompt = github_pr_task_prompt(
+        repo_path=repo_path,
+        integration_branch=integration_branch,
+        base_branch=base_branch,
+        goal=goal,
+        build_summary=build_summary,
+        completed_issues=completed_issues,
+        accumulated_debt=accumulated_debt,
+    )
+
+    ai = AgentAI(AgentAIConfig(
+        model=model,
+        provider=ai_provider,
+        cwd=repo_path,
+        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        allowed_tools=[Tool.BASH],
+        permission_mode=permission_mode or None,
+    ))
+
+    try:
+        response = await ai.run(
+            task_prompt,
+            system_prompt=GITHUB_PR_SYSTEM_PROMPT,
+            output_schema=GitHubPRResult,
+            log_file=log_path,
+        )
+        if response.parsed is not None:
+            router.note(
+                f"GitHub PR complete: {response.parsed.pr_url}",
+                tags=["github_pr", "complete"],
+            )
+            return response.parsed.model_dump()
+    except Exception as e:
+        router.note(
+            f"GitHub PR agent failed: {e}",
+            tags=["github_pr", "error"],
+        )
+
+    return GitHubPRResult(
+        success=False,
+        error_message="GitHub PR agent failed to produce a valid result.",
+    ).model_dump()

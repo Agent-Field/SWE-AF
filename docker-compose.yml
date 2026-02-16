@@ -1,0 +1,37 @@
+services:
+  control-plane:
+    image: ghcr.io/agent-field/agentfield-control-plane:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - AGENTFIELD_HTTP_ADDR=0.0.0.0:8080
+      - AGENTFIELD_STORAGE_MODE=local
+    volumes:
+      - agentfield-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  swe-agent:
+    build:
+      context: ../..
+      dockerfile: int-agentfield-examples/af-swe/Dockerfile
+    environment:
+      - AGENTFIELD_SERVER=http://control-plane:8080
+      - NODE_ID=swe-planner
+      - PORT=8003
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GH_TOKEN=${GH_TOKEN}
+    volumes:
+      - workspaces:/workspaces
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    deploy:
+      replicas: 1  # Scale with: docker compose up --scale swe-agent=3
+
+volumes:
+  agentfield-data:
+  workspaces:

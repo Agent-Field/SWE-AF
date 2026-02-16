@@ -15,6 +15,18 @@ codebase.
 2. For each criterion, verify through code inspection and test execution.
 3. Render a clear pass/fail verdict per criterion — partial is not an option.
 
+## Build Health Context
+
+If a build_health summary is available in the task prompt, use it to focus your
+verification. The coding loop has already run tests for each issue. You do NOT
+need to recompile everything or rerun the full test suite. Instead:
+- Read build_health for modules_passing, modules_failing, known_risks
+- Focus on known_risks and any failed modules
+- Do ONE build check (compile/lint) to confirm overall health
+- Spot-check acceptance criteria with targeted inspection
+
+If no build_health is available, fall back to the standard verification approach.
+
 ## Verification Approach
 
 For each acceptance criterion in the PRD:
@@ -23,9 +35,8 @@ For each acceptance criterion in the PRD:
    deliver this criterion?
 2. **Inspect the code** — read the files changed by that issue. Does the
    implementation actually satisfy the criterion?
-3. **Run existing tests** — if tests exist for this functionality, run them.
-4. **Write and run targeted checks** if needed — simple smoke tests or grep-based
-   checks to verify the criterion is met.
+3. **Run one build check** — a single compile/lint to confirm the codebase is healthy.
+4. **Spot-check tests** — run tests for any failed or risky modules, not the full suite.
 5. **Record evidence** — for each criterion, cite the specific files, functions,
    test outputs, or code patterns that prove it passes or fails.
 
@@ -36,6 +47,23 @@ For each acceptance criterion in the PRD:
 - **FAIL**: The criterion is missing, incomplete, or broken. If a required feature
   is stubbed out, partially implemented, or throws errors, it fails.
 - There is NO partial. Either it works or it doesn't.
+
+## Repository Presentation
+
+Beyond acceptance criteria, assess whether the repository is
+production-ready to hand off:
+
+- Is `.gitignore` present and appropriate for the project's language?
+- Is `git status` clean, or are there untracked artifacts, build outputs,
+  or pipeline infrastructure left behind?
+- Are there broken symlinks, empty scaffold files, or other development
+  leftovers?
+- Would a new developer cloning this repo have a clean, professional
+  first impression?
+
+Report any hygiene issues in the `summary` field. These do NOT affect the
+pass/fail verdict (which is strictly about acceptance criteria), but they
+are important signals about build quality.
 
 ## Evidence Requirements
 
@@ -73,6 +101,7 @@ def verifier_task_prompt(
     completed_issues: list[dict],
     failed_issues: list[dict],
     skipped_issues: list[str],
+    build_health: dict | None = None,
 ) -> str:
     """Build the task prompt for the verifier agent.
 
@@ -82,6 +111,7 @@ def verifier_task_prompt(
         completed_issues: List of IssueResult dicts for completed issues.
         failed_issues: List of IssueResult dicts for failed issues.
         skipped_issues: List of skipped issue names.
+        build_health: Optional build health dashboard from shared memory.
     """
     sections: list[str] = []
 
@@ -106,6 +136,27 @@ def verifier_task_prompt(
     if nice_to_have:
         sections.append("\n### Nice-to-Have Requirements")
         sections.extend(f"- {r}" for r in nice_to_have)
+
+    # --- Build Health (from shared memory) ---
+    if build_health:
+        sections.append("\n## Build Health Dashboard (from coding loop)")
+        sections.append(f"- **Issues completed**: {build_health.get('issues_completed', '?')}")
+        sections.append(f"- **Issues failed**: {build_health.get('issues_failed', '?')}")
+        sections.append(f"- **Total tests reported**: {build_health.get('total_tests_reported', '?')}")
+        passing = build_health.get("modules_passing", [])
+        if passing:
+            sections.append(f"- **Modules passing**: {passing}")
+        failing = build_health.get("modules_failing", [])
+        if failing:
+            sections.append(f"- **Modules FAILING**: {failing}")
+        risks = build_health.get("known_risks", [])
+        if risks:
+            sections.append("- **Known risks**:")
+            sections.extend(f"  - {r}" for r in risks)
+        sections.append(
+            "\nUse this to focus your verification. Do ONE build check + spot-check "
+            "risky areas. Do NOT recompile everything or rerun the full test suite."
+        )
 
     # --- Reference Paths ---
     sections.append(f"\n## Reference Paths")

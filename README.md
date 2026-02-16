@@ -1,73 +1,139 @@
-# SWE AgentNode
+# SWE-AF
 
-Production-grade software engineering, not vibe coding. One API call deploys hundreds of autonomous coding agents that architect, code, test, review, and verify in parallel — and delivers tested, reviewed, integration-verified code with a debt register for anything compromised.
+Autonomous software engineering. One API call spins up hundreds of agents that decompose, parallelize, code, test, review, and self-correct — delivering merge-ready code, not demos.
+
+**95/100 with haiku.** The cheapest model. SWE-AF with haiku outscores Claude Code with sonnet (73), Codex (62), and Claude Code with haiku (59) on the same task. Every agent writes working code — the gap is structure, git discipline, test coverage, and repo hygiene. Architecture beats model size.
+
+<details>
+<summary><strong>Full benchmark details</strong></summary>
+
+Same prompt, four agents. **SWE-AF uses only haiku** (turbo preset) across all 400+ agent instances.
+
+> **Prompt:** Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.
+
+### Scoring Framework
+
+| Dimension      | Points | What it measures                                                | Why it matters                              |
+| -------------- | ------ | --------------------------------------------------------------- | ------------------------------------------- |
+| **Functional** | 30     | CLI commands work + tests pass                                  | Does the code do what it claims?            |
+| **Structure**  | 20     | Modular source files + layered test organization                | Can a team maintain and extend this?        |
+| **Hygiene**    | 20     | .gitignore coverage + clean git status + no committed artifacts | Is the repo ready for collaborators?        |
+| **Git**        | 15     | Commit count + descriptive, feature-scoped messages             | Can you review, bisect, and rollback?       |
+| **Quality**    | 15     | Error handling + package.json completeness + README             | Does it meet minimum open-source standards? |
+
+### Score Breakdown
+
+| Dimension           | SWE-AF (haiku) | CC Sonnet | Codex  | CC Haiku |
+| ------------------- | -------------- | --------- | ------ | -------- |
+| **Functional** (30) | **30**         | **30**    | **30** | **30**   |
+| **Structure** (20)  | **20**         | 10        | 10     | 10       |
+| **Hygiene** (20)    | **20**         | 16        | 10     | 7        |
+| **Git** (15)        | **15**         | 2         | 2      | 2        |
+| **Quality** (15)    | 10             | **15**    | 10     | 10       |
+| **Total**           | **95**         | **73**    | **62** | **59**   |
+
+Every agent produces working code. The gap is structure, git discipline, and repo hygiene — the things that make code shippable.
+
+### Detailed Metrics (13 checks)
+
+| Metric             | SWE-AF          | CC Haiku   | CC Sonnet  | Codex      |
+| ------------------ | --------------- | ---------- | ---------- | ---------- |
+| CLI works          | PASS            | PASS       | PASS       | PASS       |
+| Tests pass         | PASS            | PASS       | PASS       | PASS       |
+| Source files       | 4               | 2          | 2          | 3          |
+| Test files         | **14**          | 1          | 1          | 1          |
+| Test organization  | **4 tiers**     | flat       | flat       | flat       |
+| .gitignore         | PASS            | FAIL       | PARTIAL    | PARTIAL    |
+| node_modules clean | PASS            | PASS       | PASS       | PASS       |
+| Git status clean   | PASS            | FAIL       | PASS       | FAIL       |
+| Commit count       | **16**          | 1          | 1          | 1          |
+| Commit quality     | **descriptive** | monolithic | monolithic | monolithic |
+| Error handling     | PASS            | PASS       | PASS       | PASS       |
+| package.json       | PASS            | PASS       | PASS       | PASS       |
+| README.md          | FAIL            | FAIL       | PASS       | FAIL       |
+
+### Agents Tested
+
+| Agent       | Model                    | Approach              | Time    |
+| ----------- | ------------------------ | --------------------- | ------- |
+| **SWE-AF**  | **haiku** (turbo preset) | SWE-AF (turbo preset) | ~43 min |
+| Claude Code | sonnet                   | Single-agent CLI      | ~2 min  |
+| Codex       | gpt-5.3-codex            | Single-agent CLI      | ~1 min  |
+| Claude Code | haiku                    | Single-agent CLI      | ~1 min  |
+
+### Reproduction
+
+```bash
+# SWE-AF (haiku, turbo preset)
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"goal": "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.", "repo_path": "/tmp/swe-af-output", "config": {"preset": "turbo"}}}'
+
+# Claude Code (haiku)
+claude -p \
+  "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work." \
+  --model haiku --dangerously-skip-permissions
+
+# Claude Code (sonnet)
+claude -p \
+  "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work." \
+  --model sonnet --dangerously-skip-permissions
+
+# Codex (gpt-5.3-codex)
+codex exec \
+  "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work." \
+  --full-auto
+```
+
+Full source code from all four agents, the automated evaluation script, and agent logs are in [`examples/agent-comparison/`](examples/agent-comparison/).
+
+This benchmark used a simple prompt to make comparison fair. SWE-AF's advantage grows with task complexity — more modules to coordinate, more integration points to test, more merge conflicts to resolve.
+
+</details>
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"goal": "Add JWT auth to all API endpoints", "repo_path": "/path/to/repo"}'
+  -d '{"input": {"goal": "Add JWT auth to all API endpoints", "repo_path": "/path/to/repo"}}'
 ```
 
 **What happens:**
 
 - Architecture designed and peer-reviewed before any code is written
-- Issues decomposed, dependency-ordered, and executed in parallel across isolated worktrees
-- Every issue coded, tested, and reviewed independently — failures loop back up to 5 times
+- Issues dependency-sorted and executed in parallel — each in an isolated git worktree
+- Every issue coded, tested, and reviewed independently — failures self-correct up to 5 times
+- When self-correction is exhausted, an Issue Advisor adapts: changes approach, splits the issue, relaxes scope (tracked as debt), or escalates
+- When issues escalate, a Replanner restructures the remaining plan at runtime
 - Integration tested after each merge tier, verified against original acceptance criteria
-- Anything relaxed, skipped, or compromised is tracked in a **debt register**
+- Every compromise tracked in a **debt register** — nothing silently dropped
 
-```mermaid
-flowchart TB
-    curl["POST /build<br/><i>goal + repo</i>"] --> CP[AgentField Control Plane]
+![SWE-AF Architecture](assets/archi.png)
 
-    CP --> PM[Product Manager] & GI[Git Init]
-    PM --> AR[Architect]
-    AR <-->|review loop| TL[Tech Lead]
-    AR --> SP[Sprint Planner]
-    SP --> IW[Issue Writers ×N]
+> Every box is an independent agent instance. A typical build deploys **400-500+ agent instances** across parallel worktrees — each with full tool use, file system access, and git operations.
 
-    IW --> L0
+## Why multi-agent beats single-agent
 
-    subgraph L0["Parallel execution — each issue in its own git worktree"]
-        direction LR
-        subgraph W1[issue-1]
-            C1[Coder] --> QR1[QA + Reviewer]
-            QR1 --> S1[Synthesizer]
-            S1 -.->|fix| C1
-        end
-        subgraph W2[issue-2]
-            C2[Coder] --> QR2[QA + Reviewer]
-            QR2 --> S2[Synthesizer]
-            S2 -.->|fix| C2
-        end
-        subgraph W3[issue-3]
-            C3[Coder] --> QR3[QA + Reviewer]
-            QR3 --> S3[Synthesizer]
-            S3 -.->|fix| C3
-        end
-    end
+A single coding agent — no matter how capable — works sequentially: one context window, one attempt, one commit. That is fine for single-file fixes. For anything larger, you need what AI uniquely enables: parallel specialists that coordinate, learn from each other, and recover from failures without human intervention.
 
-    L0 -->|failure| IA[Issue Advisor — adapt, split, or accept with debt]
-    IA -.->|retry| L0
-    IA -->|escalate| RP[Replanner — restructure remaining work]
-    RP -.-> L0
+**Self-correction at three levels.** Inner loop: coder → QA → reviewer, up to 5 iterations per issue. Tests fail? Errors fed back with full context. Middle loop: when iterations are exhausted, an Issue Advisor diagnoses the failure — retries with a new approach, relaxes acceptance criteria (recorded as debt), splits into sub-issues, or escalates. Outer loop: when issues escalate, a Replanner restructures the entire remaining plan at runtime. Dependencies recomputed. New issues added. Blocked work removed. The plan rewrites itself under pressure.
 
-    L0 --> MG[Merger + Integration Tests]
-    MG --> NL[Next parallel tier...]
-    NL --> VF[Verifier]
-    VF -->|fail| FG[Fix Generator → re-execute]
-    VF -->|pass| DONE[Completed repo + debt register]
-```
+**Intelligent parallelism.** Issues are dependency-sorted into levels using topological ordering. All issues in a level execute simultaneously in isolated git worktrees. File conflict detection prevents parallel agents from clobbering each other. After each level: merge gate → integration tests → next level. A 20-issue build doesn't take 20× longer — independent issues run at the same time.
 
-> Every box is an independent agent instance with full tool use, file system access, and git operations. A typical build deploys **400-500+ agent instances** across parallel worktrees. Tested up to 10,000.
+**Cross-issue learning.** Agents share memory during a build. Codebase conventions discovered by early issues are injected into later ones. Failure patterns accumulate so downstream coders avoid known traps. An interface registry tells downstream issues exactly what upstream provided. The 50th agent is smarter than the 1st.
+
+**Transparent compromise.** Every relaxed requirement, dropped acceptance criterion, and missing feature is typed, justified, severity-rated, and tracked in a debt register. The PR description tells you exactly what was delivered and what was not. No silent failures.
+
+**Crash recovery.** Checkpoints at level and iteration granularity. `resume_build` picks up exactly where the build stopped. Completed work is not re-executed.
 
 ## How it works
 
-Three nested self-correction loops:
+Three nested loops drive every build:
 
-**Inner** — Coder → QA → Reviewer → Synthesizer. Tests fail? Feed errors back. Loops up to 5×.
-**Middle** — Issue Advisor. Loop exhausted? Change approach, split, relax requirements (recorded as debt), or escalate.
-**Outer** — Replanner. Issue stuck? Rewrite remaining issues, reduce scope, route around the failure. The plan reshapes itself at runtime.
+| Loop | Scope | Budget | Trigger | Action |
+|------|-------|--------|---------|--------|
+| **Inner** | Per issue | 5 iterations | Tests fail / review rejects | Feed errors back to coder, retry |
+| **Middle** | Per issue | 2 invocations | Inner loop exhausted | Diagnose → new approach / split / relax criteria (debt) / escalate |
+| **Outer** | Per build | 2 replans | Issues escalated | Restructure remaining plan, recompute dependencies |
 
 ## Quick start
 
@@ -77,7 +143,79 @@ af                 # control plane on :8080
 python3 main.py    # registers "swe-planner" node
 ```
 
-Stateless nodes register with the [AgentField](https://agentfield.ai) control plane. Run on a laptop, container, or Lambda. Scale by adding nodes. Crash-safe — call `resume_build` to pick up where you left off.
+Stateless nodes register with the [AgentField](https://agentfield.ai) control plane. Run on a laptop, container, or Lambda. Crash-safe — call `resume_build` to pick up where you left off.
+
+<details>
+<summary><strong>Docker</strong></summary>
+
+```bash
+# Set your API keys
+cp .env.example .env
+# Edit .env with your ANTHROPIC_API_KEY (and GH_TOKEN for draft PRs)
+
+# Start control plane + SWE agent
+docker compose up -d
+
+# Submit a build (local repo on shared volume)
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"goal": "Add JWT auth", "repo_path": "/workspaces/my-repo"}}'
+
+# Or: clone from GitHub and get a draft PR back
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"repo_url": "https://github.com/user/my-repo", "goal": "Add JWT auth"}}'
+
+# Scale to 3 replicas for parallel builds
+docker compose up --scale swe-agent=3 -d
+```
+
+All replicas share a `/workspaces` volume for repos, worktrees, and artifacts. The control plane load-balances `app.call()` across all registered nodes.
+
+**Using an existing control plane** (no Docker control plane):
+
+```bash
+# If you already have `af` running on localhost:8080
+docker compose -f docker-compose.local.yml up -d
+```
+
+This uses `host.docker.internal` to connect from the container to your host's control plane.
+
+</details>
+
+<details>
+<summary><strong>GitHub Workflow (Clone → Build → Draft PR)</strong></summary>
+
+Pass `repo_url` instead of `repo_path` to clone a GitHub repo automatically. After the build completes, a draft PR is created.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{"input": {
+    "repo_url": "https://github.com/user/my-project",
+    "goal": "Add comprehensive test coverage",
+    "config": {"preset": "quality"}
+  }}'
+```
+
+**What happens:**
+1. Repo cloned to `/workspaces/my-project`
+2. Full build: plan → execute → verify
+3. Integration branch pushed to origin
+4. Draft PR created with build summary
+
+**Requirements:**
+- `GH_TOKEN` set in `.env` (GitHub personal access token with `repo` scope)
+- Remote repo must be accessible (public or token has access)
+
+**Config options:**
+| Key                | Default |                                                    |
+| ------------------ | ------- | -------------------------------------------------- |
+| `repo_url`         | `""`    | GitHub URL to clone                                |
+| `enable_github_pr` | `true`  | Create draft PR after build                        |
+| `github_pr_base`   | `""`    | PR base branch (auto-detected from remote default) |
+
+</details>
 
 <details>
 <summary><strong>API Reference</strong></summary>
@@ -87,50 +225,50 @@ Stateless nodes register with the [AgentField](https://agentfield.ai) control pl
 Async via the control plane. Returns `execution_id` immediately. All with `-H "Content-Type: application/json"`.
 
 ```bash
-# Full pipeline: plan → execute → verify
+# Full build: plan → execute → verify
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
-  -d '{"goal": "...", "repo_path": "...", "config": {}}'
+  -d '{"input": {"goal": "...", "repo_path": "...", "config": {}}}'
 
 # Plan only
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.plan \
-  -d '{"goal": "...", "repo_path": "..."}'
+  -d '{"input": {"goal": "...", "repo_path": "..."}}'
 
 # Execute a pre-made plan
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.execute \
-  -d '{"plan_result": { ... }, "repo_path": "..."}'
+  -d '{"input": {"plan_result": { ... }, "repo_path": "..."}}'
 
 # Resume after crash
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.resume_build \
-  -d '{"repo_path": "...", "artifacts_dir": ".artifacts"}'
+  -d '{"input": {"repo_path": "...", "artifacts_dir": ".artifacts"}}'
 ```
 
 ### Every agent is an endpoint
 
 `POST /api/v1/execute/async/swe-planner.<agent>`
 
-| Agent | In → Out |
-|-------|----------|
-| `run_product_manager` | goal → PRD |
-| `run_architect` | PRD → architecture |
-| `run_tech_lead` | architecture → review |
-| `run_sprint_planner` | architecture → parallelized issues |
-| `run_issue_writer` | issue spec → detailed issue file |
-| `run_coder` | issue + worktree → code + tests + commit |
-| `run_qa` | worktree → test results |
-| `run_code_reviewer` | worktree → quality/security review |
-| `run_qa_synthesizer` | QA + review → FIX / APPROVE / BLOCK |
-| `run_issue_advisor` | failure context → adapt / split / accept / escalate |
-| `run_replanner` | DAG state + failures → restructured plan |
-| `run_merger` | branches → merged with conflict resolution |
-| `run_integration_tester` | merged repo → integration test results |
-| `run_verifier` | repo + PRD → acceptance pass/fail |
-| `generate_fix_issues` | failed criteria → targeted fix issues |
+| Agent                    | In → Out                                            |
+| ------------------------ | --------------------------------------------------- |
+| `run_product_manager`    | goal → PRD                                          |
+| `run_architect`          | PRD → architecture                                  |
+| `run_tech_lead`          | architecture → review                               |
+| `run_sprint_planner`     | architecture → parallelized issues                  |
+| `run_issue_writer`       | issue spec → detailed issue file                    |
+| `run_coder`              | issue + worktree → code + tests + commit            |
+| `run_qa`                 | worktree → test results                             |
+| `run_code_reviewer`      | worktree → quality/security review                  |
+| `run_qa_synthesizer`     | QA + review → FIX / APPROVE / BLOCK                 |
+| `run_issue_advisor`      | failure context → adapt / split / accept / escalate |
+| `run_replanner`          | build state + failures → restructured plan          |
+| `run_merger`             | branches → merged with conflict resolution          |
+| `run_integration_tester` | merged repo → integration test results              |
+| `run_verifier`           | repo + PRD → acceptance pass/fail                   |
+| `generate_fix_issues`    | failed criteria → targeted fix issues               |
+| `run_github_pr`          | integration branch → push + draft PR                |
 
 ### Monitoring
 
 ```bash
-curl http://localhost:8080/api/v1/execute/status/<execution_id>
-curl http://localhost:8080/api/v1/execute/notes/<execution_id>   # live progress
+curl http://localhost:8080/api/v1/executions/<execution_id>
 ```
 
 </details>
@@ -140,17 +278,17 @@ curl http://localhost:8080/api/v1/execute/notes/<execution_id>   # live progress
 
 Pass `config` to `build` or `execute`. All optional. Full schema: [`execution/schemas.py`](execution/schemas.py)
 
-| Key | Default | |
-|-----|---------|---|
-| `max_coding_iterations` | `5` | Inner loop budget per issue |
-| `max_advisor_invocations` | `2` | Middle loop budget per issue |
-| `max_replans` | `2` | Outer loop budget per build |
-| `enable_issue_advisor` | `true` | Enable middle loop |
-| `enable_replanning` | `true` | Enable outer loop |
-| `agent_timeout_seconds` | `2700` | Per-agent timeout |
-| `ai_provider` | `"claude"` | `"claude"` or `"codex"` |
-| `coder_model` | `"sonnet"` | Model for coding |
-| `agent_max_turns` | `150` | Tool-use turns per agent |
+| Key                       | Default    |                              |
+| ------------------------- | ---------- | ---------------------------- |
+| `max_coding_iterations`   | `5`        | Inner loop budget per issue  |
+| `max_advisor_invocations` | `2`        | Middle loop budget per issue |
+| `max_replans`             | `2`        | Outer loop budget per build  |
+| `enable_issue_advisor`    | `true`     | Enable middle loop           |
+| `enable_replanning`       | `true`     | Enable outer loop            |
+| `agent_timeout_seconds`   | `2700`     | Per-agent timeout            |
+| `ai_provider`             | `"claude"` | `"claude"` or `"codex"`      |
+| `coder_model`             | `"sonnet"` | Model for coding             |
+| `agent_max_turns`         | `150`      | Tool-use turns per agent     |
 
 ### Model configuration
 
@@ -158,22 +296,22 @@ Use **presets** and **role groups** instead of setting 16 individual `*_model` f
 
 #### Presets
 
-| Preset | Planning | Coding | Orchestration | Lightweight | Use case |
-|--------|----------|--------|---------------|-------------|----------|
-| `turbo` | haiku | haiku | haiku | haiku | Pipeline testing, rapid prototyping |
-| `fast` | sonnet | sonnet | haiku | haiku | Good code quality, cheap orchestration |
-| **`balanced`** | sonnet | sonnet | sonnet | haiku | **Default.** Production quality |
-| `thorough` | sonnet | sonnet | sonnet | sonnet | Uniform sonnet everywhere |
-| `quality` | opus | opus | sonnet | haiku | Best planning + coding |
+| Preset         | Planning | Coding | Orchestration | Lightweight | Use case                               |
+| -------------- | -------- | ------ | ------------- | ----------- | -------------------------------------- |
+| `turbo`        | haiku    | haiku  | haiku         | haiku       | Fast iteration, rapid prototyping      |
+| `fast`         | sonnet   | sonnet | haiku         | haiku       | Good code quality, cheap orchestration |
+| **`balanced`** | sonnet   | sonnet | sonnet        | haiku       | **Default.** Production quality        |
+| `thorough`     | sonnet   | sonnet | sonnet        | sonnet      | Uniform sonnet everywhere              |
+| `quality`      | opus     | opus   | sonnet        | haiku       | Best planning + coding                 |
 
 #### Role groups
 
-| Group | Agents |
-|-------|--------|
-| `planning` | Product Manager, Architect, Tech Lead, Sprint Planner |
-| `coding` | Coder, QA, Code Reviewer |
+| Group           | Agents                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| `planning`      | Product Manager, Architect, Tech Lead, Sprint Planner                                            |
+| `coding`        | Coder, QA, Code Reviewer                                                                         |
 | `orchestration` | Replanner, Retry Advisor, Issue Writer, Verifier, Git, Merger, Integration Tester, Issue Advisor |
-| `lightweight` | QA Synthesizer (FIX/APPROVE/BLOCK routing) |
+| `lightweight`   | QA Synthesizer (FIX/APPROVE/BLOCK routing)                                                       |
 
 #### Layered resolution
 
@@ -182,27 +320,27 @@ Precedence (lowest → highest): **defaults** < **preset** < **role groups** < *
 ```bash
 # Preset only — opus planning+coding, sonnet orchestration, haiku lightweight
 curl -X POST .../swe-planner.build \
-  -d '{"goal": "...", "repo_path": "...", "config": {"preset": "quality"}}'
+  -d '{"input": {"goal": "...", "repo_path": "...", "config": {"preset": "quality"}}}'
 
 # Group override — opus planning, everything else uses defaults
 curl -X POST .../swe-planner.build \
-  -d '{"goal": "...", "repo_path": "...", "config": {"models": {"planning": "opus"}}}'
+  -d '{"input": {"goal": "...", "repo_path": "...", "config": {"models": {"planning": "opus"}}}}'
 
 # Preset + group override — quality preset but cheap orchestration
 curl -X POST .../swe-planner.build \
-  -d '{"goal": "...", "repo_path": "...", "config": {"preset": "quality", "models": {"orchestration": "haiku"}}}'
+  -d '{"input": {"goal": "...", "repo_path": "...", "config": {"preset": "quality", "models": {"orchestration": "haiku"}}}}'
 
 # Preset + individual override — balanced but architect uses opus
 curl -X POST .../swe-planner.build \
-  -d '{"goal": "...", "repo_path": "...", "config": {"preset": "balanced", "architect_model": "opus"}}'
+  -d '{"input": {"goal": "...", "repo_path": "...", "config": {"preset": "balanced", "architect_model": "opus"}}}'
 
 # Backward compatible — individual *_model fields still work
 curl -X POST .../swe-planner.build \
-  -d '{"goal": "...", "repo_path": "...", "config": {"pm_model": "opus", "architect_model": "opus"}}'
+  -d '{"input": {"goal": "...", "repo_path": "...", "config": {"pm_model": "opus", "architect_model": "opus"}}}'
 
 # Top-level model= convenience — sets all 16 fields to the same value
 curl -X POST .../swe-planner.build \
-  -d '{"goal": "...", "repo_path": "...", "model": "opus"}'
+  -d '{"input": {"goal": "...", "repo_path": "...", "model": "opus"}}'
 ```
 
 Presets and groups are the recommended approach. Individual `*_model` fields are available for fine-tuning.
@@ -236,10 +374,14 @@ make clean         # remove generated Python/editor cache files
 make clean-examples  # remove Rust build outputs in example folders
 ```
 
-`examples/diagrams/` and `examples/pyrust/` are included in git so users can inspect full example outputs, including `.artifacts/logs`.
+`examples/diagrams/` and `examples/pyrust/` are included in git so users can inspect full example outputs, including `.artifacts/logs`. `examples/agent-comparison/` contains the SWE-AF vs single-agent CLI benchmark.
 
 ## Internals
 
 - Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
 - Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
 - License: [Apache-2.0](LICENSE)
+
+---
+
+SWE-AF is a step toward autonomous software development — where AI doesn't just assist a developer, it operates as an engineering team.

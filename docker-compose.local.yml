@@ -1,0 +1,27 @@
+# Use this to run the SWE agent against an already-running control plane
+# on the host machine (no Docker control plane needed).
+#
+#   docker compose -f docker-compose.local.yml up -d
+#
+# Prerequisites:
+#   - AgentField control plane running on host at localhost:8080
+#   - .env file with ANTHROPIC_API_KEY (and optionally GH_TOKEN)
+
+services:
+  swe-agent:
+    build:
+      context: ../..
+      dockerfile: int-agentfield-examples/af-swe/Dockerfile
+    environment:
+      - AGENTFIELD_SERVER=http://host.docker.internal:8080
+      - NODE_ID=swe-planner
+      - PORT=8003
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GH_TOKEN=${GH_TOKEN}
+    volumes:
+      - workspaces:/workspaces
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  workspaces:

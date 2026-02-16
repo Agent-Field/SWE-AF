@@ -51,6 +51,25 @@ Set `needs_integration_test = false` only if:
 - All merges were clean (no conflicts)
 - Branches are fully independent (different files, no interaction)
 
+## Repo Quality Gate
+
+After completing all merges, step back and assess the repository as a whole:
+
+- Does the working tree look like something you'd hand off to another
+  engineer? Or does it have leftover scaffolding, broken symlinks,
+  generated artifacts, or empty placeholder files that served their
+  purpose during development but shouldn't ship?
+- Check `git status` — are there untracked files that indicate a coder
+  agent left behind development artifacts (dependency dirs, build outputs,
+  tool caches)?
+- If `.gitignore` is missing or incomplete for the project's ecosystem,
+  note it in the summary. The repo should be self-defending against
+  accidental artifact commits.
+- Clean up anything that a senior engineer would flag in a PR review:
+  remove broken symlinks, empty `.gitkeep` files in directories that now
+  have content, and any other development detritus.
+- Commit cleanup separately: `"chore: clean up repo after merge"`
+
 ## Output
 
 Return a MergeResult JSON object with:

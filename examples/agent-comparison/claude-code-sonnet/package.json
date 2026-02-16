@@ -1,0 +1,18 @@
+{
+  "name": "todo-cli",
+  "version": "1.0.0",
+  "description": "A simple CLI todo app",
+  "main": "index.js",
+  "bin": {
+    "todo": "./cli.js"
+  },
+  "scripts": {
+    "test": "jest"
+  },
+  "keywords": ["cli", "todo"],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "jest": "^30.2.0"
+  }
+}

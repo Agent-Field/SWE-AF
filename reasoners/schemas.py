@@ -53,6 +53,25 @@ class ReviewResult(BaseModel):
     summary: str
 
 
+class IssueGuidance(BaseModel):
+    """Per-issue guidance from the sprint planner that shapes downstream agent behavior.
+
+    Structured fields drive loop routing (e.g. needs_deeper_qa selects the flagged
+    path). Freeform fields are injected into agent prompts to shape behavior.
+    """
+
+    # Structured — drives loop routing
+    needs_new_tests: bool = True
+    estimated_scope: str = "medium"       # "trivial" | "small" | "medium" | "large"
+    touches_interfaces: bool = False
+    needs_deeper_qa: bool = False         # True => flagged path (QA + reviewer + synthesizer)
+
+    # Freeform — shapes agent behavior
+    testing_guidance: str = ""            # Proportional test instructions
+    review_focus: str = ""                # What reviewer should focus on
+    risk_rationale: str = ""              # Why this needs (or doesn't need) deep QA
+
+
 class PlannedIssue(BaseModel):
     """A single issue in the sprint plan."""
 
@@ -67,6 +86,7 @@ class PlannedIssue(BaseModel):
     files_to_modify: list[str] = []  # Files this issue is expected to edit
     testing_strategy: str = ""  # Test file paths, framework, coverage expectations
     sequence_number: int | None = None  # Assigned after topo sort, used in file/branch naming
+    guidance: IssueGuidance | None = None  # Per-issue guidance from sprint planner
 
 
 class PlanResult(BaseModel):
