@@ -97,15 +97,15 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -d '{"input": {"goal": "Add JWT auth to all API endpoints", "repo_path": "/path/to/repo"}}'
 ```
 
-**What happens:**
+**What happens when reasoning is cheap and coordination is instant:**
 
-- Architecture designed and peer-reviewed before any code is written
-- Issues dependency-sorted and executed in parallel — each in an isolated git worktree
-- Every issue coded, tested, and reviewed independently — failures self-correct up to 5 times
-- When self-correction is exhausted, an Issue Advisor adapts: changes approach, splits the issue, relaxes scope (tracked as debt), or escalates
-- When issues escalate, a Replanner restructures the remaining plan at runtime
-- Integration tested after each merge tier, verified against original acceptance criteria
-- Every compromise tracked in a **debt register** — nothing silently dropped
+- Architecture designed, then peer-reviewed by a second agent — when review costs one API call, every design gets one
+- 20 issues execute simultaneously across isolated worktrees. Inter-agent coordination is instant — no standups, no Slack threads, no waiting. Parallelism that would take a human team weeks collapses to minutes
+- Every issue gets a dedicated coder, tester, and reviewer. Staffing no human team would allocate — agents make it trivial
+- Failures self-correct up to 5 times. When exhausted, a specialist diagnoses and adapts in seconds — not a triage meeting
+- Context flows between agents at API speed. Conventions discovered in issue 1 are injected into issue 20 before its coder starts. No onboarding, no knowledge silos
+- Plans restructure themselves at runtime. Dependencies recomputed, blocked work rerouted — a replan that takes a PM a day happens in seconds
+- Every compromise tracked in a **debt register** — when hundreds of agents make decisions, accountability must be structural
 
 ![SWE-AF Architecture](assets/archi.png)
 
@@ -113,15 +113,15 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 
 ## Why multi-agent beats single-agent
 
-A single coding agent — no matter how capable — works sequentially: one context window, one attempt, one commit. That is fine for single-file fixes. For anything larger, you need what AI uniquely enables: parallel specialists that coordinate, learn from each other, and recover from failures without human intervention.
+Reasoning is now cheap enough to run at scale. A single coding agent — no matter how capable — is still one context window, one attempt, one commit. It works like one very fast developer. But when you can spin up hundreds of agents and they coordinate at the speed of an API call — no meetings, no onboarding, no context-switching — you don't get a faster developer. You get capabilities that are structurally different from anything a human team or a single agent can do.
 
-**Self-correction at three levels.** Inner loop: coder → QA → reviewer, up to 5 iterations per issue. Tests fail? Errors fed back with full context. Middle loop: when iterations are exhausted, an Issue Advisor diagnoses the failure — retries with a new approach, relaxes acceptance criteria (recorded as debt), splits into sub-issues, or escalates. Outer loop: when issues escalate, a Replanner restructures the entire remaining plan at runtime. Dependencies recomputed. New issues added. Blocked work removed. The plan rewrites itself under pressure.
+**Self-correction that would bankrupt a human team.** Inner loop: coder → QA → reviewer, up to 5 iterations per issue. Tests fail? Errors fed back with full context. Every issue gets this — because the cost of a review cycle is one API call, not a calendar invite. Middle loop: when iterations are exhausted, an Issue Advisor diagnoses the failure — retries with a new approach, relaxes acceptance criteria (recorded as debt), splits into sub-issues, or escalates. Outer loop: when issues escalate, a Replanner restructures the entire remaining plan at runtime. Dependencies recomputed. New issues added. Blocked work removed. Three levels of self-correction, running continuously across every issue in the build. No human team would staff this.
 
-**Intelligent parallelism.** Issues are dependency-sorted into levels using topological ordering. All issues in a level execute simultaneously in isolated git worktrees. File conflict detection prevents parallel agents from clobbering each other. After each level: merge gate → integration tests → next level. A 20-issue build doesn't take 20× longer — independent issues run at the same time.
+**Parallelism with zero coordination cost.** A human team parallelizing 20 issues needs standups, Slack threads, merge conflict resolution meetings, and a project manager. Agents coordinate instantly — context is shared programmatically, not through conversation. Issues are dependency-sorted into levels. All issues in a level execute simultaneously in isolated git worktrees. File conflict detection prevents agents from clobbering each other. After each level: merge gate → integration tests → next level. A 20-issue build runs in the wall-clock time of its longest dependency chain, not the sum of its parts.
 
-**Cross-issue learning.** Agents share memory during a build. Codebase conventions discovered by early issues are injected into later ones. Failure patterns accumulate so downstream coders avoid known traps. An interface registry tells downstream issues exactly what upstream provided. The 50th agent is smarter than the 1st.
+**Shared memory, not shared meetings.** Agents don't just run in parallel — they learn from each other. Codebase conventions discovered by early issues are injected into later ones. Failure patterns accumulate so downstream coders avoid known traps. An interface registry tells downstream issues exactly what upstream provided. In a human team, this knowledge lives in people's heads and leaks through hallway conversations. Here, it propagates instantly and completely. The 50th agent is smarter than the 1st.
 
-**Transparent compromise.** Every relaxed requirement, dropped acceptance criterion, and missing feature is typed, justified, severity-rated, and tracked in a debt register. The PR description tells you exactly what was delivered and what was not. No silent failures.
+**Transparent compromise.** Every relaxed requirement, dropped acceptance criterion, and missing feature is typed, justified, severity-rated, and tracked in a debt register. When hundreds of agents make thousands of decisions, accountability can't be informal — it has to be structural. The PR description tells you exactly what was delivered and what was not. No silent failures.
 
 **Crash recovery.** Checkpoints at level and iteration granularity. `resume_build` picks up exactly where the build stopped. Completed work is not re-executed.
 
