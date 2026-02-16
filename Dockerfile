@@ -19,6 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl -fsSL https://raw.githubusercontent.com/opencode-ai/opencode/refs/heads/main/install | bash && \
     rm -rf /var/lib/apt/lists/*
 
+# Add OpenCode to PATH for non-interactive shells
+ENV PATH="/root/.opencode/bin:${PATH}"
+
 # Git identity — env vars take highest precedence and are inherited by all
 # subprocesses including Claude Code agent instances spawned by the SDK
 ENV GIT_AUTHOR_NAME="SWE-AF" \

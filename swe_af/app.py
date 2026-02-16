@@ -48,7 +48,7 @@ async def build(
     additional_context: str = "",
     config: dict | None = None,
     execute_fn_target: str = "",
-    ai_provider: str = "claude",
+    ai_provider: str = "",
     model: str = "",
     max_turns: int = 0,
     permission_mode: str = "",
@@ -88,7 +88,7 @@ async def build(
         )
     if execute_fn_target:
         cfg.execute_fn_target = execute_fn_target
-    if ai_provider:
+    if ai_provider:  # Only override if explicitly provided (not empty string default)
         cfg.ai_provider = ai_provider
     if permission_mode:
         cfg.permission_mode = permission_mode

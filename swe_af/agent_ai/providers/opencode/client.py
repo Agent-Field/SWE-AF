@@ -354,15 +354,23 @@ class OpenCodeProviderClient:
         """Execute single OpenCode invocation via subprocess."""
         start_time = time.time()
 
-        # Build command - OpenCode uses 'run' command with prompt as positional arg
+        # Build command - OpenCode uses -p for non-interactive mode
         cmd = [
             self.config.opencode_bin,
-            "run",
+            "-p",
             prompt,
+            "-c",
+            cwd,
+            "-q",  # Quiet mode - hide spinner
         ]
 
-        # Construct full environment (inherit + add user env)
-        full_env = {**os.environ, **env}
+        # Construct full environment (inherit + add user env + disable TTY)
+        full_env = {
+            **os.environ,
+            **env,
+            "TERM": "dumb",  # Disable fancy terminal features
+            "NO_COLOR": "1",  # Disable colors
+        }
 
         # Execute OpenCode with prompt - it runs in cwd automatically
         proc = await asyncio.create_subprocess_exec(
