@@ -25,8 +25,9 @@ DEFAULT_TOOLS: list[str] = [
 class AgentAIConfig:
     """Configuration for AgentAI."""
 
-    provider: Literal["claude", "codex"] = "claude"
+    provider: Literal["claude", "codex", "opencode"] = "claude"
     codex_bin: str = "codex"
+    opencode_bin: str = "opencode"
     model: str = "sonnet"
     cwd: str | Path = "."
     max_turns: int = 10
