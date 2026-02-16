@@ -271,6 +271,24 @@ async def build(
         tags=["build", "complete"],
     )
 
+    # Capture plan docs before finalize cleans up .artifacts/
+    _plan_dir = os.path.join(
+        plan_result.get("artifacts_dir", ""), "plan"
+    )
+    prd_markdown = ""
+    architecture_markdown = ""
+    for _name, _var in [("prd.md", "prd_markdown"), ("architecture.md", "architecture_markdown")]:
+        _fpath = os.path.join(_plan_dir, _name)
+        if os.path.isfile(_fpath):
+            try:
+                with open(_fpath, "r", encoding="utf-8") as _f:
+                    if _var == "prd_markdown":
+                        prd_markdown = _f.read()
+                    else:
+                        architecture_markdown = _f.read()
+            except OSError:
+                pass
+
     # 3b. FINALIZE — clean up repo artifacts before PR
     app.note("Phase 3b: Repo finalization", tags=["build", "finalize"])
     try:
@@ -330,6 +348,47 @@ async def build(
             pr_url = pr_result.get("pr_url", "")
             if pr_url:
                 app.note(f"Draft PR created: {pr_url}", tags=["build", "github_pr", "complete"])
+
+                # Programmatically append plan docs to PR body
+                if prd_markdown or architecture_markdown:
+                    try:
+                        current_body = subprocess.run(
+                            ["gh", "pr", "view", str(pr_result.get("pr_number", 0)),
+                             "--json", "body", "--jq", ".body"],
+                            cwd=repo_path, capture_output=True, text=True, check=True,
+                        ).stdout.strip()
+
+                        plan_sections = "\n\n---\n"
+                        if prd_markdown:
+                            plan_sections += (
+                                "\n<details><summary>📋 PRD (Product Requirements Document)"
+                                "</summary>\n\n"
+                                + prd_markdown
+                                + "\n\n</details>\n"
+                            )
+                        if architecture_markdown:
+                            plan_sections += (
+                                "\n<details><summary>🏗️ Architecture</summary>\n\n"
+                                + architecture_markdown
+                                + "\n\n</details>\n"
+                            )
+
+                        new_body = current_body + plan_sections
+
+                        subprocess.run(
+                            ["gh", "pr", "edit", str(pr_result.get("pr_number", 0)),
+                             "--body", new_body],
+                            cwd=repo_path, capture_output=True, text=True, check=True,
+                        )
+                        app.note(
+                            "Plan docs appended to PR body",
+                            tags=["build", "github_pr", "plan_docs"],
+                        )
+                    except subprocess.CalledProcessError as e:
+                        app.note(
+                            f"Failed to append plan docs to PR (non-fatal): {e}",
+                            tags=["build", "github_pr", "plan_docs", "warning"],
+                        )
             else:
                 app.note(
                     f"PR creation failed: {pr_result.get('error_message', 'unknown')}",
