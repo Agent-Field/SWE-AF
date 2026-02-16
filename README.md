@@ -12,12 +12,14 @@
 [![Tests](https://img.shields.io/badge/Tests-make%20check-blue?style=for-the-badge)](.github/workflows/ci.yml)
 [![Built with AgentField](https://img.shields.io/badge/Built%20with-AgentField-0A66C2?style=for-the-badge)](https://github.com/Agent-Field/agentfield)
 ![WorldSpace Community Developer](https://img.shields.io/badge/WorldSpace-Community%20Developer-111827?style=for-the-badge)
+[![Example PR](https://img.shields.io/badge/Example-PR%20%23179-ff6b35?style=for-the-badge&logo=github)](https://github.com/Agent-Field/agentfield/pull/179)
 
 
 
 <p>
   <a href="#quick-start">Quick Start</a> •
   <a href="#why-swe-af">Why SWE-AF</a> •
+  <a href="#in-action">In Action</a> •
   <a href="#adaptive-factory-control">Factory Control</a> •
   <a href="#benchmark-snapshot">Benchmark</a> •
   <a href="#api-reference">API</a> •
@@ -44,6 +46,39 @@ Most agent frameworks are harnesses around a single coder loop. SWE-AF is a soft
 - Fleet-scale orchestration with AgentField: many SWE-AF nodes can run continuously in parallel, driving thousands of agent invocations across concurrent builds.
 - Explicit compromise tracking: when scope is relaxed, debt is typed, severity-rated, and propagated.
 - Long-run reliability: checkpointed execution supports `resume_build` after crashes or interruptions.
+
+## In Action
+
+[PR #179: Go SDK DID/VC Registration](https://github.com/Agent-Field/agentfield/pull/179) — built entirely by SWE-AF (haiku, turbo preset). One API call, zero human code.
+
+| Metric | Value |
+| --- | --- |
+| Issues completed | 10/10 |
+| Tests passing | 217 |
+| Acceptance criteria | 34/34 |
+| Agent invocations | 79 |
+| Model | `claude-haiku-4-5` |
+| **Total cost** | **$19.23** |
+
+<details>
+<summary>Cost breakdown by agent role</summary>
+
+| Role | Cost | % |
+| --- | --- | --- |
+| Coder | $5.88 | 30.6% |
+| Code Reviewer | $3.48 | 18.1% |
+| QA | $1.78 | 9.2% |
+| GitHub PR | $1.66 | 8.6% |
+| Integration Tester | $1.59 | 8.3% |
+| Merger | $1.22 | 6.3% |
+| Workspace Ops | $1.77 | 9.2% |
+| Planning (PM + Arch + TL + Sprint) | $0.79 | 4.1% |
+| Verifier + Finalize | $0.34 | 1.8% |
+| Synthesizer | $0.05 | 0.2% |
+
+79 invocations, 2,070 conversation turns. Planning agents scope and decompose; coders work in parallel isolated worktrees; reviewers and QA validate each issue; merger integrates branches; verifier checks acceptance criteria against the PRD.
+
+</details>
 
 ## Adaptive Factory Control
 
