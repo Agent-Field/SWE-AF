@@ -1,6 +1,6 @@
 # SWE-AF
 
-Autonomous software engineering team built on [AgentField](https://github.com/Agent-Field/agentfield). One API call spins up hundreds of agents that decompose, parallelize, code, test, review, and self-correct. Merge-ready code, not demos.
+Autonomous software engineering team built on [AgentField](https://github.com/Agent-Field/agentfield). One API call spins up hundred and thousands of agents that decompose, parallelize, code, test, review, and self-correct. Merge-ready code, not demos.
 
 **95/100 with haiku.** The cheapest model. SWE-AF with haiku outscores Claude Code with sonnet (73), Codex (62), and Claude Code with haiku (59) on the same task.
 
