@@ -51,34 +51,36 @@ Most agent frameworks are harnesses around a single coder loop. SWE-AF is a soft
 
 [PR #179: Go SDK DID/VC Registration](https://github.com/Agent-Field/agentfield/pull/179) — built entirely by SWE-AF (haiku, turbo preset). One API call, zero human code.
 
-| Metric | Value |
-| --- | --- |
-| Issues completed | 10/10 |
-| Tests passing | 217 |
-| Acceptance criteria | 34/34 |
-| Agent invocations | 79 |
-| Model | `claude-haiku-4-5` |
-| **Total cost** | **$19.23** |
+| Metric              | Value              |
+| ------------------- | ------------------ |
+| Issues completed    | 10/10              |
+| Tests passing       | 217                |
+| Acceptance criteria | 34/34              |
+| Agent invocations   | 79                 |
+| Model               | `claude-haiku-4-5` |
+| **Total cost**      | **$19.23**         |
 
 <details>
 <summary>Cost breakdown by agent role</summary>
 
-| Role | Cost | % |
-| --- | --- | --- |
-| Coder | $5.88 | 30.6% |
-| Code Reviewer | $3.48 | 18.1% |
-| QA | $1.78 | 9.2% |
-| GitHub PR | $1.66 | 8.6% |
-| Integration Tester | $1.59 | 8.3% |
-| Merger | $1.22 | 6.3% |
-| Workspace Ops | $1.77 | 9.2% |
-| Planning (PM + Arch + TL + Sprint) | $0.79 | 4.1% |
-| Verifier + Finalize | $0.34 | 1.8% |
-| Synthesizer | $0.05 | 0.2% |
+| Role                               | Cost  | %     |
+| ---------------------------------- | ----- | ----- |
+| Coder                              | $5.88 | 30.6% |
+| Code Reviewer                      | $3.48 | 18.1% |
+| QA                                 | $1.78 | 9.2%  |
+| GitHub PR                          | $1.66 | 8.6%  |
+| Integration Tester                 | $1.59 | 8.3%  |
+| Merger                             | $1.22 | 6.3%  |
+| Workspace Ops                      | $1.77 | 9.2%  |
+| Planning (PM + Arch + TL + Sprint) | $0.79 | 4.1%  |
+| Verifier + Finalize                | $0.34 | 1.8%  |
+| Synthesizer                        | $0.05 | 0.2%  |
 
 79 invocations, 2,070 conversation turns. Planning agents scope and decompose; coders work in parallel isolated worktrees; reviewers and QA validate each issue; merger integrates branches; verifier checks acceptance criteria against the PRD.
 
 </details>
+
+**Open-source models**: Use DeepSeek, Qwen, Llama via OpenCode (OpenRouter) — sub-$1 builds possible. Set `"ai_provider": "opencode"` and `"coder_model": "deepseek/deepseek-chat"`.
 
 ## Adaptive Factory Control
 
@@ -98,7 +100,7 @@ This is the core factory-control behavior: control agents supervise worker agent
 
 - Python 3.12+
 - AgentField control plane (`af`)
-- One AI provider key: Anthropic or OpenAI-compatible setup
+- AI provider API key (Anthropic, OpenRouter, OpenAI, or Google)
 
 ### 2. Install
 
@@ -119,17 +121,20 @@ python -m swe_af   # registers node id "swe-planner"
 ### 4. Trigger a build
 
 ```bash
+# Default (uses Claude)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
   -d '{"input": {"goal": "Add JWT auth to all API endpoints", "repo_path": "/path/to/repo"}}'
-```
 
-Enable continual learning for harder, longer builds:
-
-```bash
+# With open-source models (DeepSeek, Qwen, Llama via OpenRouter)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {"goal": "Refactor and harden auth + billing flows", "repo_path": "/path/to/repo", "enable_learning": true, "config": {"preset": "fast"}}}'
+  -d '{"input": {"goal": "Add JWT auth", "repo_path": "/path/to/repo", "config": {"ai_provider": "opencode", "coder_model": "deepseek/deepseek-chat"}}}'
+
+# Enable continual learning for harder builds
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"goal": "Refactor and harden auth + billing flows", "repo_path": "/path/to/repo", "config": {"enable_learning": true, "preset": "fast"}}}'
 ```
 
 ## What Happens In One Build
@@ -205,7 +210,8 @@ Benchmark assets, logs, evaluator, and generated projects live in [`examples/age
 
 ```bash
 cp .env.example .env
-# Fill ANTHROPIC_API_KEY (and GH_TOKEN if using draft PR workflow)
+# Add your API key: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
+# Optionally add GH_TOKEN for draft PR workflow
 
 docker compose up -d
 ```
@@ -213,9 +219,15 @@ docker compose up -d
 Submit a build:
 
 ```bash
+# Default (Claude)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
   -d '{"input": {"goal": "Add JWT auth", "repo_path": "/workspaces/my-repo"}}'
+
+# With open-source models (set OPENROUTER_API_KEY in .env)
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"goal": "Add JWT auth", "repo_path": "/workspaces/my-repo", "config": {"ai_provider": "opencode", "coder_model": "deepseek/deepseek-chat"}}}'
 ```
 
 Scale workers:
@@ -311,18 +323,18 @@ Every specialist is also callable directly:
 
 Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.py`](swe_af/execution/schemas.py)
 
-| Key                       | Default    | Description                                           |
-| ------------------------- | ---------- | ----------------------------------------------------- |
-| `max_coding_iterations`   | `5`        | Inner-loop retry budget                               |
-| `max_advisor_invocations` | `2`        | Middle-loop advisor budget                            |
-| `max_replans`             | `2`        | Build-level replanning budget                         |
-| `enable_issue_advisor`    | `true`     | Enable issue adaptation                               |
-| `enable_replanning`       | `true`     | Enable global replanning                              |
-| `enable_learning`         | `false`    | Enable cross-issue shared memory (continual learning) |
-| `agent_timeout_seconds`   | `2700`     | Per-agent timeout                                     |
-| `ai_provider`             | `"claude"` | `claude` or `codex`                                   |
-| `coder_model`             | `"sonnet"` | Coding model                                          |
-| `agent_max_turns`         | `150`      | Tool-use turn budget                                  |
+| Key                       | Default    | Description                                                  |
+| ------------------------- | ---------- | ------------------------------------------------------------ |
+| `max_coding_iterations`   | `5`        | Inner-loop retry budget                                      |
+| `max_advisor_invocations` | `2`        | Middle-loop advisor budget                                   |
+| `max_replans`             | `2`        | Build-level replanning budget                                |
+| `enable_issue_advisor`    | `true`     | Enable issue adaptation                                      |
+| `enable_replanning`       | `true`     | Enable global replanning                                     |
+| `enable_learning`         | `false`    | Enable cross-issue shared memory (continual learning)        |
+| `agent_timeout_seconds`   | `2700`     | Per-agent timeout                                            |
+| `ai_provider`             | `"claude"` | `"claude"` or `"opencode"` - AI provider backend |
+| `coder_model`             | `"sonnet"` | Coding model                                                 |
+| `agent_max_turns`         | `150`      | Tool-use turn budget                                         |
 
 </details>
 

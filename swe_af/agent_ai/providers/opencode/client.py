@@ -354,22 +354,17 @@ class OpenCodeProviderClient:
         """Execute single OpenCode invocation via subprocess."""
         start_time = time.time()
 
-        # Build command - OpenCode uses -p for prompt, -c for cwd, -f for format
+        # Build command - OpenCode uses 'run' command with prompt as positional arg
         cmd = [
             self.config.opencode_bin,
-            "-p",
+            "run",
             prompt,
-            "-c",
-            cwd,
-            "-f",
-            "json",  # Request JSON output format
-            "-q",  # Quiet mode - hide spinner
         ]
 
         # Construct full environment (inherit + add user env)
         full_env = {**os.environ, **env}
 
-        # Execute OpenCode with prompt as command-line argument
+        # Execute OpenCode with prompt - it runs in cwd automatically
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -395,9 +390,9 @@ class OpenCodeProviderClient:
         # Build metrics
         metrics = Metrics(
             duration_ms=duration_ms,
-            duration_api_ms=duration_ms,  # We don't have separate API time
-            num_turns=1,  # Single-turn invocation
-            total_cost_usd=None,  # OpenCode doesn't provide cost info
+            duration_api_ms=duration_ms,
+            num_turns=1,
+            total_cost_usd=None,
             usage=None,
             session_id="",
         )

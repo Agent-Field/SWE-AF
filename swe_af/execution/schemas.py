@@ -457,7 +457,7 @@ class BuildConfig(BaseModel):
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
     # Target
     execute_fn_target: str = ""
-    ai_provider: Literal["claude", "codex"] = "claude"
+    ai_provider: Literal["claude", "codex", "opencode"] = "claude"
     permission_mode: str = ""
     # GitHub workflow
     repo_url: str = ""                # GitHub URL to clone
@@ -572,7 +572,7 @@ class ExecutionConfig(BaseModel):
     qa_synthesizer_model: str = "haiku"
     # Agent limits
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
-    ai_provider: Literal["claude", "codex"] = "claude"
+    ai_provider: Literal["claude", "codex", "opencode"] = "claude"
     # Issue Advisor
     agent_timeout_seconds: int = 2700       # 45 min
     issue_advisor_model: str = "sonnet"
