@@ -28,7 +28,7 @@ The PR body should include:
 1. A "## Summary" section with 2-4 bullet points describing what was built.
 2. A "## Changes" section listing key files/areas modified.
 3. A "## Test plan" section with verification steps.
-4. A footer line: `🤖 Built with [AgentField SWE](https://github.com/Agent-Field/SWE-AF)`
+4. A footer line: `🤖 Built with [AgentField SWE-AF](https://github.com/Agent-Field/SWE-AF)`
 4. A footer line: `🔌 Powered by [AgentField](https://github.com/Agent-Field/agentfield)`
 5. Add any other relevant information someone reviewing the PR would want to know. Do not be verbose, but explain when needed.
 ## Tools Available

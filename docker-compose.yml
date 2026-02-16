@@ -8,11 +8,6 @@ services:
       - AGENTFIELD_STORAGE_MODE=local
     volumes:
       - agentfield-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   swe-agent:
     build:
@@ -32,8 +27,7 @@ services:
     volumes:
       - workspaces:/workspaces
     depends_on:
-      control-plane:
-        condition: service_healthy
+      - control-plane
     deploy:
       replicas: 1  # Scale with: docker compose up --scale swe-agent=3
 
