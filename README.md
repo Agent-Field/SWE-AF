@@ -13,9 +13,7 @@
 [![Built with AgentField](https://img.shields.io/badge/Built%20with-AgentField-0A66C2?style=for-the-badge)](https://github.com/Agent-Field/agentfield)
 ![WorldSpace Community Developer](https://img.shields.io/badge/WorldSpace-Community%20Developer-111827?style=for-the-badge)
 
-One API call spins up a full autonomous engineering team that can scope, build, adapt, and ship complex software end to end.
 
-SWE-AF is a first step toward autonomous software engineering factories, scaling from simple goals to hard multi-issue programs with hundreds to thousands of agent invocations.
 
 <p>
   <a href="#quick-start">Quick Start</a> •
@@ -27,6 +25,9 @@ SWE-AF is a first step toward autonomous software engineering factories, scaling
 </p>
 
 </div>
+
+One API call spins up a full autonomous engineering team that can scope, build, adapt, and ship complex software end to end.
+SWE-AF is a first step toward autonomous software engineering factories, scaling from simple goals to hard multi-issue programs with hundreds to thousands of agent invocations.
 
 ## Why SWE-AF
 
