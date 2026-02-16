@@ -80,7 +80,7 @@ Most agent frameworks are harnesses around a single coder loop. SWE-AF is a soft
 
 </details>
 
-**Open-source models**: Use DeepSeek, Qwen, Llama via OpenCode (OpenRouter) — sub-$1 builds possible. Set `"ai_provider": "opencode"` and `"coder_model": "deepseek/deepseek-chat"`.
+**Claude & open-source models supported**: Run builds with Claude (Anthropic) or open-source models (DeepSeek, Qwen, Llama via OpenRouter) — sub-$1 builds possible with open-source. Set `"ai_provider": "opencode"` and `"coder_model": "deepseek/deepseek-chat"` to use open-source models.
 
 ## Adaptive Factory Control
 
@@ -332,7 +332,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 | `enable_replanning`       | `true`     | Enable global replanning                                     |
 | `enable_learning`         | `false`    | Enable cross-issue shared memory (continual learning)        |
 | `agent_timeout_seconds`   | `2700`     | Per-agent timeout                                            |
-| `ai_provider`             | `"claude"` | `"claude"` or `"opencode"` - AI provider backend |
+| `ai_provider`             | `"claude"` | `"claude"` (Anthropic) or `"opencode"` (open-source models via OpenRouter/OpenAI/Google) |
 | `coder_model`             | `"sonnet"` | Coding model                                                 |
 | `agent_max_turns`         | `150`      | Tool-use turn budget                                         |
 
