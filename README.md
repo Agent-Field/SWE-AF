@@ -251,6 +251,9 @@ Requirements:
 
 ## API Reference
 
+<details>
+<summary><strong>Agent endpoints</strong></summary>
+
 Core async endpoints (returns an `execution_id` immediately):
 
 ```bash
@@ -277,6 +280,11 @@ Every specialist is also callable directly:
 
 `POST /api/v1/execute/async/swe-planner.<agent>`
 
+</details>
+
+<details>
+<summary><strong>Agent execution flow</strong></summary>
+
 | Agent                    | In -> Out                                            |
 | ------------------------ | ---------------------------------------------------- |
 | `run_product_manager`    | goal -> PRD                                          |
@@ -296,7 +304,10 @@ Every specialist is also callable directly:
 | `generate_fix_issues`    | failed criteria -> targeted fix issues               |
 | `run_github_pr`          | branch -> push + draft PR                            |
 
-## Configuration
+</details>
+
+<details>
+<summary><strong>Configuration</strong></summary>
 
 Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.py`](swe_af/execution/schemas.py)
 
@@ -313,7 +324,10 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 | `coder_model`             | `"sonnet"` | Coding model                                          |
 | `agent_max_turns`         | `150`      | Tool-use turn budget                                  |
 
-### Presets
+</details>
+
+<details>
+<summary><strong>Presets</strong></summary>
 
 | Preset     | Planning | Coding | Orchestration | Lightweight | Use case                        |
 | ---------- | -------- | ------ | ------------- | ----------- | ------------------------------- |
@@ -323,11 +337,17 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 | `thorough` | sonnet   | sonnet | sonnet        | sonnet      | Uniform quality                 |
 | `quality`  | opus     | opus   | sonnet        | haiku       | Maximum planning/coding quality |
 
-### Resolution order
+</details>
+
+<details>
+<summary><strong>Resolution order</strong></summary>
 
 `defaults` < `preset` < `role groups` < individual `*_model` fields
 
-## Artifacts
+</details>
+
+<details>
+<summary><strong>Artifacts</strong></summary>
 
 ```text
 .artifacts/
@@ -336,7 +356,10 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 └── verification/   # acceptance criteria results
 ```
 
-## Development
+</details>
+
+<details>
+<summary><strong>Development</strong></summary>
 
 ```bash
 make test
@@ -345,13 +368,18 @@ make clean
 make clean-examples
 ```
 
-## Security and Community
+</details>
+
+<details>
+<summary><strong>Security and Community</strong></summary>
 
 - Contribution guide: [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md)
 - Code of conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
 - Security policy: [`SECURITY.md`](SECURITY.md)
 - Changelog: [`CHANGELOG.md`](CHANGELOG.md)
 - License: [`Apache-2.0`](LICENSE)
+
+</details>
 
 ---
 
