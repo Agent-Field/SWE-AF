@@ -2,7 +2,7 @@
 
 # SWE-AF
 
-### Autonomous Engineering Team Runtime Built on AgentField
+### Autonomous Engineering Team Runtime Built on [AgentField](https://github.com/Agent-Field/agentfield)
 
 **Pronounced:** _"swee-AF"_ (one word)
 
