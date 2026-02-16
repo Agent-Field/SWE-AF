@@ -368,6 +368,7 @@ class OpenCodeProviderClient:
         full_env = {
             **os.environ,
             **env,
+            "OPENCODE_MODEL": model,  # CRITICAL: Tell OpenCode which model to use
             "TERM": "dumb",  # Disable fancy terminal features
             "NO_COLOR": "1",  # Disable colors
         }
