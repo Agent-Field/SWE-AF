@@ -7,8 +7,8 @@
 
 ## Results
 
-| Metric | af-swe (pipeline) | Claude Code (haiku) | Claude Code (sonnet) | Codex (o3) |
-|--------|-------------------|---------------------|----------------------|------------|
+| Metric | SWE-AF (haiku) | Claude Code (haiku) | Claude Code (sonnet) | Codex (o3) |
+|--------|----------------|---------------------|----------------------|------------|
 | CLI works | PASS | PASS | PASS | PASS |
 | Tests pass | PASS | PASS | PASS | PASS |
 | Source files | 4 | 2 | 2 | 3 |
@@ -40,21 +40,19 @@ Each agent is scored across five dimensions:
 
 | Agent | Functional | Structure | Hygiene | Git | Quality | **Total** |
 |-------|-----------|-----------|---------|-----|---------|-----------|
-| af-swe (pipeline) | 30/30 | 20/20 | 20/20 | 15/15 | 10/15 | **95/100** |
+| SWE-AF (haiku) | 30/30 | 20/20 | 20/20 | 15/15 | 10/15 | **95/100** |
 | Claude Code (haiku) | 30/30 | 10/20 | 7/20 | 2/15 | 10/15 | **59/100** |
 | Claude Code (sonnet) | 30/30 | 10/20 | 16/20 | 2/15 | 15/15 | **73/100** |
 | Codex (o3) | 30/30 | 10/20 | 10/20 | 2/15 | 10/15 | **62/100** |
 
 ## Reproduction Commands
 
-### af-swe (multi-agent pipeline)
+### SWE-AF (multi-agent pipeline, haiku via turbo preset)
 
 ```bash
-# Using the af-swe turbo preset (~43 min with all-haiku)
-af-swe build \
-  --prompt "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work." \
-  --preset turbo \
-  --output /tmp/agent-comparison/af-swe
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"goal": "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.", "repo_path": "/tmp/swe-af-output", "config": {"preset": "turbo"}}}'
 ```
 
 ### Claude Code (haiku)
@@ -80,7 +78,5 @@ claude -p \
 ```bash
 codex exec \
   "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work." \
-  -C /tmp/agent-comparison/codex \
   --full-auto
 ```
-

@@ -1,4 +1,4 @@
-# SWE AgentNode
+# SWE-AF
 
 Production-grade software engineering, not vibe coding. One API call deploys hundreds of autonomous coding agents that architect, code, test, review, and verify in parallel — and delivers tested, reviewed, integration-verified code with a debt register for anything compromised.
 
@@ -16,7 +16,7 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 - Integration tested after each merge tier, verified against original acceptance criteria
 - Anything relaxed, skipped, or compromised is tracked in a **debt register**
 
-![SWE AgentNode Architecture](assets/archi.png)
+![SWE-AF Architecture](assets/archi.png)
 
 > Every box is an independent agent instance with full tool use, file system access, and git operations. A typical build deploys **400-500+ agent instances** across parallel worktrees. Tested up to 10,000.
 
@@ -267,11 +267,11 @@ make clean         # remove generated Python/editor cache files
 make clean-examples  # remove Rust build outputs in example folders
 ```
 
-`examples/diagrams/` and `examples/pyrust/` are included in git so users can inspect full example outputs, including `.artifacts/logs`. `examples/agent-comparison/` contains a head-to-head benchmark against single-agent CLIs.
+`examples/diagrams/` and `examples/pyrust/` are included in git so users can inspect full example outputs, including `.artifacts/logs`. `examples/agent-comparison/` contains the SWE-AF vs single-agent CLI benchmark.
 
 ## Benchmark: Pipeline vs Single-Agent CLI
 
-Same prompt. Four agents. One builds production-grade code, three build demos.
+Same prompt. Four agents. One builds production-grade code, three build demos. **SWE-AF uses only haiku** — the cheapest, fastest model — across all 400+ agent instances via the `turbo` preset. It still outscores single-agent CLIs running stronger models.
 
 > **Prompt:** Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.
 
@@ -290,7 +290,7 @@ We evaluate across **5 dimensions** that separate production code from prototype
 ### Results
 
 ```
-  af-swe (pipeline)     95/100  ██████████████████████████████████████░░
+  SWE-AF (haiku)        95/100  ██████████████████████████████████████░░
   Claude Code (sonnet)  73/100  █████████████████████████████░░░░░░░░░░░
   Codex (o3)            62/100  ████████████████████████░░░░░░░░░░░░░░░░
   Claude Code (haiku)   59/100  ███████████████████████░░░░░░░░░░░░░░░░░
@@ -298,8 +298,8 @@ We evaluate across **5 dimensions** that separate production code from prototype
 
 ### Score Breakdown by Dimension
 
-| Dimension | af-swe | Claude Code (sonnet) | Codex (o3) | Claude Code (haiku) |
-|-----------|--------|----------------------|------------|---------------------|
+| Dimension | SWE-AF (haiku) | CC Sonnet | Codex | CC Haiku |
+|-----------|----------------|-----------|-------|----------|
 | **Functional** (30) | **30** | **30** | **30** | **30** |
 | **Structure** (20) | **20** | 10 | 10 | 10 |
 | **Hygiene** (20) | **20** | 16 | 10 | 7 |
@@ -307,15 +307,15 @@ We evaluate across **5 dimensions** that separate production code from prototype
 | **Quality** (15) | 10 | **15** | 10 | 10 |
 | **Total** | **95** | **73** | **62** | **59** |
 
-Every agent scores 30/30 on Functional — they all produce working code that passes its own tests. The gap is everything else.
+Every agent scores 30/30 on Functional — they all produce working code that passes its own tests. **The gap is everything else.** SWE-AF with haiku beats Claude Code with sonnet by 22 points because pipeline architecture matters more than model capability for production quality.
 
 ### Detailed Metrics
 
 <details>
 <summary><strong>Full metric table (13 checks)</strong></summary>
 
-| Metric | af-swe | CC (haiku) | CC (sonnet) | Codex (o3) |
-|--------|--------|------------|-------------|------------|
+| Metric | SWE-AF | CC Haiku | CC Sonnet | Codex |
+|--------|--------|----------|-----------|-------|
 | CLI works | PASS | PASS | PASS | PASS |
 | Tests pass | PASS | PASS | PASS | PASS |
 | Source files | 4 | 2 | 2 | 3 |
@@ -334,27 +334,27 @@ Every agent scores 30/30 on Functional — they all produce working code that pa
 
 ### Where the Pipeline Wins
 
-**Structure (+10 pts over every competitor).** af-swe decomposes the app into 4 source modules (`store.js`, `utils.js`, `commands.js`, `cli.js`) and 14 test files across 4 tiers: unit, integration, acceptance, and smoke. Single-agent CLIs produce 1-2 source files and 1 flat test file. More modules = easier to change one thing without breaking another. More test tiers = different categories of bugs caught.
+**Structure (+10 pts over every competitor).** SWE-AF decomposes the app into 4 source modules (`store.js`, `utils.js`, `commands.js`, `cli.js`) and 14 test files across 4 tiers: unit, integration, acceptance, and smoke. Single-agent CLIs produce 1-2 source files and 1 flat test file. More modules = easier to change one thing without breaking another. More test tiers = different categories of bugs caught.
 
-**Git (+13 pts over every competitor).** af-swe creates 16 descriptive, feature-scoped commits with merge boundaries — one per issue in the plan. Single-agent CLIs dump everything into 1 monolithic commit. Feature-scoped commits make code review possible, `git bisect` useful, and rollbacks safe.
+**Git (+13 pts over every competitor).** SWE-AF creates 16 descriptive, feature-scoped commits with merge boundaries — one per issue in the plan. Single-agent CLIs dump everything into 1 monolithic commit. Feature-scoped commits make code review possible, `git bisect` useful, and rollbacks safe.
 
-**Hygiene (+4-13 pts).** af-swe produces a complete `.gitignore` (node_modules, .env, OS files), clean `git status`, and zero committed artifacts. Single-agent CLIs have partial or missing .gitignore and often leave dirty working trees.
+**Hygiene (+4-13 pts).** SWE-AF produces a complete `.gitignore` (node_modules, .env, OS files), clean `git status`, and zero committed artifacts. Single-agent CLIs have partial or missing .gitignore and often leave dirty working trees.
 
 ### Where Single Agents Win
 
-**Speed.** Single-agent CLIs finish in 1-3 minutes. af-swe took ~43 minutes with the `turbo` (all-haiku) preset. The pipeline pays for production quality with time.
+**Speed.** Single-agent CLIs finish in 1-3 minutes. SWE-AF took ~43 minutes with the `turbo` preset. The pipeline pays for production quality with time.
 
-**README.** Claude Code (sonnet) was the only agent to generate a README. af-swe's pipeline doesn't include a README generation step (yet).
+**README.** Claude Code (sonnet) was the only agent to generate a README. SWE-AF's pipeline doesn't include a README generation step (yet).
 
 ### What This Means
 
-Every agent can write code that works. The question is whether the output is *shippable* — reviewable git history, layered tests, clean repo state, modular structure. That's where a multi-agent pipeline with dedicated planning, coding, QA, review, and verification stages produces fundamentally different output than a single agent doing everything in one pass.
+Every agent can write code that works. The question is whether the output is *shippable* — reviewable git history, layered tests, clean repo state, modular structure. That's where a multi-agent pipeline with dedicated planning, coding, QA, review, and verification stages produces fundamentally different output than a single agent doing everything in one pass. And it does this with **haiku only** — the cheapest model available.
 
 ### Agents Tested
 
 | Agent | Model | Approach | Time |
 |-------|-------|----------|------|
-| **af-swe** | haiku (turbo preset) | Multi-agent pipeline, 400+ agent instances | ~43 min |
+| **SWE-AF** | **haiku** (turbo preset) | Multi-agent pipeline, 400+ agent instances | ~43 min |
 | Claude Code | sonnet | Single-agent CLI | ~2 min |
 | Codex | gpt-5.3-codex | Single-agent CLI | ~1 min |
 | Claude Code | haiku | Single-agent CLI | ~1 min |
@@ -363,10 +363,10 @@ Every agent can write code that works. The question is whether the output is *sh
 <summary><strong>Reproduction commands</strong></summary>
 
 ```bash
-# af-swe (multi-agent pipeline)
+# SWE-AF (multi-agent pipeline, haiku via turbo preset)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {"goal": "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.", "repo_path": "/tmp/af-swe-output", "config": {"preset": "turbo"}}}'
+  -d '{"input": {"goal": "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.", "repo_path": "/tmp/swe-af-output", "config": {"preset": "turbo"}}}'
 
 # Claude Code (haiku)
 claude -p \

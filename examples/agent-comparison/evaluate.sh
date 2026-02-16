@@ -11,8 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="${1:-$SCRIPT_DIR}"
 RESULTS_FILE="$BASE_DIR/RESULTS.md"
 
-AGENTS=("af-swe" "claude-code-haiku" "claude-code-sonnet" "codex")
-LABELS=("af-swe (pipeline)" "Claude Code (haiku)" "Claude Code (sonnet)" "Codex (o3)")
+AGENTS=("swe-af" "claude-code-haiku" "claude-code-sonnet" "codex")
+LABELS=("SWE-AF (haiku)" "Claude Code (haiku)" "Claude Code (sonnet)" "Codex (o3)")
 
 # ─── Per-agent evaluation ──────────────────────────────────────────
 # Writes results to individual temp files to avoid stdout pollution
@@ -276,7 +276,7 @@ HEADER
 
 # Table header
 {
-  echo "| Metric | af-swe (pipeline) | Claude Code (haiku) | Claude Code (sonnet) | Codex (o3) |"
+  echo "| Metric | SWE-AF (haiku) | Claude Code (haiku) | Claude Code (sonnet) | Codex (o3) |"
   echo "|--------|-------------------|---------------------|----------------------|------------|"
 } >> "$RESULTS_FILE"
 
@@ -395,14 +395,12 @@ cat >> "$RESULTS_FILE" << 'REPRO'
 
 ## Reproduction Commands
 
-### af-swe (multi-agent pipeline)
+### SWE-AF (multi-agent pipeline, haiku via turbo preset)
 
 ```bash
-# Using the af-swe turbo preset (~43 min with all-haiku)
-af-swe build \
-  --prompt "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work." \
-  --preset turbo \
-  --output /tmp/agent-comparison/af-swe
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"goal": "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.", "repo_path": "/tmp/swe-af-output", "config": {"preset": "turbo"}}}'
 ```
 
 ### Claude Code (haiku)
