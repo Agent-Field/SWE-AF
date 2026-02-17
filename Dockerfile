@@ -29,11 +29,10 @@ ENV GIT_AUTHOR_NAME="SWE-AF" \
     GIT_COMMITTER_NAME="SWE-AF" \
     GIT_COMMITTER_EMAIL="contact@agentfield.com"
 
+# Configure git identity and use gh CLI as credential helper so all git
+# HTTPS operations (clone, push, fetch) authenticate via GH_TOKEN at runtime.
 RUN git config --global user.name "SWE-AF" && \
     git config --global user.email "contact@agentfield.com" && \
-    # Use gh CLI as git credential helper — when GH_TOKEN env var is set at
-    # runtime, all git HTTPS operations (clone, push, fetch) against GitHub
-    # authenticate automatically without URL rewriting.
     gh auth setup-git
 
 # Install uv for fast package installation
