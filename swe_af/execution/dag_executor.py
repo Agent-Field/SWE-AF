@@ -76,6 +76,7 @@ async def _setup_worktrees(
         worktrees_dir=dag_state.worktrees_dir,
         artifacts_dir=dag_state.artifacts_dir,
         level=dag_state.current_level,
+        model=config.git_model,
         ai_provider=config.ai_provider,
     )
 
@@ -276,6 +277,7 @@ async def _cleanup_worktrees(
     node_id: str,
     note_fn: Callable | None = None,
     level: int = 0,
+    model: str = "sonnet",
     ai_provider: str = "claude",
 ) -> None:
     """Remove worktrees and clean up branches after merge.
@@ -300,6 +302,7 @@ async def _cleanup_worktrees(
                 branches_to_clean=branches_to_clean,
                 artifacts_dir=dag_state.artifacts_dir,
                 level=level,
+                model=model,
                 ai_provider=ai_provider,
             )
             if result.get("success"):
@@ -1149,6 +1152,7 @@ async def run_dag(
                 _cleanup_worktrees(
                     dag_state, branches_to_clean, call_fn, node_id, note_fn,
                     level=dag_state.current_level,
+                    model=config.git_model,
                     ai_provider=config.ai_provider,
                 )
             )
@@ -1333,6 +1337,7 @@ async def run_dag(
             await _cleanup_worktrees(
                 dag_state, all_branches, call_fn, node_id, note_fn,
                 level=dag_state.current_level,
+                model=config.git_model,
                 ai_provider=config.ai_provider,
             )
 
