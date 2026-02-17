@@ -27,6 +27,7 @@ app = Agent(
     version="1.0.0",
     description="Autonomous SWE planning pipeline",
     agentfield_server=os.getenv("AGENTFIELD_SERVER", "http://localhost:8080"),
+    api_key=os.getenv("AGENTFIELD_API_KEY"),
 )
 
 app.include_router(router)
