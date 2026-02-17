@@ -7,6 +7,8 @@ from swe_af.execution.schemas import BuildConfig, ExecutionConfig
 
 class AgentAIProviderTests(unittest.TestCase):
     def test_config_defaults(self) -> None:
+        self.assertEqual(BuildConfig().runtime, "claude_code")
+        self.assertEqual(ExecutionConfig().runtime, "claude_code")
         self.assertEqual(BuildConfig().ai_provider, "claude")
         self.assertEqual(ExecutionConfig().ai_provider, "claude")
 

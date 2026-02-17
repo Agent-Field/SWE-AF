@@ -6,6 +6,16 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking V2 config migration: replaced layered model configuration (`preset`, grouped `models`, `model`, `*_model`, `ai_provider`) with `runtime + flat models` contract.
+- Public runtime values are now `claude_code` and `open_code`.
+- Runtime/model selection is accepted only inside `config` for build/execute flows.
+
+### Removed
+
+- Legacy configuration keys for model/provider selection (`ai_provider`, `preset`, `model`, grouped model maps, and all `*_model` request keys).
+
 ## [0.1.0] - 2026-02-16
 
 ### Added

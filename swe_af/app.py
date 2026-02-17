@@ -48,8 +48,6 @@ async def build(
     additional_context: str = "",
     config: dict | None = None,
     execute_fn_target: str = "",
-    ai_provider: str = "",
-    model: str = "",
     max_turns: int = 0,
     permission_mode: str = "",
     enable_learning: bool = False,
@@ -61,7 +59,7 @@ async def build(
     If ``repo_url`` is provided and ``repo_path`` is empty, the repo is cloned
     into ``/workspaces/<repo-name>`` automatically (useful in Docker).
     """
-    from swe_af.execution.schemas import ALL_MODEL_FIELDS, BuildConfig, BuildResult
+    from swe_af.execution.schemas import BuildConfig, BuildResult
 
     cfg = BuildConfig(**config) if config else BuildConfig()
 
@@ -93,8 +91,6 @@ async def build(
 
     if execute_fn_target:
         cfg.execute_fn_target = execute_fn_target
-    if ai_provider:  # Only override if explicitly provided (not empty string default)
-        cfg.ai_provider = ai_provider
     if permission_mode:
         cfg.permission_mode = permission_mode
     if enable_learning:
@@ -102,15 +98,8 @@ async def build(
     if max_turns > 0:
         cfg.agent_max_turns = max_turns
 
-    # Resolve models first (applies preset logic)
+    # Resolve runtime + flat model config once for this build.
     resolved = cfg.resolved_models()
-
-    # THEN apply top-level model override (if provided)
-    # This gives users a simple way to override all models at once while keeping preset behavior
-    if model:
-        # Convenience override: single top-level model overrides ALL resolved models
-        for field in ALL_MODEL_FIELDS:
-            resolved[field] = model
 
     app.note("Build starting", tags=["build", "start"])
 
@@ -230,7 +219,6 @@ async def build(
         execute_fn_target=cfg.execute_fn_target,
         config=exec_config,
         git_config=git_config,
-        ai_provider=cfg.ai_provider,
     ), "execute")
 
     # 3. VERIFY
@@ -311,7 +299,6 @@ async def build(
                 repo_path=repo_path,
                 config=exec_config,
                 git_config=git_config,
-                ai_provider=cfg.ai_provider,
             ), "execute_fixes")
             continue  # Re-verify
         else:
@@ -643,7 +630,6 @@ async def execute(
     config: dict | None = None,
     git_config: dict | None = None,
     resume: bool = False,
-    ai_provider: str = "claude",
 ) -> dict:
     """Execute a planned DAG with self-healing replanning.
 
@@ -661,8 +647,6 @@ async def execute(
     from swe_af.execution.schemas import ExecutionConfig
 
     effective_config = dict(config) if config else {}
-    if ai_provider and "ai_provider" not in effective_config:
-        effective_config["ai_provider"] = ai_provider
     exec_config = ExecutionConfig(**effective_config) if effective_config else ExecutionConfig()
 
     if execute_fn_target:

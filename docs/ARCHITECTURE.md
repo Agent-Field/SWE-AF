@@ -420,14 +420,25 @@ SWE-AF orchestrates 22 specialized agents across four phases. Each agent is a re
 
 ### Model Configuration
 
-Every agent's backing model is configurable through a layered resolution system: `balanced` defaults → named presets → role-group overrides → individual field overrides. Five built-in presets map role groups to model tiers:
+Every build now uses a single V2 model contract:
 
-| Preset | Planning | Coding | Orchestration | Lightweight |
-|---|---|---|---|---|
-| `turbo` | haiku | haiku | haiku | haiku |
-| `fast` | sonnet | sonnet | haiku | haiku |
-| `balanced` | sonnet | sonnet | sonnet | haiku |
-| `thorough` | sonnet | sonnet | sonnet | sonnet |
-| `quality` | opus | opus | sonnet | haiku |
+- `runtime`: `claude_code` or `open_code`
+- `models`: flat role map (`default` + explicit role keys)
 
-This lets you tune cost/quality per build: use `turbo` for prototyping, `quality` for production releases, or mix with per-role overrides like `{"coding": "opus", "orchestration": "haiku"}`.
+Supported role keys:
+
+- Planning: `pm`, `architect`, `tech_lead`, `sprint_planner`
+- Coding: `coder`, `qa`, `code_reviewer`, `qa_synthesizer`
+- Orchestration: `replan`, `retry_advisor`, `issue_writer`, `issue_advisor`
+- Verification/Git: `verifier`, `git`, `merger`, `integration_tester`
+
+Resolution order:
+
+`runtime defaults` → `models.default` → `models.<role>`
+
+Runtime defaults:
+
+| Runtime | Base default | Special default |
+|---|---|---|
+| `claude_code` | `sonnet` | `qa_synthesizer=haiku` |
+| `open_code` | `minimax/minimax-m2.5` | none |

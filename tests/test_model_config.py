@@ -1,4 +1,4 @@
-"""Tests for the layered model configuration system."""
+"""Tests for V2 runtime + flat model configuration."""
 
 from __future__ import annotations
 
@@ -6,233 +6,141 @@ import unittest
 
 from swe_af.execution.schemas import (
     ALL_MODEL_FIELDS,
-    MODEL_PRESETS,
-    ROLE_GROUPS,
     BuildConfig,
     ExecutionConfig,
-    resolve_models,
+    ROLE_TO_MODEL_FIELD,
+    resolve_runtime_models,
 )
 
 
-# ---------------------------------------------------------------------------
-# resolve_models() unit tests
-# ---------------------------------------------------------------------------
-
-
-class TestResolveModels(unittest.TestCase):
-    def test_defaults_match_balanced_preset(self):
-        """No preset/groups/overrides should produce balanced defaults."""
-        result = resolve_models(preset=None, models=None, explicit_fields={})
-        balanced = MODEL_PRESETS["balanced"]
+class TestResolveRuntimeModels(unittest.TestCase):
+    def test_claude_code_defaults(self) -> None:
+        resolved = resolve_runtime_models(runtime="claude_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            group = next(g for g, fs in ROLE_GROUPS.items() if field in fs)
-            self.assertEqual(result[field], balanced[group], f"{field} mismatch")
+            if field == "qa_synthesizer_model":
+                continue
+            self.assertEqual(resolved[field], "sonnet")
+        self.assertEqual(resolved["qa_synthesizer_model"], "haiku")
 
-    def test_preset_turbo_all_haiku(self):
-        result = resolve_models(preset="turbo", models=None, explicit_fields={})
+    def test_open_code_defaults(self) -> None:
+        resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(result[field], "haiku", f"{field} should be haiku")
+            self.assertEqual(resolved[field], "minimax/minimax-m2.5")
 
-    def test_preset_thorough_all_sonnet(self):
-        result = resolve_models(preset="thorough", models=None, explicit_fields={})
+    def test_models_default_applies_to_all(self) -> None:
+        resolved = resolve_runtime_models(
+            runtime="claude_code",
+            models={"default": "opus"},
+        )
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(result[field], "sonnet", f"{field} should be sonnet")
+            self.assertEqual(resolved[field], "opus")
 
-    def test_preset_quality(self):
-        result = resolve_models(preset="quality", models=None, explicit_fields={})
-        for field in ROLE_GROUPS["planning"]:
-            self.assertEqual(result[field], "opus", f"{field} should be opus")
-        for field in ROLE_GROUPS["coding"]:
-            self.assertEqual(result[field], "opus", f"{field} should be opus")
-        for field in ROLE_GROUPS["orchestration"]:
-            self.assertEqual(result[field], "sonnet", f"{field} should be sonnet")
-        for field in ROLE_GROUPS["lightweight"]:
-            self.assertEqual(result[field], "haiku", f"{field} should be haiku")
-
-    def test_preset_fast(self):
-        result = resolve_models(preset="fast", models=None, explicit_fields={})
-        for field in ROLE_GROUPS["planning"]:
-            self.assertEqual(result[field], "sonnet")
-        for field in ROLE_GROUPS["coding"]:
-            self.assertEqual(result[field], "sonnet")
-        for field in ROLE_GROUPS["orchestration"]:
-            self.assertEqual(result[field], "haiku")
-        for field in ROLE_GROUPS["lightweight"]:
-            self.assertEqual(result[field], "haiku")
-
-    def test_group_override(self):
-        result = resolve_models(
-            preset=None,
-            models={"planning": "opus"},
-            explicit_fields={},
+    def test_role_override_beats_default(self) -> None:
+        resolved = resolve_runtime_models(
+            runtime="claude_code",
+            models={"default": "sonnet", "coder": "opus"},
         )
-        for field in ROLE_GROUPS["planning"]:
-            self.assertEqual(result[field], "opus", f"{field} should be opus")
-        # Other groups stay at balanced defaults
-        for field in ROLE_GROUPS["coding"]:
-            self.assertEqual(result[field], "sonnet")
-        for field in ROLE_GROUPS["lightweight"]:
-            self.assertEqual(result[field], "haiku")
+        self.assertEqual(resolved["coder_model"], "opus")
+        self.assertEqual(resolved["qa_model"], "sonnet")
 
-    def test_individual_override_wins(self):
-        result = resolve_models(
-            preset="fast",
-            models=None,
-            explicit_fields={"coder_model": "opus"},
-        )
-        self.assertEqual(result["coder_model"], "opus")
-        # Other coding fields still from preset
-        self.assertEqual(result["qa_model"], "sonnet")
-
-    def test_layered_all_three(self):
-        """Preset + group override + individual override all interacting."""
-        result = resolve_models(
-            preset="fast",  # planning=sonnet, coding=sonnet, orch=haiku, light=haiku
-            models={"orchestration": "sonnet"},  # override orch back to sonnet
-            explicit_fields={"pm_model": "opus"},  # override one planning field
-        )
-        self.assertEqual(result["pm_model"], "opus")  # individual wins
-        self.assertEqual(result["architect_model"], "sonnet")  # from preset
-        self.assertEqual(result["replan_model"], "sonnet")  # group override
-        self.assertEqual(result["qa_synthesizer_model"], "haiku")  # from preset
-
-    def test_invalid_preset_raises(self):
+    def test_invalid_runtime_raises(self) -> None:
         with self.assertRaises(ValueError):
-            resolve_models(preset="nonexistent", models=None, explicit_fields={})
+            resolve_runtime_models(runtime="bad_runtime", models=None)
 
-    def test_invalid_group_raises(self):
+    def test_invalid_model_key_raises(self) -> None:
         with self.assertRaises(ValueError):
-            resolve_models(preset=None, models={"badgroup": "opus"}, explicit_fields={})
-
-
-# ---------------------------------------------------------------------------
-# BuildConfig tests
-# ---------------------------------------------------------------------------
+            resolve_runtime_models(runtime="claude_code", models={"bad": "opus"})
 
 
 class TestBuildConfig(unittest.TestCase):
-    def test_backward_compat_flat(self):
-        """Explicit flat fields still work without preset/models."""
-        cfg = BuildConfig(pm_model="opus", coder_model="opus")
+    def test_default_runtime_and_provider(self) -> None:
+        cfg = BuildConfig()
+        self.assertEqual(cfg.runtime, "claude_code")
+        self.assertEqual(cfg.ai_provider, "claude")
+
+    def test_open_code_runtime_provider(self) -> None:
+        cfg = BuildConfig(runtime="open_code")
+        self.assertEqual(cfg.ai_provider, "opencode")
         resolved = cfg.resolved_models()
-        self.assertEqual(resolved["pm_model"], "opus")
-        self.assertEqual(resolved["coder_model"], "opus")
-        # Non-explicit fields get balanced defaults
-        self.assertEqual(resolved["architect_model"], "sonnet")
-        self.assertEqual(resolved["qa_synthesizer_model"], "haiku")
+        self.assertEqual(resolved["coder_model"], "minimax/minimax-m2.5")
 
-    def test_preset_only(self):
-        cfg = BuildConfig(preset="quality")
-        resolved = cfg.resolved_models()
-        self.assertEqual(resolved["pm_model"], "opus")
-        self.assertEqual(resolved["coder_model"], "opus")
-        self.assertEqual(resolved["replan_model"], "sonnet")
-        self.assertEqual(resolved["qa_synthesizer_model"], "haiku")
-
-    def test_preset_plus_individual_override(self):
-        cfg = BuildConfig(preset="balanced", architect_model="opus")
-        resolved = cfg.resolved_models()
-        self.assertEqual(resolved["architect_model"], "opus")
-        self.assertEqual(resolved["pm_model"], "sonnet")  # from preset
-
-    def test_preset_plus_group_override(self):
-        cfg = BuildConfig(preset="quality", models={"orchestration": "haiku"})
-        resolved = cfg.resolved_models()
-        self.assertEqual(resolved["pm_model"], "opus")  # from preset
-        self.assertEqual(resolved["replan_model"], "haiku")  # from group override
-
-    def test_default_config_matches_balanced(self):
-        """BuildConfig() with no args should resolve identically to balanced preset."""
-        default = BuildConfig().resolved_models()
-        balanced = BuildConfig(preset="balanced").resolved_models()
-        self.assertEqual(default, balanced)
-
-    def test_to_execution_config_dict(self):
-        cfg = BuildConfig(preset="quality")
+    def test_to_execution_config_dict_roundtrips(self) -> None:
+        cfg = BuildConfig(runtime="open_code", models={"coder": "deepseek/deepseek-chat"})
         d = cfg.to_execution_config_dict()
-        # Execution-level model fields should be resolved
-        self.assertEqual(d["coder_model"], "opus")
-        self.assertEqual(d["replan_model"], "sonnet")
-        self.assertEqual(d["qa_synthesizer_model"], "haiku")
-        # Planning-only fields should NOT be in the dict
-        self.assertNotIn("pm_model", d)
-        self.assertNotIn("architect_model", d)
-        self.assertNotIn("tech_lead_model", d)
-        self.assertNotIn("sprint_planner_model", d)
-        self.assertNotIn("git_model", d)
-        self.assertNotIn("verifier_model", d)
-        # Non-model config should be present
-        self.assertEqual(d["max_coding_iterations"], 5)
-        self.assertTrue(d["enable_replanning"])
-
-    def test_to_execution_config_dict_roundtrips(self):
-        """The dict from to_execution_config_dict() should be valid for ExecutionConfig."""
-        cfg = BuildConfig(preset="quality")
-        d = cfg.to_execution_config_dict()
+        self.assertEqual(d["runtime"], "open_code")
+        self.assertEqual(d["models"]["coder"], "deepseek/deepseek-chat")
         exec_cfg = ExecutionConfig(**d)
-        self.assertEqual(exec_cfg.coder_model, "opus")
-        self.assertEqual(exec_cfg.qa_synthesizer_model, "haiku")
+        self.assertEqual(exec_cfg.coder_model, "deepseek/deepseek-chat")
+        self.assertEqual(exec_cfg.qa_model, "minimax/minimax-m2.5")
 
+    def test_legacy_top_level_keys_rejected(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            BuildConfig(**{"ai_provider": "claude"})
+        self.assertIn("ai_provider", str(ctx.exception))
+        self.assertIn("runtime", str(ctx.exception))
 
-# ---------------------------------------------------------------------------
-# ExecutionConfig tests
-# ---------------------------------------------------------------------------
+        with self.assertRaises(ValueError) as ctx:
+            BuildConfig(**{"coder_model": "opus"})
+        self.assertIn("coder_model", str(ctx.exception))
+        self.assertIn("models.coder", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            BuildConfig(**{"preset": "fast"})
+        self.assertIn("preset", str(ctx.exception))
+        self.assertIn("runtime + models", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            BuildConfig(**{"model": "opus"})
+        self.assertIn("model", str(ctx.exception))
+        self.assertIn("models.default", str(ctx.exception))
+
+    def test_legacy_model_group_rejected(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            BuildConfig(models={"planning": "opus"})
+        self.assertIn("planning", str(ctx.exception))
+        self.assertIn("models.pm", str(ctx.exception))
 
 
 class TestExecutionConfig(unittest.TestCase):
-    def test_execution_config_resolution(self):
-        """ExecutionConfig(preset=...) should resolve fields on construction."""
-        cfg = ExecutionConfig(preset="quality")
-        self.assertEqual(cfg.coder_model, "opus")
-        self.assertEqual(cfg.qa_model, "opus")
-        self.assertEqual(cfg.replan_model, "sonnet")
-        self.assertEqual(cfg.qa_synthesizer_model, "haiku")
-
-    def test_execution_config_turbo(self):
-        cfg = ExecutionConfig(preset="turbo")
-        self.assertEqual(cfg.coder_model, "haiku")
-        self.assertEqual(cfg.replan_model, "haiku")
-        self.assertEqual(cfg.qa_synthesizer_model, "haiku")
-
-    def test_execution_config_group_override(self):
-        cfg = ExecutionConfig(models={"coding": "opus"})
-        self.assertEqual(cfg.coder_model, "opus")
-        self.assertEqual(cfg.qa_model, "opus")
-        self.assertEqual(cfg.code_reviewer_model, "opus")
-        # Orchestration stays default
-        self.assertEqual(cfg.replan_model, "sonnet")
-
-    def test_execution_config_no_preset_unchanged(self):
-        """Without preset/models, fields stay at their declared defaults."""
+    def test_default_resolution(self) -> None:
         cfg = ExecutionConfig()
+        self.assertEqual(cfg.runtime, "claude_code")
+        self.assertEqual(cfg.ai_provider, "claude")
         self.assertEqual(cfg.coder_model, "sonnet")
         self.assertEqual(cfg.qa_synthesizer_model, "haiku")
 
-    def test_execution_config_preset_plus_explicit(self):
-        """Explicit field overrides preset even on ExecutionConfig."""
-        cfg = ExecutionConfig(preset="turbo", coder_model="opus")
-        self.assertEqual(cfg.coder_model, "opus")  # explicit wins
-        self.assertEqual(cfg.qa_model, "haiku")  # from turbo preset
+    def test_open_code_resolution(self) -> None:
+        cfg = ExecutionConfig(runtime="open_code")
+        self.assertEqual(cfg.ai_provider, "opencode")
+        self.assertEqual(cfg.coder_model, "minimax/minimax-m2.5")
+        self.assertEqual(cfg.qa_synthesizer_model, "minimax/minimax-m2.5")
 
+    def test_models_override(self) -> None:
+        cfg = ExecutionConfig(runtime="claude_code", models={"default": "sonnet", "qa": "opus"})
+        self.assertEqual(cfg.qa_model, "opus")
+        self.assertEqual(cfg.coder_model, "sonnet")
 
-# ---------------------------------------------------------------------------
-# Preset coverage
-# ---------------------------------------------------------------------------
+    def test_all_role_keys_resolve(self) -> None:
+        models = {role: f"model-{role}" for role in ROLE_TO_MODEL_FIELD}
+        cfg = ExecutionConfig(runtime="open_code", models=models)
+        for role, field in ROLE_TO_MODEL_FIELD.items():
+            self.assertEqual(getattr(cfg, field), f"model-{role}")
 
+    def test_legacy_keys_rejected(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            ExecutionConfig(**{"ai_provider": "claude"})
+        self.assertIn("ai_provider", str(ctx.exception))
+        self.assertIn("runtime", str(ctx.exception))
 
-class TestPresetCoverage(unittest.TestCase):
-    def test_all_presets_have_all_groups(self):
-        for name, preset in MODEL_PRESETS.items():
-            for group in ROLE_GROUPS:
-                self.assertIn(group, preset, f"Preset {name!r} missing group {group!r}")
+        with self.assertRaises(ValueError) as ctx:
+            ExecutionConfig(**{"replan_model": "sonnet"})
+        self.assertIn("replan_model", str(ctx.exception))
+        self.assertIn("models.replan", str(ctx.exception))
 
-    def test_all_model_fields_in_exactly_one_group(self):
-        seen: set[str] = set()
-        for group, fields in ROLE_GROUPS.items():
-            for field in fields:
-                self.assertNotIn(field, seen, f"{field} in multiple groups")
-                seen.add(field)
-        self.assertEqual(seen, set(ALL_MODEL_FIELDS))
+        with self.assertRaises(ValueError) as ctx:
+            ExecutionConfig(models={"coding": "opus"})
+        self.assertIn("coding", str(ctx.exception))
+        self.assertIn("models.coder", str(ctx.exception))
 
 
 if __name__ == "__main__":

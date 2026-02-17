@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, PrivateAttr, model_validator
 
 # Global default for all agent max_turns. Change this one value to adjust everywhere.
 DEFAULT_AGENT_MAX_TURNS: int = 150
@@ -324,198 +324,225 @@ class QASynthesisResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Model configuration: role groups, presets, layered resolution
+# Model configuration: runtime + flat role map
 # ---------------------------------------------------------------------------
 
-ROLE_GROUPS: dict[str, list[str]] = {
-    "planning": ["pm_model", "architect_model", "tech_lead_model", "sprint_planner_model"],
-    "coding": ["coder_model", "qa_model", "code_reviewer_model"],
-    "orchestration": [
-        "replan_model", "retry_advisor_model", "issue_writer_model",
-        "verifier_model", "git_model", "merger_model",
-        "integration_tester_model", "issue_advisor_model",
-    ],
-    "lightweight": ["qa_synthesizer_model"],
+RUNTIME_VALUES: tuple[str, str] = ("claude_code", "open_code")
+
+ROLE_TO_MODEL_FIELD: dict[str, str] = {
+    "pm": "pm_model",
+    "architect": "architect_model",
+    "tech_lead": "tech_lead_model",
+    "sprint_planner": "sprint_planner_model",
+    "coder": "coder_model",
+    "qa": "qa_model",
+    "code_reviewer": "code_reviewer_model",
+    "qa_synthesizer": "qa_synthesizer_model",
+    "replan": "replan_model",
+    "retry_advisor": "retry_advisor_model",
+    "issue_writer": "issue_writer_model",
+    "issue_advisor": "issue_advisor_model",
+    "verifier": "verifier_model",
+    "git": "git_model",
+    "merger": "merger_model",
+    "integration_tester": "integration_tester_model",
 }
 
-ALL_MODEL_FIELDS: list[str] = [f for fields in ROLE_GROUPS.values() for f in fields]
+MODEL_ROLE_KEYS: list[str] = list(ROLE_TO_MODEL_FIELD)
+ALL_MODEL_FIELDS: list[str] = list(ROLE_TO_MODEL_FIELD.values())
+_MODEL_FIELD_TO_ROLE: dict[str, str] = {
+    model_field: role for role, model_field in ROLE_TO_MODEL_FIELD.items()
+}
+_ALLOWED_MODEL_KEYS: set[str] = set(MODEL_ROLE_KEYS) | {"default"}
 
-MODEL_PRESETS: dict[str, dict[str, str]] = {
-    "turbo": {"planning": "haiku", "coding": "haiku", "orchestration": "haiku", "lightweight": "haiku"},
-    "fast": {"planning": "sonnet", "coding": "sonnet", "orchestration": "haiku", "lightweight": "haiku"},
-    "balanced": {"planning": "sonnet", "coding": "sonnet", "orchestration": "sonnet", "lightweight": "haiku"},
-    "thorough": {"planning": "sonnet", "coding": "sonnet", "orchestration": "sonnet", "lightweight": "sonnet"},
-    "quality": {"planning": "opus", "coding": "opus", "orchestration": "sonnet", "lightweight": "haiku"},
+_LEGACY_GROUP_EQUIVALENTS: dict[str, str] = {
+    "planning": "models.pm, models.architect, models.tech_lead, models.sprint_planner",
+    "coding": "models.coder, models.qa, models.code_reviewer",
+    "orchestration": "models.replan, models.retry_advisor, models.issue_writer, models.issue_advisor, models.verifier, models.git, models.merger, models.integration_tester",
+    "lightweight": "models.qa_synthesizer",
 }
 
-# Reverse lookup: field name → group name
-_FIELD_TO_GROUP: dict[str, str] = {
-    field: group for group, fields in ROLE_GROUPS.items() for field in fields
+_LEGACY_TOP_LEVEL_EQUIVALENTS: dict[str, str] = {
+    "ai_provider": "runtime",
+    "preset": "runtime + models",
+    "model": "models.default",
+    **{field: f"models.{role}" for field, role in _MODEL_FIELD_TO_ROLE.items()},
+}
+
+_RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
+    "claude_code": {
+        **{field: "sonnet" for field in ALL_MODEL_FIELDS},
+        "qa_synthesizer_model": "haiku",
+    },
+    "open_code": {
+        **{field: "minimax/minimax-m2.5" for field in ALL_MODEL_FIELDS},
+    },
 }
 
 
-def resolve_models(
+def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode"]:
+    if runtime == "claude_code":
+        return "claude"
+    if runtime == "open_code":
+        return "opencode"
+    raise ValueError(f"Unsupported runtime {runtime!r}. Valid runtimes: {', '.join(RUNTIME_VALUES)}")
+
+
+def _legacy_hint_for_model_key(key: str) -> str:
+    if key in _LEGACY_GROUP_EQUIVALENTS:
+        return _LEGACY_GROUP_EQUIVALENTS[key]
+    role = _MODEL_FIELD_TO_ROLE.get(key)
+    if role:
+        return f"models.{role}"
+    if key.endswith("_model"):
+        return f"models.{key[:-6]}"
+    return "models.<role>"
+
+
+def _reject_legacy_config_keys(data: Any) -> Any:
+    if not isinstance(data, dict):
+        return data
+
+    legacy_hits: list[str] = []
+    for key, equivalent in _LEGACY_TOP_LEVEL_EQUIVALENTS.items():
+        if key in data:
+            legacy_hits.append(f"{key!r} -> {equivalent!r}")
+
+    models_value = data.get("models")
+    if isinstance(models_value, dict):
+        for model_key in models_value:
+            if model_key in _LEGACY_GROUP_EQUIVALENTS:
+                hint = _legacy_hint_for_model_key(model_key)
+                raise ValueError(
+                    f"Legacy model group key {model_key!r} is not supported in V2. "
+                    f"Use flat role keys: {hint}."
+                )
+            if model_key in _MODEL_FIELD_TO_ROLE or model_key.endswith("_model"):
+                hint = _legacy_hint_for_model_key(model_key)
+                raise ValueError(
+                    f"Legacy model key {model_key!r} is not supported in V2. "
+                    f"Use {hint!r}."
+                )
+
+    if legacy_hits:
+        raise ValueError(
+            "Legacy config keys are not supported in V2: "
+            + ", ".join(legacy_hits)
+            + "."
+        )
+    return data
+
+
+def _validate_flat_models(models: dict[str, str] | None) -> dict[str, str]:
+    if models is None:
+        return {}
+    if not isinstance(models, dict):
+        raise ValueError("models must be an object mapping role keys to model strings")
+
+    unknown = sorted(k for k in models if k not in _ALLOWED_MODEL_KEYS)
+    if unknown:
+        raise ValueError(
+            f"Unknown model keys: {', '.join(repr(k) for k in unknown)}. "
+            f"Valid keys: {', '.join(sorted(_ALLOWED_MODEL_KEYS))}"
+        )
+    return models
+
+
+def resolve_runtime_models(
     *,
-    preset: str | None,
+    runtime: str,
     models: dict[str, str] | None,
-    explicit_fields: dict[str, str],
     field_names: list[str] | None = None,
 ) -> dict[str, str]:
-    """Layered model resolution: defaults < preset < role groups < individual fields.
+    """Resolve internal ``*_model`` fields from runtime + flat role overrides.
 
-    Args:
-        preset: Named preset (e.g. "quality", "turbo"). Applied first.
-        models: Role-group overrides (e.g. {"planning": "opus"}). Applied second.
-        explicit_fields: Individual *_model field overrides the user actually set.
-            Only keys present here are treated as explicit overrides.
-        field_names: Which model fields to resolve. Defaults to ALL_MODEL_FIELDS.
-
-    Returns:
-        Dict mapping each field name to its resolved model string.
-
-    Raises:
-        ValueError: If preset name or group name is unknown.
+    Resolution order:
+        runtime defaults < models.default < models.<role>
     """
     if field_names is None:
         field_names = ALL_MODEL_FIELDS
 
-    # 1. Start from "balanced" defaults
-    balanced = MODEL_PRESETS["balanced"]
-    result: dict[str, str] = {}
-    for field in field_names:
-        group = _FIELD_TO_GROUP.get(field)
-        result[field] = balanced[group] if group else "sonnet"
+    if runtime not in _RUNTIME_BASE_MODELS:
+        raise ValueError(
+            f"Unsupported runtime {runtime!r}. Valid runtimes: {', '.join(RUNTIME_VALUES)}"
+        )
 
-    # 2. Apply preset
-    if preset is not None:
-        if preset not in MODEL_PRESETS:
-            raise ValueError(
-                f"Unknown preset {preset!r}. Valid presets: {', '.join(MODEL_PRESETS)}"
-            )
-        preset_map = MODEL_PRESETS[preset]
+    flat_models = _validate_flat_models(models)
+
+    base = _RUNTIME_BASE_MODELS[runtime]
+    resolved: dict[str, str] = {field: base[field] for field in field_names}
+
+    default_model = flat_models.get("default")
+    if default_model:
         for field in field_names:
-            group = _FIELD_TO_GROUP.get(field)
-            if group and group in preset_map:
-                result[field] = preset_map[group]
+            resolved[field] = default_model
 
-    # 3. Apply role-group overrides
-    if models:
-        for group_name, model_value in models.items():
-            if group_name not in ROLE_GROUPS:
-                raise ValueError(
-                    f"Unknown model group {group_name!r}. "
-                    f"Valid groups: {', '.join(ROLE_GROUPS)}"
-                )
-            for field in ROLE_GROUPS[group_name]:
-                if field in result:
-                    result[field] = model_value
+    for role, model_name in flat_models.items():
+        if role == "default":
+            continue
+        field = ROLE_TO_MODEL_FIELD[role]
+        if field in resolved:
+            resolved[field] = model_name
 
-    # 4. Apply individual field overrides (highest priority)
-    for field, value in explicit_fields.items():
-        if field in result:
-            result[field] = value
-
-    return result
+    return resolved
 
 
 class BuildConfig(BaseModel):
     """Configuration for the end-to-end build pipeline."""
 
-    # --- Model presets & groups ---
-    preset: str | None = None
-    models: dict[str, str] | None = None
-    model: str | None = None  # Global model override (applies to ALL roles)
+    model_config = ConfigDict(extra="forbid")
 
-    # Planning
-    pm_model: str = "sonnet"
-    architect_model: str = "sonnet"
-    tech_lead_model: str = "sonnet"
-    sprint_planner_model: str = "sonnet"
+    runtime: Literal["claude_code", "open_code"] = "claude_code"
+    models: dict[str, str] | None = None
+
     max_review_iterations: int = 2
-    # Execution
     max_retries_per_issue: int = 2
     max_replans: int = 2
     enable_replanning: bool = True
-    replan_model: str = "sonnet"
-    retry_advisor_model: str = "sonnet"
-    issue_writer_model: str = "sonnet"
-    # Verification
-    verifier_model: str = "sonnet"
     max_verify_fix_cycles: int = 1
-    # Git / Merge
-    git_model: str = "sonnet"
     git_init_max_retries: int = 3  # Number of retry attempts for git_init
     git_init_retry_delay: float = 1.0  # Seconds to wait between retries
-    merger_model: str = "sonnet"
-    integration_tester_model: str = "sonnet"
     max_integration_test_retries: int = 1
     enable_integration_testing: bool = True
-    # Coding loop
     max_coding_iterations: int = 5
-    coder_model: str = "sonnet"
-    qa_model: str = "sonnet"
-    code_reviewer_model: str = "sonnet"
-    qa_synthesizer_model: str = "haiku"
-    # Agent limits
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
-    # Target
     execute_fn_target: str = ""
-    ai_provider: Literal["claude", "codex", "opencode"] = "claude"
     permission_mode: str = ""
-    # GitHub workflow
     repo_url: str = ""                # GitHub URL to clone
     enable_github_pr: bool = True     # Create draft PR after build
     github_pr_base: str = ""          # PR base branch (default: repo's default branch)
-    # Issue Advisor
     agent_timeout_seconds: int = 2700
-    issue_advisor_model: str = "sonnet"
     max_advisor_invocations: int = 2
     enable_issue_advisor: bool = True
-    # Continual learning
     enable_learning: bool = False  # Cross-issue shared memory (conventions, failure patterns, bug patterns)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_v2_keys(cls, data: Any) -> Any:
+        return _reject_legacy_config_keys(data)
+
+    def model_post_init(self, __context: Any) -> None:
+        _validate_flat_models(self.models)
+
+    @property
+    def ai_provider(self) -> Literal["claude", "opencode"]:
+        return _runtime_to_provider(self.runtime)
+
     def resolved_models(self) -> dict[str, str]:
-        """Resolve all model fields using layered precedence.
-
-        Returns a dict of {field_name: resolved_model} for all 16 model fields.
-        Individual ``*_model`` fields only act as overrides if explicitly set by the
-        caller (detected via Pydantic's ``model_fields_set``).
-
-        If `model` is set, it overrides ALL models (highest priority).
-        """
-        explicit = {
-            f: getattr(self, f)
-            for f in ALL_MODEL_FIELDS
-            if f in self.model_fields_set
-        }
-        resolved = resolve_models(
-            preset=self.preset,
+        """Resolve all internal ``*_model`` fields from V2 runtime config."""
+        return resolve_runtime_models(
+            runtime=self.runtime,
             models=self.models,
-            explicit_fields=explicit,
         )
-
-        # Apply global model override (if set, overrides everything)
-        if self.model:
-            for field in ALL_MODEL_FIELDS:
-                resolved[field] = self.model
-
-        return resolved
 
     def to_execution_config_dict(self) -> dict:
         """Build the dict that gets passed to ``ExecutionConfig`` via ``execute()``.
 
-        Resolves models through the layered system and merges with non-model config.
+        Carries forward runtime model selection plus non-model execution settings.
         """
-        resolved = self.resolved_models()
-        # Only include model fields that ExecutionConfig actually has
-        _EXEC_ONLY = {
-            "replan_model", "retry_advisor_model", "issue_writer_model",
-            "merger_model", "integration_tester_model",
-            "coder_model", "qa_model", "code_reviewer_model",
-            "qa_synthesizer_model", "issue_advisor_model",
-        }
         return {
-            **{f: resolved[f] for f in ALL_MODEL_FIELDS if f in _EXEC_ONLY},
+            "runtime": self.runtime,
+            "models": self.models,
             "max_retries_per_issue": self.max_retries_per_issue,
             "max_replans": self.max_replans,
             "enable_replanning": self.enable_replanning,
@@ -562,67 +589,103 @@ class GitHubPRResult(BaseModel):
 class ExecutionConfig(BaseModel):
     """Configuration for the DAG executor."""
 
-    # --- Model presets & groups ---
-    preset: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: Literal["claude_code", "open_code"] = "claude_code"
     models: dict[str, str] | None = None
-    model: str | None = None  # Global model override (applies to ALL roles)
+    _resolved_models: dict[str, str] = PrivateAttr(default_factory=dict)
 
     max_retries_per_issue: int = 1
     max_replans: int = 2
-    replan_model: str = "sonnet"
     enable_replanning: bool = True
-    retry_advisor_model: str = "sonnet"
-    issue_writer_model: str = "sonnet"
-    merger_model: str = "sonnet"
-    integration_tester_model: str = "sonnet"
     max_integration_test_retries: int = 1
     enable_integration_testing: bool = True
-    # Coding loop
     max_coding_iterations: int = 5
-    coder_model: str = "sonnet"
-    qa_model: str = "sonnet"
-    code_reviewer_model: str = "sonnet"
-    qa_synthesizer_model: str = "haiku"
-    # Agent limits
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
-    ai_provider: Literal["claude", "codex", "opencode"] = "claude"
-    # Issue Advisor
     agent_timeout_seconds: int = 2700       # 45 min
-    issue_advisor_model: str = "sonnet"
     max_advisor_invocations: int = 2
     enable_issue_advisor: bool = True
-    # Continual learning
     enable_learning: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_v2_keys(cls, data: Any) -> Any:
+        return _reject_legacy_config_keys(data)
+
     def model_post_init(self, __context: Any) -> None:
-        """Apply layered model resolution after construction.
-
-        If ``preset`` or ``models`` is set, resolve and write back to the
-        individual ``*_model`` fields so downstream code (dag_executor,
-        coding_loop) can keep reading ``config.coder_model`` etc. unchanged.
-
-        If `model` is set, it overrides ALL models (highest priority).
-        """
-        if self.preset is None and self.models is None and self.model is None:
-            return
-        # Fields present on ExecutionConfig (use class-level access)
-        exec_model_fields = [f for f in ALL_MODEL_FIELDS if f in type(self).model_fields]
-        explicit = {
-            f: getattr(self, f)
-            for f in exec_model_fields
-            if f in self.model_fields_set and f not in ("preset", "models", "model")
-        }
-        resolved = resolve_models(
-            preset=self.preset,
+        """Resolve runtime model selection once at construction time."""
+        self._resolved_models = resolve_runtime_models(
+            runtime=self.runtime,
             models=self.models,
-            explicit_fields=explicit,
-            field_names=exec_model_fields,
         )
 
-        # Apply global model override (if set, overrides everything)
-        if self.model:
-            for field in exec_model_fields:
-                resolved[field] = self.model
+    def _model_for(self, field_name: str) -> str:
+        return self._resolved_models[field_name]
 
-        for field, value in resolved.items():
-            object.__setattr__(self, field, value)
+    @property
+    def ai_provider(self) -> Literal["claude", "opencode"]:
+        return _runtime_to_provider(self.runtime)
+
+    @property
+    def pm_model(self) -> str:
+        return self._model_for("pm_model")
+
+    @property
+    def architect_model(self) -> str:
+        return self._model_for("architect_model")
+
+    @property
+    def tech_lead_model(self) -> str:
+        return self._model_for("tech_lead_model")
+
+    @property
+    def sprint_planner_model(self) -> str:
+        return self._model_for("sprint_planner_model")
+
+    @property
+    def coder_model(self) -> str:
+        return self._model_for("coder_model")
+
+    @property
+    def qa_model(self) -> str:
+        return self._model_for("qa_model")
+
+    @property
+    def code_reviewer_model(self) -> str:
+        return self._model_for("code_reviewer_model")
+
+    @property
+    def qa_synthesizer_model(self) -> str:
+        return self._model_for("qa_synthesizer_model")
+
+    @property
+    def replan_model(self) -> str:
+        return self._model_for("replan_model")
+
+    @property
+    def retry_advisor_model(self) -> str:
+        return self._model_for("retry_advisor_model")
+
+    @property
+    def issue_writer_model(self) -> str:
+        return self._model_for("issue_writer_model")
+
+    @property
+    def issue_advisor_model(self) -> str:
+        return self._model_for("issue_advisor_model")
+
+    @property
+    def verifier_model(self) -> str:
+        return self._model_for("verifier_model")
+
+    @property
+    def git_model(self) -> str:
+        return self._model_for("git_model")
+
+    @property
+    def merger_model(self) -> str:
+        return self._model_for("merger_model")
+
+    @property
+    def integration_tester_model(self) -> str:
+        return self._model_for("integration_tester_model")
