@@ -79,12 +79,15 @@ async def build(
     if cfg.repo_url and not os.path.exists(os.path.join(repo_path, ".git")):
         app.note(f"Cloning {cfg.repo_url} → {repo_path}", tags=["build", "clone"])
         os.makedirs(repo_path, exist_ok=True)
-        subprocess.run(
+        clone_result = subprocess.run(
             ["git", "clone", cfg.repo_url, repo_path],
-            check=True,
             capture_output=True,
             text=True,
         )
+        if clone_result.returncode != 0:
+            err = clone_result.stderr.strip()
+            app.note(f"Clone failed (exit {clone_result.returncode}): {err}", tags=["build", "clone", "error"])
+            raise RuntimeError(f"git clone failed (exit {clone_result.returncode}): {err}")
     else:
         # Ensure repo_path exists even when no repo_url is provided (fresh init case)
         # This is needed because planning agents may need to read the repo in parallel with git_init
