@@ -1,0 +1,39 @@
+[package]
+name = "llm-pyexec"
+version = "0.1.0"
+edition = "2021"
+description = "Embedded Python execution engine using RustPython VM"
+license = "MIT"
+
+[lib]
+name = "llm_pyexec"
+path = "src/lib.rs"
+
+[dependencies]
+# RustPython embedded VM with stdlib support.
+# rustpython-vm is used for VM lifecycle; rustpython-stdlib provides the stdlib modules
+# (math, re, json, datetime, collections, etc.). The freeze-stdlib feature embeds
+# the stdlib into the binary so it is available without filesystem access.
+# Note: in rustpython-vm 0.3 the stdlib feature is exposed via the rustpython-stdlib
+# companion crate; freeze-stdlib is a direct feature of rustpython-vm.
+rustpython-vm = { version = "0.3", features = ["freeze-stdlib"] }
+rustpython-stdlib = "0.3"
+rustpython-compiler = "0.3"
+rustpython-parser = "0.3"
+
+# Serialization for CLI output. Derive macros avoid manual impl.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# SHA-256 hashing for bytecode cache keys.
+sha2 = "0.10"
+
+# LRU eviction cache for compiled bytecode.
+lru = "0.12"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "pyexec_bench"
+harness = false

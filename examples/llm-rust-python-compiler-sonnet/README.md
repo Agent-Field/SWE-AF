@@ -49,10 +49,11 @@ The result is a compact binary with predictable memory footprint and strong late
 
 ## Cost (From Build Logs)
 
+Every agent harness runs Claude- Sonnet.
 From `.artifacts-opt-100x-cli-20260217-162350/logs/*.jsonl`, summing `cost_usd` where `event == "end"`:
 
 - Total cost: **$53.482703**
-- Counted end events: **73**
+- Counted end events: **173**
 - Cost reflects full autonomous build + review pipeline, not just one benchmark run.
 
 ## Why This Looks Production-Grade

@@ -35,6 +35,46 @@ SWE-AF is a first step toward **autonomous software engineering factories**, sca
   <img src="assets/banner.jpg" alt="SWE-AF autonomous engineering fleet banner" width="100%" />
 </p>
 
+## One-Call DX
+
+```bash
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Refactor and harden auth + billing flows",
+    "repo_url": "https://github.com/user/my-project",
+    "config": {
+      "runtime": "claude_code",
+      "models": {
+        "default": "sonnet",
+        "coder": "opus",
+        "qa": "opus"
+      },
+      "enable_learning": true
+    }
+  }
+}
+JSON
+```
+
+Swap `models.default` and any role key (`coder`, `qa`, `architect`, etc.) to any model your runtime supports.
+
+## Autonomous Build Spotlight
+
+Rust-based Python compiler benchmark (built autonomously):
+
+| Metric                 | CPython (subprocess) | RustPython (SWE-AF)          | Improvement             |
+| ---------------------- | -------------------- | ---------------------------- | ----------------------- |
+| Steady-state execution | Baseline             | Optimized in-process runtime | **88.3x-602.3x faster** |
+| Geometric mean         | 1.0x baseline        | 253.8x                       | **253.8x**              |
+| Peak throughput        | N/A                  | 31,807 ops/s                 | **31,807 ops/s**        |
+
+Artifact trail includes **175 tracked autonomous agents** across planning, coding, review, merge, and verification.
+
+Details: [`examples/llm-rust-python-compiler-sonnet/README.md`](examples/llm-rust-python-compiler-sonnet/README.md)
+
 ## Why SWE-AF
 
 Most agent frameworks are harnesses around a single coder loop. SWE-AF is a software engineering factory built from coordinated harnesses.
@@ -126,18 +166,56 @@ python -m swe_af   # registers node id "swe-planner"
 # Default (uses Claude)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {"goal": "Add JWT auth to all API endpoints", "repo_path": "/path/to/repo"}}'
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Add JWT auth to all API endpoints",
+    "repo_url": "https://github.com/user/my-project"
+  }
+}
+JSON
 
 # With open-source runtime + flat role map
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {"goal": "Add JWT auth", "repo_path": "/path/to/repo", "config": {"runtime": "open_code", "models": {"default": "deepseek/deepseek-chat"}}}}'
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Add JWT auth",
+    "repo_url": "https://github.com/user/my-project",
+    "config": {
+      "runtime": "open_code",
+      "models": {
+        "default": "openrouter/minimax/minimax-m2.5"
+      }
+    }
+  }
+}
+JSON
 
-# Enable continual learning + targeted role override
+# Local workspace mode (repo_path) + targeted role override
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {"goal": "Refactor and harden auth + billing flows", "repo_path": "/path/to/repo", "config": {"runtime": "claude_code", "models": {"default": "sonnet", "coder": "opus", "qa": "opus"}, "enable_learning": true}}}'
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Refactor and harden auth + billing flows",
+    "repo_path": "/path/to/repo",
+    "config": {
+      "runtime": "claude_code",
+      "models": {
+        "default": "sonnet",
+        "coder": "opus",
+        "qa": "opus"
+      },
+      "enable_learning": true
+    }
+  }
+}
+JSON
 ```
+
+For OpenRouter with `open_code`, use model IDs in `openrouter/<provider>/<model>` format (for example `openrouter/minimax/minimax-m2.5`).
 
 ## What Happens In One Build
 
@@ -158,16 +236,16 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 
 **95/100 with haiku and MiniMax**: SWE-AF scored 95/100 with both Claude haiku-class routing ($20) and MiniMax M2.5 via open runtime ($6), outperforming Claude Code sonnet (73), Codex o3 (62), and Claude Code haiku (59) on the same prompt.
 
-| Dimension       | SWE-AF (haiku) | SWE-AF (MiniMax) | CC Sonnet | Codex (o3)  | CC Haiku |
-| --------------- | -------------- | ---------------- | --------- | ------ | -------- |
-| Functional (30) | **30**         | **30**           | **30**    | **30** | **30**   |
-| Structure (20)  | **20**         | **20**           | 10        | 10     | 10       |
-| Hygiene (20)    | **20**         | **20**           | 16        | 10     | 7        |
-| Git (15)        | **15**         | **15**           | 2         | 2      | 2        |
-| Quality (15)    | 10             | 10               | **15**    | 10     | 10       |
-| Total           | **95**         | **95**           | **73**    | **62** | **59**   |
-| **Cost**        | **~$20**       | **~$6**          | ?         | ?      | ?        |
-| **Time**        | ~30-40 min     | 43 min           | ?         | ?      | ?        |
+| Dimension       | SWE-AF (haiku) | SWE-AF (MiniMax) | CC Sonnet | Codex (o3) | CC Haiku |
+| --------------- | -------------- | ---------------- | --------- | ---------- | -------- |
+| Functional (30) | **30**         | **30**           | **30**    | **30**     | **30**   |
+| Structure (20)  | **20**         | **20**           | 10        | 10         | 10       |
+| Hygiene (20)    | **20**         | **20**           | 16        | 10         | 7        |
+| Git (15)        | **15**         | **15**           | 2         | 2          | 2        |
+| Quality (15)    | 10             | 10               | **15**    | 10         | 10       |
+| Total           | **95**         | **95**           | **73**    | **62**     | **59**   |
+| **Cost**        | **~$20**       | **~$6**          | ?         | ?          | ?        |
+| **Time**        | ~30-40 min     | 43 min           | ?         | ?          | ?        |
 
 <details>
 <summary><strong>Full benchmark details and reproduction</strong></summary>
@@ -194,12 +272,38 @@ Same prompt tested across multiple agents. SWE-AF with Claude runtime (haiku-cla
 # SWE-AF (Claude runtime, haiku-class mapping) - $20, 30-40 min
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {"goal": "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.", "repo_path": "/tmp/swe-af-output", "config": {"runtime": "claude_code", "models": {"default": "haiku"}}}}'
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.",
+    "repo_path": "/tmp/swe-af-output",
+    "config": {
+      "runtime": "claude_code",
+      "models": {
+        "default": "haiku"
+      }
+    }
+  }
+}
+JSON
 
 # SWE-AF (MiniMax M2.5 via OpenRouter runtime) - $6, 43 min
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {"goal": "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.", "repo_path": "/workspaces/todo-app-benchmark", "config": {"runtime": "open_code", "models": {"default": "openrouter/minimax/minimax-m2.5"}}}}'
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work.",
+    "repo_path": "/workspaces/todo-app-benchmark",
+    "config": {
+      "runtime": "open_code",
+      "models": {
+        "default": "openrouter/minimax/minimax-m2.5"
+      }
+    }
+  }
+}
+JSON
 
 # Claude Code (haiku)
 claude -p "Build a Node.js CLI todo app with add, list, complete, and delete commands. Data should persist to a JSON file. Initialize git, write tests, and commit your work." --model haiku --dangerously-skip-permissions
@@ -238,12 +342,44 @@ Submit a build:
 # Default (Claude)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {"goal": "Add JWT auth", "repo_path": "/workspaces/my-repo"}}'
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Add JWT auth",
+    "repo_url": "https://github.com/user/my-repo"
+  }
+}
+JSON
 
 # With open-source runtime (set OPENROUTER_API_KEY in .env)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {"goal": "Add JWT auth", "repo_path": "/workspaces/my-repo", "config": {"runtime": "open_code", "models": {"default": "deepseek/deepseek-chat"}}}}'
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Add JWT auth",
+    "repo_url": "https://github.com/user/my-repo",
+    "config": {
+      "runtime": "open_code",
+      "models": {
+        "default": "openrouter/minimax/minimax-m2.5"
+      }
+    }
+  }
+}
+JSON
+
+# Local workspace mode (repo_path)
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Add JWT auth",
+    "repo_path": "/workspaces/my-repo"
+  }
+}
+JSON
 ```
 
 Scale workers:
@@ -265,11 +401,22 @@ Pass `repo_url` instead of `repo_path` to let SWE-AF clone and open a draft PR a
 ```bash
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
-  -d '{"input": {
+  -d @- <<'JSON'
+{
+  "input": {
     "repo_url": "https://github.com/user/my-project",
     "goal": "Add comprehensive test coverage",
-    "config": {"runtime": "claude_code", "models": {"default": "sonnet", "coder": "opus", "qa": "opus"}}
-  }}'
+    "config": {
+      "runtime": "claude_code",
+      "models": {
+        "default": "sonnet",
+        "coder": "opus",
+        "qa": "opus"
+      }
+    }
+  }
+}
+JSON
 ```
 
 Requirements:
@@ -339,18 +486,18 @@ Every specialist is also callable directly:
 
 Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.py`](swe_af/execution/schemas.py)
 
-| Key                       | Default    | Description                                                  |
-| ------------------------- | ---------- | ------------------------------------------------------------ |
-| `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"` or `"open_code"`        |
-| `models`                  | `null`     | Flat role-model map (`default` + role keys below)           |
-| `max_coding_iterations`   | `5`        | Inner-loop retry budget                                      |
-| `max_advisor_invocations` | `2`        | Middle-loop advisor budget                                   |
-| `max_replans`             | `2`        | Build-level replanning budget                                |
-| `enable_issue_advisor`    | `true`     | Enable issue adaptation                                      |
-| `enable_replanning`       | `true`     | Enable global replanning                                     |
-| `enable_learning`         | `false`    | Enable cross-issue shared memory (continual learning)        |
-| `agent_timeout_seconds`   | `2700`     | Per-agent timeout                                            |
-| `agent_max_turns`         | `150`      | Tool-use turn budget                                         |
+| Key                       | Default         | Description                                           |
+| ------------------------- | --------------- | ----------------------------------------------------- |
+| `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"` or `"open_code"`       |
+| `models`                  | `null`          | Flat role-model map (`default` + role keys below)     |
+| `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
+| `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |
+| `max_replans`             | `2`             | Build-level replanning budget                         |
+| `enable_issue_advisor`    | `true`          | Enable issue adaptation                               |
+| `enable_replanning`       | `true`          | Enable global replanning                              |
+| `enable_learning`         | `false`         | Enable cross-issue shared memory (continual learning) |
+| `agent_timeout_seconds`   | `2700`          | Per-agent timeout                                     |
+| `agent_max_turns`         | `150`           | Tool-use turn budget                                  |
 
 </details>
 

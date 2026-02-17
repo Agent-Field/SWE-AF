@@ -36,3 +36,6 @@ Thumbs.db
 
 # Root runtime artifacts for this node (example artifacts are versioned separately)
 /.artifacts/
+
+# Claude Code
+.claude/

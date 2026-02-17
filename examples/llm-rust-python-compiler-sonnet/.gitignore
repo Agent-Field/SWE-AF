@@ -1,0 +1,101 @@
+# ============================================================
+# Rust
+# ============================================================
+/target/
+**/*.rs.bk
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.pyo
+.Python
+build/
+dist/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+MANIFEST
+pip-wheel-metadata/
+.installed.cfg
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.virtualenv/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# pyenv
+.python-version
+
+# pytest / coverage
+.pytest_cache/
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.coverage
+.coverage
+.coverage.*
+htmlcov/
+
+# mypy / type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# ============================================================
+# Pipeline artifacts & worktrees (project-specific)
+# ============================================================
+.artifacts/
+.artifacts-*/
+.worktrees/
+
+# ============================================================
+# Environment / secrets
+# ============================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ============================================================
+# OS / editor
+# ============================================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# ============================================================
+# Benchmarks / profiling output
+# ============================================================
+*.perf
+perf.data
+flamegraph.svg
+criterion/

@@ -1,0 +1,13 @@
+[package]
+name = "llm-pyexec-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+llm-pyexec = { path = "../llm-pyexec" }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "llm-pyexec-cli"
+path = "src/main.rs"

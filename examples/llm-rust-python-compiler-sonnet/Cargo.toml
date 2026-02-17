@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "crates/llm-pyexec",
+    "crates/llm-pyexec-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
