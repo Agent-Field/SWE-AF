@@ -695,6 +695,7 @@ async def execute(
     git_config: dict | None = None,
     resume: bool = False,
     build_id: str = "",
+    workspace_manifest: dict | None = None,
 ) -> dict:
     """Execute a planned DAG with self-healing replanning.
 
@@ -707,6 +708,8 @@ async def execute(
         git_config: Optional git configuration from ``run_git_init``. Enables
             branch-per-issue workflow when provided.
         resume: If True, attempt to resume from a checkpoint file.
+        workspace_manifest: Optional serialised WorkspaceManifest dict for multi-repo
+            builds. When provided, enables per-repo git init and merger dispatch.
     """
     from swe_af.execution.dag_executor import run_dag
     from swe_af.execution.schemas import ExecutionConfig
@@ -737,6 +740,7 @@ async def execute(
         git_config=git_config,
         resume=resume,
         build_id=build_id,
+        workspace_manifest=workspace_manifest,
     )
     return state.model_dump()
 
