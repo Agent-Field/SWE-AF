@@ -39,3 +39,12 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# Python packaging / dist
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Pipeline output files
+.claude_output_*.json
