@@ -12,6 +12,7 @@
 [![Tests](https://img.shields.io/badge/Tests-make%20check-blue?style=for-the-badge)](.github/workflows/ci.yml)
 [![Built with AgentField](https://img.shields.io/badge/Built%20with-AgentField-0A66C2?style=for-the-badge)](https://github.com/Agent-Field/agentfield)
 ![WorldSpace Community Developer](https://img.shields.io/badge/WorldSpace-Community%20Developer-111827?style=for-the-badge)
+[![Deploy on Railway](https://img.shields.io/badge/Deploy%20on%20Railway-⚡-blueviolet?style=for-the-badge&logo=railway)](https://railway.com/deploy/swe-af)
 [![Example PR](https://img.shields.io/badge/Example-PR%20%23179-ff6b35?style=for-the-badge&logo=github)](https://github.com/Agent-Field/agentfield/pull/179)
 
 
@@ -137,6 +138,12 @@ SWE-AF uses three nested control loops to adapt to task difficulty in real time:
 This is the core factory-control behavior: control agents supervise worker agents and continuously reshape the plan as reality changes.
 
 ## Quick Start
+
+### One-Click Deploy
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/swe-af)
+
+No setup required — deploys the full control plane + agent worker stack to Railway in one click.
 
 ### 1. Requirements
 
