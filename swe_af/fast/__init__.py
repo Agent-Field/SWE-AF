@@ -62,6 +62,8 @@ async def run_github_pr(**kwargs) -> dict:  # type: ignore[override]
     return await _ea.run_github_pr(**kwargs)
 
 
+from . import executor  # noqa: E402, F401 — registers fast_execute_tasks
+
 __all__ = [
     "fast_router",
     "run_git_init",
@@ -69,4 +71,5 @@ __all__ = [
     "run_verifier",
     "run_repo_finalize",
     "run_github_pr",
+    "executor",
 ]
