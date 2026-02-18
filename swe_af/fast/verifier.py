@@ -17,51 +17,48 @@ logger = logging.getLogger(__name__)
 
 @fast_router.reasoner()
 async def fast_verify(
-    *,
-    prd: str,
+    prd: dict[str, Any],
     repo_path: str,
     task_results: list[dict[str, Any]],
-    verifier_model: str,
-    permission_mode: str,
-    ai_provider: str,
-    artifacts_dir: str,
-    **kwargs: Any,
+    verifier_model: str = "sonnet",
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+    artifacts_dir: str = "",
 ) -> dict[str, Any]:
     """Run a single verification pass against the built repository.
 
-    Calls ``run_verifier`` via a lazy import of ``swe_af.fast.app`` to
-    avoid circular imports at module load time.  No fix cycles are
-    attempted — this is a single-pass reasoner.
-
-    Args:
-        prd: The product requirements document text.
-        repo_path: Absolute path to the repository to verify.
-        task_results: List of task result dicts from the execution phase.
-        verifier_model: Model name string for the verifier agent.
-        permission_mode: Permission mode string passed to the agent runtime.
-        ai_provider: AI provider identifier string.
-        artifacts_dir: Path to the artifacts directory.
-        **kwargs: Additional keyword arguments forwarded to the agent call.
-
-    Returns:
-        A :class:`~swe_af.fast.schemas.FastVerificationResult` serialised
-        as a plain dict.
+    Adapts fast task_results into the completed/failed/skipped split that
+    ``run_verifier`` expects, then delegates to a single verification pass.
+    No fix cycles are attempted.
     """
     try:
         import swe_af.fast.app as _app  # noqa: PLC0415
 
+        # Split task_results into completed/failed for run_verifier's interface
+        completed_issues: list[dict] = []
+        failed_issues: list[dict] = []
+        for tr in task_results:
+            entry = {
+                "issue_name": tr.get("task_name", ""),
+                "result_summary": tr.get("summary", ""),
+            }
+            if tr.get("outcome") == "completed":
+                completed_issues.append(entry)
+            else:
+                failed_issues.append(entry)
+
         result: dict[str, Any] = await _app.app.call(
-            "run_verifier",
+            f"{_app.NODE_ID}.run_verifier",
             prd=prd,
             repo_path=repo_path,
-            task_results=task_results,
-            verifier_model=verifier_model,
+            artifacts_dir=artifacts_dir,
+            completed_issues=completed_issues,
+            failed_issues=failed_issues,
+            skipped_issues=[],
+            model=verifier_model,
             permission_mode=permission_mode,
             ai_provider=ai_provider,
-            artifacts_dir=artifacts_dir,
-            **kwargs,
         )
-        # Ensure the result conforms to FastVerificationResult
         verification = FastVerificationResult(
             passed=result.get("passed", False),
             summary=result.get("summary", ""),

@@ -39,6 +39,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    command: ["python", "-m", "swe_af.fast"]
     environment:
       - AGENTFIELD_SERVER=http://control-plane:8080
       - NODE_ID=swe-fast

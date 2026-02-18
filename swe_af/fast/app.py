@@ -29,6 +29,12 @@ app = Agent(
 
 app.include_router(fast_router)
 
+# Include the planner's execution router so that router.note() calls inside
+# the original execution_agents functions (run_coder, run_verifier, etc.)
+# work when delegated to via the thin wrappers.
+from swe_af.reasoners import router as _execution_router  # noqa: E402
+app.include_router(_execution_router)
+
 
 def _repo_name_from_url(url: str) -> str:
     """Extract repo name from a GitHub URL."""
