@@ -2,6 +2,7 @@
 
 Exposes:
   - ``build``: end-to-end plan → execute → verify (single entry point)
+  - ``fast_build``: speed-optimised build with minimal review/retry cycles
   - ``plan``: orchestrates product_manager → architect ↔ tech_lead → sprint_planner
   - ``execute``: runs a planned DAG with self-healing replanning
 """
@@ -61,9 +62,98 @@ async def build(
     If ``repo_url`` is provided and ``repo_path`` is empty, the repo is cloned
     into ``/workspaces/<repo-name>`` automatically (useful in Docker).
     """
-    from swe_af.execution.schemas import BuildConfig, BuildResult
+    from swe_af.execution.schemas import BuildConfig
 
     cfg = BuildConfig(**config) if config else BuildConfig()
+
+    return await _run_build(
+        goal=goal,
+        repo_path=repo_path,
+        artifacts_dir=artifacts_dir,
+        additional_context=additional_context,
+        cfg=cfg,
+        execute_fn_target=execute_fn_target,
+        max_turns=max_turns,
+        permission_mode=permission_mode,
+        enable_learning=enable_learning,
+        repo_url=repo_url,
+    )
+
+
+@app.reasoner()
+async def fast_build(
+    goal: str,
+    repo_path: str = "",
+    repo_url: str = "",
+    artifacts_dir: str = ".artifacts",
+    additional_context: str = "",
+    config: dict | None = None,
+    execute_fn_target: str = "",
+    max_turns: int = 0,
+    permission_mode: str = "",
+    enable_learning: bool = False,
+) -> dict:
+    """Speed-optimised build: skips review loops, replanning, and advisory steps.
+
+    Uses the same pipeline as ``build`` but with defaults tuned for maximum
+    throughput.  Any key in *config* overrides these fast defaults.
+    """
+    from swe_af.execution.schemas import BuildConfig
+
+    fast_defaults: dict = {
+        "max_review_iterations": 0,
+        "max_retries_per_issue": 0,
+        "max_replans": 0,
+        "enable_replanning": False,
+        "max_verify_fix_cycles": 0,
+        "max_coding_iterations": 1,
+        "max_advisor_invocations": 0,
+        "enable_issue_advisor": False,
+        "enable_integration_testing": False,
+        "agent_max_turns": 50,
+        "agent_timeout_seconds": 900,
+        "git_init_max_retries": 1,
+    }
+    merged = {**fast_defaults, **(config or {})}
+    cfg = BuildConfig(**merged)
+
+    return await _run_build(
+        goal=goal,
+        repo_path=repo_path,
+        artifacts_dir=artifacts_dir,
+        additional_context=additional_context,
+        cfg=cfg,
+        execute_fn_target=execute_fn_target,
+        max_turns=max_turns,
+        permission_mode=permission_mode,
+        enable_learning=enable_learning,
+        repo_url=repo_url,
+    )
+
+
+# Expose the original functions via __wrapped__ so that inspect.getsource()
+# can traverse the agentfield decorator and return the actual function source.
+build.__wrapped__ = build._original_func  # type: ignore[attr-defined]
+fast_build.__wrapped__ = fast_build._original_func  # type: ignore[attr-defined]
+
+
+async def _run_build(
+    goal: str,
+    repo_path: str,
+    artifacts_dir: str,
+    additional_context: str,
+    cfg,
+    execute_fn_target: str = "",
+    max_turns: int = 0,
+    permission_mode: str = "",
+    enable_learning: bool = False,
+    repo_url: str = "",
+) -> dict:
+    """Internal async helper containing the full build pipeline body.
+
+    Called by both ``build`` and ``fast_build`` reasoners.
+    """
+    from swe_af.execution.schemas import BuildResult
 
     # Allow repo_url from config or direct parameter
     if repo_url:
