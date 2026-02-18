@@ -46,6 +46,7 @@ def github_pr_task_prompt(
     build_summary: str = "",
     completed_issues: list[dict] | None = None,
     accumulated_debt: list[dict] | None = None,
+    all_pr_results: list[dict] | None = None,
 ) -> str:
     """Build the task prompt for the GitHub PR agent."""
     sections: list[str] = []
@@ -73,6 +74,19 @@ def github_pr_task_prompt(
                 f"- [{debt.get('severity', 'medium')}] {debt.get('criterion', debt.get('type', ''))}: "
                 f"{debt.get('reason', debt.get('description', ''))}"
             )
+
+    if all_pr_results:
+        sections.append("\n### All PR Results")
+        for pr in all_pr_results:
+            repo_name = pr.get("repo_name", "?")
+            success = pr.get("success", False)
+            pr_url = pr.get("pr_url", "")
+            pr_number = pr.get("pr_number", "")
+            error = pr.get("error_message", "")
+            if success and pr_url:
+                sections.append(f"- **{repo_name}**: PR #{pr_number} — {pr_url}")
+            else:
+                sections.append(f"- **{repo_name}**: FAILED — {error}")
 
     sections.append(
         "\n## Your Task\n"

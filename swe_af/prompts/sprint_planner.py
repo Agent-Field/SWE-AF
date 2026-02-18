@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from swe_af.execution.schemas import WorkspaceManifest
+from swe_af.prompts._utils import workspace_context_block
 from swe_af.reasoners.schemas import Architecture, PRD
 
 SYSTEM_PROMPT = """\
@@ -239,3 +241,96 @@ final integration level. It should confirm that core components compile together
 basic interface contracts hold. Do not leave ALL verification to the very end.
 """
     return SYSTEM_PROMPT, task
+
+
+def sprint_planner_task_prompt(
+    *,
+    goal: str,
+    prd: dict | PRD,
+    architecture: dict | Architecture,
+    workspace_manifest: WorkspaceManifest | None = None,
+    repo_path: str = "",
+    prd_path: str = "",
+    architecture_path: str = "",
+) -> str:
+    """Build the task prompt for the sprint planner agent.
+
+    Args:
+        goal: The high-level goal or description for the sprint.
+        prd: The PRD (dict or PRD object).
+        architecture: The architecture (dict or Architecture object).
+        workspace_manifest: Optional multi-repo workspace manifest.
+        repo_path: Path to the repository.
+        prd_path: Path to the PRD document.
+        architecture_path: Path to the architecture document.
+
+    Returns:
+        Task prompt string.
+    """
+    sections: list[str] = []
+
+    ws_block = workspace_context_block(workspace_manifest)
+    if ws_block:
+        sections.append(ws_block)
+
+    sections.append(f"## Goal\n{goal}")
+
+    # Extract acceptance criteria from prd
+    if isinstance(prd, dict):
+        ac_list = prd.get("acceptance_criteria", [])
+        description = prd.get("validated_description", "")
+    else:
+        ac_list = prd.acceptance_criteria
+        description = prd.validated_description
+
+    if description:
+        sections.append(f"## Description\n{description}")
+
+    if ac_list:
+        ac_formatted = "\n".join(f"- {c}" for c in ac_list)
+        sections.append(f"## Acceptance Criteria\n{ac_formatted}")
+
+    # Extract summary from architecture
+    if isinstance(architecture, dict):
+        arch_summary = architecture.get("summary", "")
+    else:
+        arch_summary = architecture.summary
+
+    if arch_summary:
+        sections.append(f"## Architecture Summary\n{arch_summary}")
+
+    if repo_path or prd_path or architecture_path:
+        ref_lines = ["## Reference Documents"]
+        if prd_path:
+            ref_lines.append(f"- Full PRD: {prd_path}")
+        if architecture_path:
+            ref_lines.append(f"- Architecture: {architecture_path}")
+        sections.append("\n".join(ref_lines))
+
+    if repo_path:
+        sections.append(f"## Repository\n{repo_path}")
+
+    # Multi-repo mandate: each issue must specify which repo it targets
+    if ws_block:
+        sections.append(
+            "## Multi-Repo Target Requirement\n"
+            "This workspace spans multiple repositories. For each issue you produce, "
+            "you MUST include a `target_repo` field specifying which repository the "
+            "issue should be executed in. Use the repository names listed in the "
+            "Workspace Repositories section above."
+        )
+
+    sections.append(
+        "## Your Mission\n"
+        "Break this work into issues executable by autonomous coder agents.\n\n"
+        "Read the codebase, PRD, and architecture document thoroughly. The architecture\n"
+        "document is your source of truth for all types, interfaces, and component\n"
+        "boundaries.\n\n"
+        "DO NOT write issue .md files. DO NOT include code, signatures, or implementation\n"
+        "details in your output. A separate parallel agent pool writes the issue files.\n\n"
+        "Your output is a structured decomposition: for each issue provide a name, title,\n"
+        "2-3 sentence description (WHAT not HOW), dependencies, provides, file metadata,\n"
+        "and acceptance criteria."
+    )
+
+    return "\n\n".join(sections)

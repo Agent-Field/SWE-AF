@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from swe_af.execution.schemas import WorkspaceManifest
+from swe_af.prompts._utils import workspace_context_block
+
 SYSTEM_PROMPT = """\
 You are a senior software developer working in a fully autonomous coding \
 pipeline. You receive a well-defined issue with acceptance criteria and must \
@@ -94,11 +97,14 @@ You have full development access:
 
 def coder_task_prompt(
     issue: dict,
-    worktree_path: str,
+    worktree_path: str = "",
     feedback: str = "",
     iteration: int = 1,
     project_context: dict | None = None,
     memory_context: dict | None = None,
+    workspace_manifest: WorkspaceManifest | None = None,
+    target_repo: str = "",
+    architecture: dict | None = None,
 ) -> str:
     """Build the task prompt for the coder agent.
 
@@ -110,10 +116,32 @@ def coder_task_prompt(
         project_context: Dict with artifact paths (prd_path, architecture_path, etc.).
         memory_context: Dict with shared memory (codebase_conventions, failure_patterns,
             dependency_interfaces, bug_patterns) from previous issues.
+        workspace_manifest: Optional multi-repo workspace manifest.
+        target_repo: The name of the target repository for this issue (multi-repo only).
+        architecture: Optional architecture dict (unused, accepted for API compatibility).
     """
     project_context = project_context or {}
     memory_context = memory_context or {}
     sections: list[str] = []
+
+    # Inject multi-repo workspace context if present
+    ws_block = workspace_context_block(workspace_manifest)
+    if ws_block:
+        sections.append(ws_block)
+
+    # Resolve target repo absolute path for multi-repo context
+    if target_repo and workspace_manifest is not None:
+        repo_obj = next(
+            (r for r in workspace_manifest.repos if r.repo_name == target_repo), None
+        )
+        if repo_obj is not None:
+            sections.append(
+                f"## Target Repository\n"
+                f"- **Name**: {repo_obj.repo_name}\n"
+                f"- **Role**: {repo_obj.role}\n"
+                f"- **Path**: `{repo_obj.absolute_path}`\n"
+                f"- **Branch**: {repo_obj.branch}"
+            )
 
     sections.append("## Issue to Implement")
     sections.append(f"- **Name**: {issue.get('name', '(unknown)')}")

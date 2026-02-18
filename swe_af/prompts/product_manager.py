@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from swe_af.execution.schemas import WorkspaceManifest
+from swe_af.prompts._utils import workspace_context_block
+
 SYSTEM_PROMPT = """\
 You are a senior Product Manager who has shipped products used by millions. Your
 PRDs are legendary — engineers fight to work on your projects because your specs
@@ -108,3 +111,35 @@ can automate. Every scope boundary is a decision they don't have to make. Every
 assumption is a constraint they can rely on.
 """
     return SYSTEM_PROMPT, task
+
+
+def pm_task_prompt(
+    *,
+    goal: str,
+    repo_path: str,
+    prd_path: str,
+    additional_context: str = "",
+    workspace_manifest: WorkspaceManifest | None = None,
+) -> str:
+    """Build the task prompt for the product manager agent.
+
+    Args:
+        goal: The product goal to achieve.
+        repo_path: Path to the repository.
+        prd_path: Path where the PRD should be written.
+        additional_context: Optional additional context.
+        workspace_manifest: Optional multi-repo workspace manifest.
+
+    Returns:
+        Task prompt string.
+    """
+    _, task = product_manager_prompts(
+        goal=goal,
+        repo_path=repo_path,
+        prd_path=prd_path,
+        additional_context=additional_context,
+    )
+    ws_block = workspace_context_block(workspace_manifest)
+    if ws_block:
+        task = ws_block + "\n" + task
+    return task

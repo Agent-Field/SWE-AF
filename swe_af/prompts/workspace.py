@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from swe_af.execution.schemas import WorkspaceManifest
+from swe_af.prompts._utils import workspace_context_block
+
 SETUP_SYSTEM_PROMPT = """\
 You are a DevOps engineer managing git worktrees for parallel development. Your
 job is to create isolated worktrees so that multiple coder agents can work on
@@ -103,9 +106,14 @@ def workspace_setup_task_prompt(
     issues: list[dict],
     worktrees_dir: str,
     build_id: str = "",
+    workspace_manifest: WorkspaceManifest | None = None,
 ) -> str:
     """Build the task prompt for the workspace setup agent."""
     sections: list[str] = []
+
+    ws_block = workspace_context_block(workspace_manifest)
+    if ws_block:
+        sections.append(ws_block)
 
     sections.append("## Workspace Setup Task")
     sections.append(f"- **Repository path**: `{repo_path}`")

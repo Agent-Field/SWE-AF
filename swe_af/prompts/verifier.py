@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from swe_af.execution.schemas import WorkspaceManifest
+from swe_af.prompts._utils import workspace_context_block
+
 SYSTEM_PROMPT = """\
 You are a QA architect running final acceptance testing on the output of an
 autonomous agent team. The agents have been building software by executing a DAG
@@ -102,6 +105,7 @@ def verifier_task_prompt(
     failed_issues: list[dict],
     skipped_issues: list[str],
     build_health: dict | None = None,
+    workspace_manifest: WorkspaceManifest | None = None,
 ) -> str:
     """Build the task prompt for the verifier agent.
 
@@ -112,8 +116,14 @@ def verifier_task_prompt(
         failed_issues: List of IssueResult dicts for failed issues.
         skipped_issues: List of skipped issue names.
         build_health: Optional build health dashboard from shared memory.
+        workspace_manifest: Optional multi-repo workspace manifest.
     """
     sections: list[str] = []
+
+    # Inject multi-repo workspace context if present
+    ws_block = workspace_context_block(workspace_manifest)
+    if ws_block:
+        sections.append(ws_block)
 
     # --- PRD ---
     sections.append("## Product Requirements Document")
