@@ -77,7 +77,8 @@ async def build(
         raise ValueError("Either repo_path or repo_url must be provided")
 
     # Clone if repo_url is set and target doesn't exist yet
-    if cfg.repo_url and not os.path.exists(os.path.join(repo_path, ".git")):
+    git_dir = os.path.join(repo_path, ".git")
+    if cfg.repo_url and not os.path.exists(git_dir):
         app.note(f"Cloning {cfg.repo_url} → {repo_path}", tags=["build", "clone"])
         os.makedirs(repo_path, exist_ok=True)
         clone_result = subprocess.run(
@@ -89,6 +90,58 @@ async def build(
             err = clone_result.stderr.strip()
             app.note(f"Clone failed (exit {clone_result.returncode}): {err}", tags=["build", "clone", "error"])
             raise RuntimeError(f"git clone failed (exit {clone_result.returncode}): {err}")
+    elif cfg.repo_url and os.path.exists(git_dir):
+        # Repo already cloned by a prior build — reset to remote default branch
+        # so git_init creates the integration branch from a clean baseline.
+        default_branch = cfg.github_pr_base or "main"
+        app.note(
+            f"Repo already exists at {repo_path} — resetting to origin/{default_branch}",
+            tags=["build", "clone", "reset"],
+        )
+
+        # Remove stale worktrees on disk before touching branches
+        worktrees_dir = os.path.join(repo_path, ".worktrees")
+        if os.path.isdir(worktrees_dir):
+            import shutil
+            shutil.rmtree(worktrees_dir, ignore_errors=True)
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+
+        # Fetch latest remote state
+        fetch = subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        if fetch.returncode != 0:
+            app.note(f"git fetch failed: {fetch.stderr.strip()}", tags=["build", "clone", "error"])
+
+        # Force-checkout default branch (handles dirty working tree from crashed builds)
+        subprocess.run(
+            ["git", "checkout", "-f", default_branch],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        reset = subprocess.run(
+            ["git", "reset", "--hard", f"origin/{default_branch}"],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        if reset.returncode != 0:
+            # Hard reset failed — nuke and re-clone as last resort
+            app.note(
+                f"Reset to origin/{default_branch} failed — re-cloning",
+                tags=["build", "clone", "reclone"],
+            )
+            import shutil
+            shutil.rmtree(repo_path, ignore_errors=True)
+            os.makedirs(repo_path, exist_ok=True)
+            clone_result = subprocess.run(
+                ["git", "clone", cfg.repo_url, repo_path],
+                capture_output=True, text=True,
+            )
+            if clone_result.returncode != 0:
+                err = clone_result.stderr.strip()
+                raise RuntimeError(f"git re-clone failed: {err}")
     else:
         # Ensure repo_path exists even when no repo_url is provided (fresh init case)
         # This is needed because planning agents may need to read the repo in parallel with git_init
