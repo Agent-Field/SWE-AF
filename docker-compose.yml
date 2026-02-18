@@ -35,6 +35,29 @@ services:
     deploy:
       replicas: 1  # Scale with: docker compose up --scale swe-agent=3
 
+  swe-fast:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - AGENTFIELD_SERVER=http://control-plane:8080
+      - NODE_ID=swe-fast
+      - PORT=8004
+      - AGENT_CALLBACK_URL=http://swe-fast:8004
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      - GH_TOKEN=${GH_TOKEN}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-}
+    ports:
+      - "8004:8004"
+    volumes:
+      - workspaces:/workspaces
+    depends_on:
+      - control-plane
+
 volumes:
   agentfield-data:
   workspaces:
