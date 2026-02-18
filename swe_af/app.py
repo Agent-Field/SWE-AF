@@ -923,7 +923,8 @@ async def execute(
             branch-per-issue workflow when provided.
         resume: If True, attempt to resume from a checkpoint file.
         workspace_manifest: Optional WorkspaceManifest.model_dump() for multi-repo builds.
-            None for single-repo builds (backward compat).
+            None for single-repo builds (backward compat). When provided, enables
+            per-repo git init and merger dispatch.
     """
     from swe_af.execution.dag_executor import run_dag
     from swe_af.execution.schemas import ExecutionConfig
@@ -954,6 +955,7 @@ async def execute(
         git_config=git_config,
         resume=resume,
         build_id=build_id,
+        workspace_manifest=workspace_manifest,
     )
     return state.model_dump()
 
