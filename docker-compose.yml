@@ -13,19 +13,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file: .env
     environment:
       - AGENTFIELD_SERVER=http://control-plane:8080
       - NODE_ID=swe-planner
       - PORT=8003
-      # Callback URL for control plane to reach this agent
       - AGENT_CALLBACK_URL=http://swe-agent:8003
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
-      - GH_TOKEN=${GH_TOKEN}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - OPENCODE_MODEL=${OPENCODE_MODEL:-}
     ports:
       - "8003:8003"
     volumes:
