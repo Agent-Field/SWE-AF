@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from swe_af.execution.schemas import WorkspaceManifest
+from swe_af.prompts._utils import workspace_context_block
 from swe_af.reasoners.schemas import PRD
 
 SYSTEM_PROMPT = """\
@@ -130,3 +132,38 @@ component boundary becomes a real module. Two engineers working independently fr
 this document should produce code that integrates on the first try.
 """
     return SYSTEM_PROMPT, task
+
+
+def architect_task_prompt(
+    *,
+    prd: PRD,
+    repo_path: str,
+    prd_path: str,
+    architecture_path: str,
+    feedback: str | None = None,
+    workspace_manifest: WorkspaceManifest | None = None,
+) -> str:
+    """Build the task prompt for the architect agent.
+
+    Args:
+        prd: The PRD object.
+        repo_path: Path to the repository.
+        prd_path: Path to the PRD document.
+        architecture_path: Path where the architecture doc should be written.
+        feedback: Optional feedback from tech lead for revision.
+        workspace_manifest: Optional multi-repo workspace manifest.
+
+    Returns:
+        Task prompt string.
+    """
+    _, task = architect_prompts(
+        prd=prd,
+        repo_path=repo_path,
+        prd_path=prd_path,
+        architecture_path=architecture_path,
+        feedback=feedback,
+    )
+    ws_block = workspace_context_block(workspace_manifest)
+    if ws_block:
+        task = ws_block + "\n" + task
+    return task

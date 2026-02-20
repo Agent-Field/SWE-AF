@@ -2,13 +2,111 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, PrivateAttr, field_validator, model_validator
 
 # Global default for all agent max_turns. Change this one value to adjust everywhere.
 DEFAULT_AGENT_MAX_TURNS: int = 150
+
+
+# ---------------------------------------------------------------------------
+# Multi-repo helper
+# ---------------------------------------------------------------------------
+
+
+def _derive_repo_name(url: str) -> str:
+    """Extract repo name from a git URL.
+
+    Examples:
+        'https://github.com/org/my-project.git' -> 'my-project'
+        'git@github.com:org/repo.git'           -> 'repo'
+        'https://github.com/org/repo'           -> 'repo'
+    """
+    if not url:
+        return ""
+    # Strip trailing .git, then take last path component
+    stripped = re.sub(r"\.git$", "", url.rstrip("/"))
+    # Handle both HTTPS and SSH URLs
+    name = re.split(r"[/:]", stripped)[-1]
+    return name
+
+
+# ---------------------------------------------------------------------------
+# Multi-repo models
+# ---------------------------------------------------------------------------
+
+
+class RepoSpec(BaseModel):
+    """Specification for a single repository in a multi-repo build."""
+
+    repo_url: str = ""          # GitHub/git URL (required if repo_path empty)
+    repo_path: str = ""         # Absolute path to an existing local repo
+    role: str                   # 'primary' or 'dependency'
+    branch: str = ""            # Branch to checkout (empty = default branch)
+    sparse_paths: list[str] = []  # For sparse checkout; empty = full checkout
+    mount_point: str = ""       # Workspace subdirectory override
+    create_pr: bool = True      # Whether to create a PR for this repo
+
+    @field_validator("role")
+    @classmethod
+    def _validate_role(cls, v: str) -> str:
+        if v not in ("primary", "dependency"):
+            raise ValueError(f"role must be 'primary' or 'dependency', got {v!r}")
+        return v
+
+    @field_validator("repo_url")
+    @classmethod
+    def _validate_repo_url(cls, v: str) -> str:
+        if v and not (v.startswith("http://") or v.startswith("https://") or v.startswith("git@")):
+            raise ValueError(
+                f"repo_url must be an HTTP(S) or SSH git URL, got {v!r}"
+            )
+        return v
+
+
+class WorkspaceRepo(BaseModel):
+    """A repository that has been cloned into the workspace."""
+
+    model_config = ConfigDict(frozen=False)  # Mutable: git_init_result assigned post-clone
+
+    repo_name: str              # Derived name (from _derive_repo_name)
+    repo_url: str               # Original git URL
+    role: str                   # 'primary' or 'dependency'
+    absolute_path: str          # Path where the repo was cloned
+    branch: str                 # Actual checked-out branch
+    sparse_paths: list[str] = []
+    create_pr: bool = True
+    git_init_result: dict | None = None  # Populated by _init_all_repos after cloning
+
+
+class WorkspaceManifest(BaseModel):
+    """Snapshot of all repositories cloned for a multi-repo build."""
+
+    workspace_root: str         # Parent directory containing all repos
+    repos: list[WorkspaceRepo]  # All cloned repos
+    primary_repo_name: str      # Name of the primary repo
+
+    @property
+    def primary_repo(self) -> WorkspaceRepo | None:
+        """Return the primary WorkspaceRepo, or None if not found."""
+        for repo in self.repos:
+            if repo.repo_name == self.primary_repo_name:
+                return repo
+        return None
+
+
+class RepoPRResult(BaseModel):
+    """Result of creating a PR for a single repository."""
+
+    repo_name: str
+    repo_url: str
+    success: bool
+    pr_url: str = ""
+    pr_number: int = 0
+    error_message: str = ""
 
 
 class AdvisorAction(str, Enum):
@@ -103,6 +201,7 @@ class IssueResult(BaseModel):
     attempts: int = 1
     files_changed: list[str] = []
     branch_name: str = ""
+    repo_name: str = ""  # Repo where this issue was coded (propagated from CoderResult)
     # Advisor fields
     advisor_invocations: int = 0
     adaptations: list[IssueAdaptation] = []
@@ -193,6 +292,9 @@ class DAGState(BaseModel):
     accumulated_debt: list[dict] = []
     adaptation_history: list[dict] = []
 
+    # --- Multi-repo workspace ---
+    workspace_manifest: dict | None = None  # Serialised WorkspaceManifest (dict for JSON compat)
+
 
 class GitInitResult(BaseModel):
     """Result of git initialization."""
@@ -205,6 +307,7 @@ class GitInitResult(BaseModel):
     error_message: str = ""
     remote_url: str = ""            # origin URL (set if repo was cloned)
     remote_default_branch: str = "" # e.g. "main" — for PR base
+    repo_name: str = ""             # Repo this result belongs to (multi-repo)
 
 
 class WorkspaceInfo(BaseModel):
@@ -227,6 +330,7 @@ class MergeResult(BaseModel):
     needs_integration_test: bool
     integration_test_rationale: str = ""
     summary: str
+    repo_name: str = ""  # Repo where this merge ran (multi-repo)
 
 
 class IntegrationTestResult(BaseModel):
@@ -285,6 +389,7 @@ class CoderResult(BaseModel):
     test_summary: str = ""                 # Brief test run output
     codebase_learnings: list[str] = []     # Conventions discovered (for shared memory)
     agent_retro: dict = {}                 # What worked, what didn't (for shared memory)
+    repo_name: str = ""                    # Repo where coder ran (multi-repo)
 
 
 class QAResult(BaseModel):
@@ -509,7 +614,8 @@ class BuildConfig(BaseModel):
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
     execute_fn_target: str = ""
     permission_mode: str = ""
-    repo_url: str = ""                # GitHub URL to clone
+    repo_url: str = ""                # GitHub URL to clone (single-repo shorthand)
+    repos: list[RepoSpec] = []        # Multi-repo list; normalised by _normalize_repos
     enable_github_pr: bool = True     # Create draft PR after build
     github_pr_base: str = ""          # PR base branch (default: repo's default branch)
     agent_timeout_seconds: int = 2700
@@ -522,12 +628,70 @@ class BuildConfig(BaseModel):
     def _validate_v2_keys(cls, data: Any) -> Any:
         return _reject_legacy_config_keys(data)
 
+    @model_validator(mode="after")
+    def _normalize_repos(self) -> "BuildConfig":
+        """Normalise the repos list and enforce invariants.
+
+        Steps:
+        1. Mutual exclusion: repo_url + repos simultaneously → error.
+        2. If only repo_url given, synthesise a single primary RepoSpec.
+        3. If repos is empty and repo_url is empty, pass through (deferred).
+        4. Exactly one primary repo required.
+        5. No duplicate repo_url values.
+        6. Backfill self.repo_url from primary if it was empty.
+        """
+        repo_url = self.repo_url
+        repos = self.repos
+
+        # Step 1: Mutual exclusion
+        if repo_url and repos:
+            raise ValueError(
+                "Specify either 'repo_url' (single-repo shorthand) or 'repos' "
+                "(multi-repo list), not both."
+            )
+
+        # Step 2: Synthesise from repo_url
+        if repo_url and not repos:
+            self.repos = [RepoSpec(repo_url=repo_url, role="primary")]
+            return self
+
+        # Step 3: Empty passthrough
+        if not repos:
+            return self
+
+        # Step 4: Exactly one primary
+        primaries = [r for r in repos if r.role == "primary"]
+        if len(primaries) != 1:
+            raise ValueError(
+                f"Exactly one RepoSpec with role='primary' is required; "
+                f"found {len(primaries)}."
+            )
+
+        # Step 5: No duplicate repo_url values
+        urls = [r.repo_url for r in repos if r.repo_url]
+        if len(urls) != len(set(urls)):
+            raise ValueError("Duplicate repo_url values are not allowed in 'repos'.")
+
+        # Step 6: Backfill repo_url from primary
+        if not self.repo_url:
+            self.repo_url = primaries[0].repo_url
+
+        return self
+
     def model_post_init(self, __context: Any) -> None:
         _validate_flat_models(self.models)
 
     @property
     def ai_provider(self) -> Literal["claude", "opencode"]:
         return _runtime_to_provider(self.runtime)
+
+    @property
+    def primary_repo(self) -> RepoSpec | None:
+        """Return the primary RepoSpec, or None if repos is empty."""
+        for r in self.repos:
+            if r.role == "primary":
+                return r
+        return None
 
     def resolved_models(self) -> dict[str, str]:
         """Resolve all internal ``*_model`` fields from V2 runtime config."""
@@ -566,7 +730,21 @@ class BuildResult(BaseModel):
     verification: dict | None = None
     success: bool
     summary: str
-    pr_url: str = ""
+    pr_results: list[RepoPRResult] = []  # Per-repo PR creation results
+
+    @property
+    def pr_url(self) -> str:
+        """Backward-compat: return the first successful PR URL, or empty string."""
+        for r in self.pr_results:
+            if r.success and r.pr_url:
+                return r.pr_url
+        return ""
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Override to inject computed pr_url into serialisation output."""
+        data = super().model_dump(**kwargs)
+        data["pr_url"] = self.pr_url
+        return data
 
 
 class RepoFinalizeResult(BaseModel):

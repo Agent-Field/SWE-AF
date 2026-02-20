@@ -690,6 +690,7 @@ async def run_coding_loop(
                 branch_name=branch_name,
                 attempts=iteration,
                 iteration_history=iteration_history,
+                repo_name=coder_result.get("repo_name", ""),
             )
 
         if action == "block":

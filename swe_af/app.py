@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import subprocess
 import uuid
 
@@ -20,6 +19,14 @@ from swe_af.reasoners.schemas import PlanResult, ReviewResult
 
 from agentfield import Agent
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
+from swe_af.execution.schemas import (
+    BuildConfig,
+    BuildResult,
+    RepoPRResult,
+    WorkspaceManifest,
+    WorkspaceRepo,
+    _derive_repo_name as _repo_name_from_url,
+)
 
 NODE_ID = os.getenv("NODE_ID", "swe-planner")
 
@@ -34,11 +41,132 @@ app = Agent(
 app.include_router(router)
 
 
-def _repo_name_from_url(url: str) -> str:
-    """Extract repo name from a GitHub URL for auto-deriving repo_path."""
-    # https://github.com/user/my-project.git → my-project
-    match = re.search(r"/([^/]+?)(?:\.git)?$", url.rstrip("/"))
-    return match.group(1) if match else "repo"
+async def _clone_repos(
+    cfg: BuildConfig,
+    artifacts_dir: str,
+) -> WorkspaceManifest:
+    """Clone all repos from cfg.repos concurrently. Returns a WorkspaceManifest.
+
+    Parameters:
+        cfg: BuildConfig with .repos list populated. len(cfg.repos) >= 1.
+        artifacts_dir: Absolute path used to derive workspace_root as its parent.
+
+    Returns:
+        WorkspaceManifest with one WorkspaceRepo per RepoSpec.
+        All WorkspaceRepo.git_init_result fields are None at this stage
+        (populated later by _init_all_repos in dag_executor.py).
+
+    Raises:
+        RuntimeError: If any git clone subprocess fails. Partially-cloned
+            directories are removed (shutil.rmtree) before raising, so no
+            orphaned workspace directories remain.
+
+    Concurrency model:
+        asyncio.gather([asyncio.to_thread(blocking_clone), ...]) for all N repos.
+        Branch resolution also runs concurrently via asyncio.to_thread.
+    """
+    import shutil
+
+    workspace_root = os.path.join(os.path.dirname(artifacts_dir), "workspace")
+    os.makedirs(workspace_root, exist_ok=True)
+
+    cloned_paths: list[str] = []
+
+    async def _clone_single(spec: WorkspaceRepo) -> tuple[str, str]:  # type: ignore[type-arg]
+        """Clone or resolve one repo. Returns (repo_name, absolute_path)."""
+        name = (
+            spec.mount_point
+            or (_repo_name_from_url(spec.repo_url) if spec.repo_url
+                else os.path.basename(spec.repo_path.rstrip("/")))
+        )
+        dest = os.path.join(workspace_root, name)
+
+        # If repo_path given, use it directly — no clone needed
+        if spec.repo_path:
+            return name, spec.repo_path
+
+        git_dir = os.path.join(dest, ".git")
+        if spec.repo_url and not os.path.exists(git_dir):
+            os.makedirs(dest, exist_ok=True)
+            cmd = ["git", "clone", spec.repo_url, dest]
+            if spec.branch:
+                cmd += ["--branch", spec.branch]
+
+            def _run() -> subprocess.CompletedProcess:  # type: ignore[type-arg]
+                return subprocess.run(cmd, capture_output=True, text=True)
+
+            proc = await asyncio.to_thread(_run)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"git clone {spec.repo_url!r} failed "
+                    f"(exit {proc.returncode}): {proc.stderr.strip()}"
+                )
+            cloned_paths.append(dest)
+
+        return name, dest
+
+    async def _resolve_branch(spec: WorkspaceRepo, path: str) -> str:  # type: ignore[type-arg]
+        """Resolve actual checked-out branch via git rev-parse.
+
+        Falls back to spec.branch or 'HEAD' on error.
+        """
+        def _run() -> str:
+            r = subprocess.run(
+                ["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()
+            return spec.branch or "HEAD"
+        return await asyncio.to_thread(_run)
+
+    # Clone all repos concurrently
+    clone_tasks = [_clone_single(spec) for spec in cfg.repos]
+    clone_results = await asyncio.gather(*clone_tasks, return_exceptions=True)
+
+    # Check for failures, cleanup partial clones
+    errors = [
+        (i, r) for i, r in enumerate(clone_results) if isinstance(r, Exception)
+    ]
+    if errors:
+        for p in cloned_paths:
+            shutil.rmtree(p, ignore_errors=True)
+        msgs = "; ".join(str(r) for _, r in errors)
+        raise RuntimeError(f"Multi-repo clone failed: {msgs}")
+
+    # Resolve branches concurrently
+    branch_tasks = [
+        _resolve_branch(cfg.repos[i], clone_results[i][1])  # type: ignore[index]
+        for i in range(len(cfg.repos))
+    ]
+    branches = await asyncio.gather(*branch_tasks, return_exceptions=True)
+
+    # Build WorkspaceRepo list
+    repos: list[WorkspaceRepo] = []
+    primary_repo_name = ""
+
+    for i, spec in enumerate(cfg.repos):
+        name, path = clone_results[i]  # type: ignore[misc]
+        branch = branches[i] if isinstance(branches[i], str) else (spec.branch or "HEAD")
+        ws_repo = WorkspaceRepo(
+            repo_name=name,
+            repo_url=spec.repo_url,
+            role=spec.role,
+            absolute_path=path,
+            branch=branch,
+            sparse_paths=spec.sparse_paths,
+            create_pr=spec.create_pr,
+            git_init_result=None,
+        )
+        repos.append(ws_repo)
+        if spec.role == "primary":
+            primary_repo_name = name
+
+    return WorkspaceManifest(
+        workspace_root=workspace_root,
+        repos=repos,
+        primary_repo_name=primary_repo_name,
+    )
 
 
 @app.reasoner()
@@ -61,8 +189,6 @@ async def build(
     If ``repo_url`` is provided and ``repo_path`` is empty, the repo is cloned
     into ``/workspaces/<repo-name>`` automatically (useful in Docker).
     """
-    from swe_af.execution.schemas import BuildConfig, BuildResult
-
     cfg = BuildConfig(**config) if config else BuildConfig()
 
     # Allow repo_url from config or direct parameter
@@ -167,6 +293,21 @@ async def build(
 
     # Compute absolute artifacts directory path for logging
     abs_artifacts_dir = os.path.join(os.path.abspath(repo_path), artifacts_dir)
+
+    # Multi-repo path: clone all repos concurrently
+    manifest: WorkspaceManifest | None = None
+    if len(cfg.repos) > 1:
+        app.note(
+            f"Cloning {len(cfg.repos)} repos concurrently",
+            tags=["build", "clone", "multi-repo"],
+        )
+        manifest = await _clone_repos(cfg, abs_artifacts_dir)
+        # Use primary repo as the canonical repo_path
+        repo_path = manifest.primary_repo.absolute_path
+        app.note(
+            f"Multi-repo workspace ready: {manifest.workspace_root}",
+            tags=["build", "clone", "multi-repo", "complete"],
+        )
 
     # 1. PLAN + GIT INIT (concurrent — no data dependency between them)
     app.note("Phase 1: Planning + Git init (parallel)", tags=["build", "parallel"])
@@ -283,6 +424,7 @@ async def build(
         config=exec_config,
         git_config=git_config,
         build_id=build_id,
+        workspace_manifest=manifest.model_dump() if manifest else None,
     ), "execute")
 
     # 3. VERIFY
@@ -425,85 +567,157 @@ async def build(
         )
 
     # 4. PUSH & DRAFT PR (if repo has a remote and PR creation is enabled)
-    pr_url = ""
-    remote_url = git_config.get("remote_url", "") if git_config else ""
-    if remote_url and cfg.enable_github_pr:
-        app.note("Phase 4: Push + Draft PR", tags=["build", "github_pr"])
-        base_branch = (
-            cfg.github_pr_base
-            or (git_config.get("remote_default_branch") if git_config else "")
-            or "main"
-        )
-        build_summary = (
-            f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
-            + (f", verification: {verification.get('summary', '')}" if verification else "")
-        )
-        try:
-            pr_result = _unwrap(await app.call(
-                f"{NODE_ID}.run_github_pr",
-                repo_path=repo_path,
-                integration_branch=git_config["integration_branch"],
-                base_branch=base_branch,
-                goal=goal,
-                build_summary=build_summary,
-                completed_issues=dag_result.get("completed_issues", []),
-                accumulated_debt=dag_result.get("accumulated_debt", []),
-                artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-                model=resolved["git_model"],
-                permission_mode=cfg.permission_mode,
-                ai_provider=cfg.ai_provider,
-            ), "run_github_pr")
-            pr_url = pr_result.get("pr_url", "")
-            if pr_url:
-                app.note(f"Draft PR created: {pr_url}", tags=["build", "github_pr", "complete"])
+    pr_results: list[RepoPRResult] = []
+    build_summary = (
+        f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
+        + (f", verification: {verification.get('summary', '')}" if verification else "")
+    )
 
-                # Programmatically append plan docs to PR body
-                if prd_markdown or architecture_markdown:
-                    try:
-                        current_body = subprocess.run(
-                            ["gh", "pr", "view", str(pr_result.get("pr_number", 0)),
-                             "--json", "body", "--jq", ".body"],
-                            cwd=repo_path, capture_output=True, text=True, check=True,
-                        ).stdout.strip()
-
-                        plan_sections = "\n\n---\n"
-                        if prd_markdown:
-                            plan_sections += (
-                                "\n<details><summary>📋 PRD (Product Requirements Document)"
-                                "</summary>\n\n"
-                                + prd_markdown
-                                + "\n\n</details>\n"
-                            )
-                        if architecture_markdown:
-                            plan_sections += (
-                                "\n<details><summary>🏗️ Architecture</summary>\n\n"
-                                + architecture_markdown
-                                + "\n\n</details>\n"
-                            )
-
-                        new_body = current_body + plan_sections
-
-                        subprocess.run(
-                            ["gh", "pr", "edit", str(pr_result.get("pr_number", 0)),
-                             "--body", new_body],
-                            cwd=repo_path, capture_output=True, text=True, check=True,
-                        )
-                        app.note(
-                            "Plan docs appended to PR body",
-                            tags=["build", "github_pr", "plan_docs"],
-                        )
-                    except subprocess.CalledProcessError as e:
-                        app.note(
-                            f"Failed to append plan docs to PR (non-fatal): {e}",
-                            tags=["build", "github_pr", "plan_docs", "warning"],
-                        )
-            else:
+    if manifest and len(manifest.repos) > 1:
+        # Multi-repo: one PR per repo where create_pr=True
+        app.note("Phase 4: Multi-repo Push + Draft PRs", tags=["build", "github_pr", "multi-repo"])
+        for ws_repo in manifest.repos:
+            if not ws_repo.create_pr or not cfg.enable_github_pr:
+                continue
+            repo_git_init = ws_repo.git_init_result or {}
+            repo_remote_url = repo_git_init.get("remote_url", "") or ws_repo.repo_url
+            if not repo_remote_url:
+                continue
+            repo_integration_branch = repo_git_init.get("integration_branch", "")
+            if not repo_integration_branch:
+                continue
+            repo_base_branch = (
+                cfg.github_pr_base
+                or repo_git_init.get("remote_default_branch", "")
+                or "main"
+            )
+            try:
+                pr_r = _unwrap(await app.call(
+                    f"{NODE_ID}.run_github_pr",
+                    repo_path=ws_repo.absolute_path,
+                    integration_branch=repo_integration_branch,
+                    base_branch=repo_base_branch,
+                    goal=goal,
+                    build_summary=build_summary,
+                    completed_issues=[
+                        r for r in dag_result.get("completed_issues", [])
+                        if not r.get("repo_name") or r.get("repo_name") == ws_repo.repo_name
+                    ],
+                    accumulated_debt=dag_result.get("accumulated_debt", []),
+                    artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
+                    model=resolved["git_model"],
+                    permission_mode=cfg.permission_mode,
+                    ai_provider=cfg.ai_provider,
+                ), "run_github_pr")
+                pr_results.append(RepoPRResult(
+                    repo_name=ws_repo.repo_name,
+                    repo_url=ws_repo.repo_url,
+                    success=pr_r.get("success", False),
+                    pr_url=pr_r.get("pr_url", ""),
+                    pr_number=pr_r.get("pr_number", 0),
+                    error_message=pr_r.get("error_message", ""),
+                ))
+                if pr_r.get("pr_url"):
+                    app.note(
+                        f"Draft PR created for {ws_repo.repo_name}: {pr_r.get('pr_url')}",
+                        tags=["build", "github_pr", "complete"],
+                    )
+            except Exception as e:
+                pr_results.append(RepoPRResult(
+                    repo_name=ws_repo.repo_name,
+                    repo_url=ws_repo.repo_url,
+                    success=False,
+                    error_message=str(e),
+                ))
                 app.note(
-                    f"PR creation failed: {pr_result.get('error_message', 'unknown')}",
+                    f"PR creation failed for {ws_repo.repo_name}: {e}",
                     tags=["build", "github_pr", "error"],
                 )
-        except Exception as e:
-            app.note(f"PR creation failed: {e}", tags=["build", "github_pr", "error"])
+    else:
+        # Single-repo: existing PR logic, wrap result in RepoPRResult
+        remote_url = git_config.get("remote_url", "") if git_config else ""
+        if remote_url and cfg.enable_github_pr:
+            app.note("Phase 4: Push + Draft PR", tags=["build", "github_pr"])
+            base_branch = (
+                cfg.github_pr_base
+                or (git_config.get("remote_default_branch") if git_config else "")
+                or "main"
+            )
+            pr_url = ""
+            try:
+                pr_result = _unwrap(await app.call(
+                    f"{NODE_ID}.run_github_pr",
+                    repo_path=repo_path,
+                    integration_branch=git_config["integration_branch"],
+                    base_branch=base_branch,
+                    goal=goal,
+                    build_summary=build_summary,
+                    completed_issues=dag_result.get("completed_issues", []),
+                    accumulated_debt=dag_result.get("accumulated_debt", []),
+                    artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
+                    model=resolved["git_model"],
+                    permission_mode=cfg.permission_mode,
+                    ai_provider=cfg.ai_provider,
+                ), "run_github_pr")
+                pr_url = pr_result.get("pr_url", "")
+                if pr_url:
+                    app.note(f"Draft PR created: {pr_url}", tags=["build", "github_pr", "complete"])
+
+                    # Programmatically append plan docs to PR body
+                    if prd_markdown or architecture_markdown:
+                        try:
+                            current_body = subprocess.run(
+                                ["gh", "pr", "view", str(pr_result.get("pr_number", 0)),
+                                 "--json", "body", "--jq", ".body"],
+                                cwd=repo_path, capture_output=True, text=True, check=True,
+                            ).stdout.strip()
+
+                            plan_sections = "\n\n---\n"
+                            if prd_markdown:
+                                plan_sections += (
+                                    "\n<details><summary>📋 PRD (Product Requirements Document)"
+                                    "</summary>\n\n"
+                                    + prd_markdown
+                                    + "\n\n</details>\n"
+                                )
+                            if architecture_markdown:
+                                plan_sections += (
+                                    "\n<details><summary>🏗️ Architecture</summary>\n\n"
+                                    + architecture_markdown
+                                    + "\n\n</details>\n"
+                                )
+
+                            new_body = current_body + plan_sections
+
+                            subprocess.run(
+                                ["gh", "pr", "edit", str(pr_result.get("pr_number", 0)),
+                                 "--body", new_body],
+                                cwd=repo_path, capture_output=True, text=True, check=True,
+                            )
+                            app.note(
+                                "Plan docs appended to PR body",
+                                tags=["build", "github_pr", "plan_docs"],
+                            )
+                        except subprocess.CalledProcessError as e:
+                            app.note(
+                                f"Failed to append plan docs to PR (non-fatal): {e}",
+                                tags=["build", "github_pr", "plan_docs", "warning"],
+                            )
+                else:
+                    app.note(
+                        f"PR creation failed: {pr_result.get('error_message', 'unknown')}",
+                        tags=["build", "github_pr", "error"],
+                    )
+                if pr_url:
+                    pr_results.append(RepoPRResult(
+                        repo_name=_repo_name_from_url(cfg.repo_url) if cfg.repo_url else "repo",
+                        repo_url=cfg.repo_url,
+                        success=True,
+                        pr_url=pr_url,
+                        pr_number=pr_result.get("pr_number", 0),
+                    ))
+            except Exception as e:
+                app.note(f"PR creation failed: {e}", tags=["build", "github_pr", "error"])
 
     return BuildResult(
         plan_result=plan_result,
@@ -512,7 +726,7 @@ async def build(
         success=success,
         summary=f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
                 + (f", verification: {verification.get('summary', '')}" if verification else ""),
-        pr_url=pr_url,
+        pr_results=pr_results,
     ).model_dump()
 
 
@@ -695,6 +909,7 @@ async def execute(
     git_config: dict | None = None,
     resume: bool = False,
     build_id: str = "",
+    workspace_manifest: dict | None = None,
 ) -> dict:
     """Execute a planned DAG with self-healing replanning.
 
@@ -707,6 +922,9 @@ async def execute(
         git_config: Optional git configuration from ``run_git_init``. Enables
             branch-per-issue workflow when provided.
         resume: If True, attempt to resume from a checkpoint file.
+        workspace_manifest: Optional WorkspaceManifest.model_dump() for multi-repo builds.
+            None for single-repo builds (backward compat). When provided, enables
+            per-repo git init and merger dispatch.
     """
     from swe_af.execution.dag_executor import run_dag
     from swe_af.execution.schemas import ExecutionConfig
@@ -737,6 +955,7 @@ async def execute(
         git_config=git_config,
         resume=resume,
         build_id=build_id,
+        workspace_manifest=workspace_manifest,
     )
     return state.model_dump()
 

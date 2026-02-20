@@ -17,10 +17,6 @@ from pydantic import BaseModel
 from swe_af.agent_ai import AgentAI, AgentAIConfig
 from swe_af.agent_ai.types import Tool
 from swe_af.execution.schemas import DEFAULT_AGENT_MAX_TURNS
-from swe_af.prompts.architect import architect_prompts
-from swe_af.prompts.product_manager import product_manager_prompts
-from swe_af.prompts.sprint_planner import sprint_planner_prompts
-from swe_af.prompts.tech_lead import tech_lead_prompts
 from swe_af.reasoners.schemas import (
     Architecture,
     PlannedIssue,
@@ -186,6 +182,7 @@ async def run_product_manager(
         permission_mode=permission_mode or None,
     ))
 
+    from swe_af.prompts.product_manager import product_manager_prompts  # noqa: PLC0415
     system_prompt, task_prompt = product_manager_prompts(
         goal=goal,
         repo_path=repo_path,
@@ -233,6 +230,7 @@ async def run_architect(
     ))
 
     prd_obj = PRD(**prd)
+    from swe_af.prompts.architect import architect_prompts  # noqa: PLC0415
     system_prompt, task_prompt = architect_prompts(
         prd=prd_obj,
         repo_path=repo_path,
@@ -280,6 +278,7 @@ async def run_tech_lead(
         permission_mode=permission_mode or None,
     ))
 
+    from swe_af.prompts.tech_lead import tech_lead_prompts  # noqa: PLC0415
     system_prompt, task_prompt = tech_lead_prompts(
         prd_path=paths["prd"],
         architecture_path=paths["architecture"],
@@ -339,6 +338,7 @@ async def run_sprint_planner(
 
     prd_obj = PRD(**prd)
     arch_obj = Architecture(**architecture)
+    from swe_af.prompts.sprint_planner import sprint_planner_prompts  # noqa: PLC0415
     system_prompt, task_prompt = sprint_planner_prompts(
         prd=prd_obj,
         architecture=arch_obj,
