@@ -71,7 +71,12 @@ Rust-based Python compiler benchmark (built autonomously):
 | Geometric mean         | 1.0x baseline        | 253.8x                       | **253.8x**              |
 | Peak throughput        | ~52 ops/s            | 31,807 ops/s                 | **~612x**               |
 
-> Throughput comparison measures different execution models: CPython subprocess spawn (~19ms per call → ~52 ops/s) vs RustPython pre-warmed interpreter pool (in-process). This is the real-world tradeoff the system was built to optimize — replacing repeated subprocess invocations with a persistent pool for short-snippet execution.
+<details>
+<summary>Measurement methodology</summary>
+
+Throughput comparison measures different execution models: CPython subprocess spawn (~19ms per call → ~52 ops/s) vs RustPython pre-warmed interpreter pool (in-process). This is the real-world tradeoff the system was built to optimize — replacing repeated subprocess invocations with a persistent pool for short-snippet execution.
+
+</details>
 
 Artifact trail includes **175 tracked autonomous agents** across planning, coding, review, merge, and verification.
 
