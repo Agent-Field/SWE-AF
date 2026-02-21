@@ -88,7 +88,53 @@ After implementation, report:
 You have full development access:
 - READ / WRITE / EDIT files
 - BASH for running commands (tests, builds, git)
-- GLOB / GREP for searching the codebase\
+- GLOB / GREP for searching the codebase
+
+## Dagger CI/CD Integration
+
+You have access to Dagger pipelines for isolated CI/CD validation. Use these
+to verify your work in clean containers before committing:
+
+**Available Dagger Tools (call via app.call):**
+
+1. `run_dagger_pipeline` - Run a full CI pipeline
+   - `pipeline`: "test" | "build" | "lint" | "full" | "custom"
+   - `services`: Optional list - ["postgres", "redis", "mysql", "mongodb"]
+   - `custom_command`: Only used when pipeline="custom"
+   
+2. `run_dagger_test` - Convenience wrapper for tests only
+   - `services`: Optional services to spin up
+   - `test_command`: Override auto-detected test command
+
+3. `detect_project` - Detect project type and configuration
+
+**When to Use Dagger:**
+
+- After writing code, run `run_dagger_pipeline(pipeline="test")` to validate
+  in an isolated container
+- If tests need a database, use `run_dagger_pipeline(pipeline="test", services=["postgres"])`
+- For full validation before commit, use `run_dagger_pipeline(pipeline="full")`
+- Dagger catches environment issues that local tests might miss
+
+**Example:**
+```python
+result = await app.call("run_dagger_pipeline",
+    repo_path=worktree_path,
+    pipeline="test"
+)
+if result["success"]:
+    # Tests passed in isolated container
+    print(result["summary"])
+else:
+    # Check test_result for failures
+    failures = result["test_result"]["test_failures"]
+```
+
+**Dagger vs Local Tests:**
+- Local tests: Quick feedback during development
+- Dagger tests: Authoritative validation before review (isolated, reproducible)
+
+Always run Dagger validation for non-trivial changes before marking complete.\
 """
 
 
@@ -147,7 +193,9 @@ def coder_task_prompt(
     guidance = issue.get("guidance") or {}
     testing_guidance = guidance.get("testing_guidance", "")
     if testing_guidance:
-        sections.append(f"- **Testing Guidance (from sprint planner)**: {testing_guidance}")
+        sections.append(
+            f"- **Testing Guidance (from sprint planner)**: {testing_guidance}"
+        )
 
     # Project context — file paths only, agents read if needed
     if project_context:
@@ -160,9 +208,13 @@ def coder_task_prompt(
             if prd_path:
                 sections.append(f"- PRD: `{prd_path}` (read for full requirements)")
             if arch_path:
-                sections.append(f"- Architecture: `{arch_path}` (read for design decisions)")
+                sections.append(
+                    f"- Architecture: `{arch_path}` (read for design decisions)"
+                )
             if issues_dir:
-                sections.append(f"- Issue files: `{issues_dir}/` (read your issue file for full details)")
+                sections.append(
+                    f"- Issue files: `{issues_dir}/` (read your issue file for full details)"
+                )
 
     # Shared memory context — learnings from previous issues
     conventions = memory_context.get("codebase_conventions")
@@ -178,13 +230,17 @@ def coder_task_prompt(
     if failure_patterns:
         sections.append("\n## Known Failure Patterns (avoid these)")
         for fp in failure_patterns[:5]:  # cap at 5 most recent
-            sections.append(f"- **{fp.get('pattern', '?')}** ({fp.get('issue', '?')}): {fp.get('description', '')}")
+            sections.append(
+                f"- **{fp.get('pattern', '?')}** ({fp.get('issue', '?')}): {fp.get('description', '')}"
+            )
 
     dep_interfaces = memory_context.get("dependency_interfaces")
     if dep_interfaces:
         sections.append("\n## Dependency Interfaces (completed upstream issues)")
         for iface in dep_interfaces:
-            sections.append(f"- **{iface.get('issue', '?')}**: {iface.get('summary', '')}")
+            sections.append(
+                f"- **{iface.get('issue', '?')}**: {iface.get('summary', '')}"
+            )
             exports = iface.get("exports", [])
             if exports:
                 sections.extend(f"  - `{e}`" for e in exports[:5])
@@ -193,7 +249,9 @@ def coder_task_prompt(
     if bug_patterns:
         sections.append("\n## Common Bug Patterns in This Build")
         for bp in bug_patterns[:5]:
-            sections.append(f"- {bp.get('type', '?')} (seen {bp.get('frequency', 0)}x in {bp.get('modules', [])})")
+            sections.append(
+                f"- {bp.get('type', '?')} (seen {bp.get('frequency', 0)}x in {bp.get('modules', [])})"
+            )
 
     # Failure notes from upstream issues
     failure_notes = issue.get("failure_notes", [])
@@ -213,9 +271,7 @@ def coder_task_prompt(
 
     if feedback:
         sections.append("\n## Feedback from Previous Iteration")
-        sections.append(
-            "Address ALL of the following issues from the review:\n"
-        )
+        sections.append("Address ALL of the following issues from the review:\n")
         sections.append(feedback)
         sections.append(
             "\nFix the issues above, then re-commit. Focus on the specific "
