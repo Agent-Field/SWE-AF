@@ -227,6 +227,58 @@ Framework detection via dependency inspection:
 - Python: `fastapi`, `django`, `flask`
 - Node: `next`, `react`, `express`
 
+## CLI Usage
+
+SWE-AF provides a CLI for running Dagger pipelines directly:
+
+```bash
+# Show help
+uv run python -m swe_af dagger --help
+
+# Detect project type only (fast)
+uv run python -m swe_af dagger --detect
+
+# Run lint in isolated container
+uv run python -m swe_af dagger --pipeline lint
+
+# Run tests in isolated container
+uv run python -m swe_af dagger --pipeline test
+
+# Run build in isolated container
+uv run python -m swe_af dagger --pipeline build
+
+# Run full CI (build + test + lint)
+uv run python -m swe_af dagger --pipeline full
+
+# With services (databases)
+uv run python -m swe_af dagger --pipeline test --services postgres,redis
+
+# Run on a different project
+uv run python -m swe_af dagger --path /path/to/project --pipeline test
+
+# Custom timeout (seconds)
+uv run python -m swe_af dagger --pipeline test --timeout 600
+```
+
+### CLI Options
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--detect` | `-d` | Only detect project type, don't run pipeline |
+| `--pipeline` | `-p` | Pipeline type: `test`, `build`, `lint`, `full`, `custom` |
+| `--path` | `-C` | Project path (default: current directory) |
+| `--services` | `-s` | Services: `postgres,redis,mysql,mongodb` |
+| `--timeout` | `-t` | Timeout in seconds (default: 300) |
+| `--custom-command` | | Custom command (only with `--pipeline custom`) |
+
+### CLI vs Agent API
+
+| Use Case | Method |
+|----------|--------|
+| Developer testing locally | CLI: `uv run python -m swe_af dagger --pipeline test` |
+| Agent validating code | API: `app.call("run_dagger_pipeline", ...)` |
+| CI/CD pipeline | CLI or API both work |
+
 ## Usage in Agents
 
 ### In Coder Prompt
