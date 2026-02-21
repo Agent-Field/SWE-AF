@@ -102,8 +102,8 @@ class TestAppStubState:
 
     def test_app_module_is_importable(self) -> None:
         """swe_af.fast.app must import without error (AC-1)."""
-        import swe_af.fast.app  # noqa: F401, PLC0415
-        assert swe_af.fast.app is not None
+        import swe_af.fast.app as _fast_app_mod  # noqa: PLC0415
+        assert _fast_app_mod is not None
 
     def test_app_module_has_app_attribute(self) -> None:
         """swe_af.fast.app must expose an 'app' AgentField node (AC-8).
@@ -350,7 +350,7 @@ class TestNodeIdRouting:
                 repo_path="/tmp/my-repo",
                 coder_model="sonnet",
                 permission_mode="strict",
-                ai_provider="anthropic",
+                ai_provider="claude",
                 task_timeout_seconds=30,
             ))
 
@@ -362,7 +362,7 @@ class TestNodeIdRouting:
         assert kwargs.get("worktree_path") == "/tmp/my-repo", (
             "executor must pass repo_path as 'worktree_path' to app.call"
         )
-        assert kwargs.get("ai_provider") == "anthropic", (
+        assert kwargs.get("ai_provider") == "claude", (
             "executor must pass ai_provider to app.call"
         )
         assert kwargs.get("permission_mode") == "strict", (

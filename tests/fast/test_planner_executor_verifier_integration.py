@@ -282,11 +282,18 @@ class TestExecutorOutputCompatibleWithVerifier:
             ))
 
         assert result["passed"] is True
-        # Verify the task_results were forwarded to app.call
+        # Verify the task_results were forwarded to app.call as completed/failed split
         call_kwargs = mock_app.app.call.call_args.kwargs
-        assert len(call_kwargs["task_results"]) == 2
-        assert call_kwargs["task_results"][0]["task_name"] == "t1"
-        assert call_kwargs["task_results"][1]["outcome"] == "timeout"
+        completed = call_kwargs.get("completed_issues", [])
+        failed = call_kwargs.get("failed_issues", [])
+        # t1 was completed → in completed_issues
+        assert any(entry.get("issue_name") == "t1" for entry in completed), (
+            "completed task t1 must appear in completed_issues sent to run_verifier"
+        )
+        # t2 was timeout (non-completed) → in failed_issues
+        assert any(entry.get("issue_name") == "t2" for entry in failed), (
+            "timeout task t2 must appear in failed_issues sent to run_verifier"
+        )
 
     def test_failed_executor_tasks_visible_to_verifier(self) -> None:
         """Executor 'failed' and 'timeout' outcomes must be visible in verifier task_results."""
@@ -630,18 +637,25 @@ class TestVerifierForwardsAllKwargsToAppCall:
 
         assert mock_app.app.call.called, "app.call must be called"
         call_kwargs = mock_app.app.call.call_args.kwargs
-        required = {"prd", "repo_path", "task_results", "verifier_model",
-                    "permission_mode", "ai_provider", "artifacts_dir"}
+        # fast_verify adapts its inputs before forwarding to run_verifier:
+        # - task_results → completed_issues + failed_issues + skipped_issues
+        # - verifier_model → model
+        required = {"prd", "repo_path", "completed_issues", "failed_issues",
+                    "model", "permission_mode", "ai_provider", "artifacts_dir"}
         for key in required:
             assert key in call_kwargs, (
                 f"Verifier must forward '{key}' to app.call — it was missing"
             )
 
     def test_verifier_passes_run_verifier_as_first_arg(self) -> None:
-        """fast_verify must call app.call with 'run_verifier' as the first positional arg."""
+        """fast_verify must call app.call with a target containing 'run_verifier'.
+
+        fast_verify routes via f"{NODE_ID}.run_verifier" so the arg is NODE_ID-prefixed.
+        """
         verify_response = {"passed": True, "summary": "", "criteria_results": [], "suggested_fixes": []}
         mock_app = MagicMock()
         mock_app.app.call = AsyncMock(return_value=verify_response)
+        mock_app.NODE_ID = "swe-fast"  # mimic the real module's NODE_ID
 
         with patch.dict("sys.modules", {"swe_af.fast.app": mock_app}):
             from swe_af.fast.verifier import fast_verify  # noqa: PLC0415
@@ -657,10 +671,11 @@ class TestVerifierForwardsAllKwargsToAppCall:
             ))
 
         call_args = mock_app.app.call.call_args
-        # First positional arg must be 'run_verifier'
-        assert call_args.args[0] == "run_verifier", (
-            f"fast_verify must call app.call with 'run_verifier' as first arg, "
-            f"got {call_args.args[0]!r}"
+        # First positional arg must contain 'run_verifier'
+        first_arg = call_args.args[0] if call_args.args else None
+        assert isinstance(first_arg, str) and "run_verifier" in first_arg, (
+            f"fast_verify must call app.call with a target containing 'run_verifier', "
+            f"got {first_arg!r}"
         )
 
 

@@ -370,7 +370,13 @@ class TestVerifierCallArgForwarding:
     """fast_verify must forward all required kwargs to app.call."""
 
     def test_all_six_required_kwargs_forwarded(self) -> None:
-        """All 6 required parameters must appear in the kwargs sent to app.call."""
+        """All required parameters must appear in the kwargs sent to app.call.
+
+        fast_verify adapts its inputs before calling run_verifier:
+        - task_results → completed_issues / failed_issues / skipped_issues
+        - verifier_model → model
+        The adapted kwargs must all reach app.call.
+        """
         verify_response = {
             "passed": True,
             "summary": "all good",
@@ -395,9 +401,11 @@ class TestVerifierCallArgForwarding:
 
         assert mock_app.app.call.called, "app.call must be invoked"
         call_kwargs = mock_app.app.call.call_args.kwargs
+        # fast_verify adapts task_results → completed/failed/skipped and
+        # verifier_model → model before forwarding to run_verifier.
         required_kwargs = {
-            "prd", "repo_path", "task_results",
-            "verifier_model", "permission_mode", "ai_provider", "artifacts_dir",
+            "prd", "repo_path", "completed_issues", "failed_issues",
+            "model", "permission_mode", "ai_provider", "artifacts_dir",
         }
         missing = required_kwargs - set(call_kwargs.keys())
         assert not missing, (
@@ -406,10 +414,15 @@ class TestVerifierCallArgForwarding:
         )
 
     def test_first_positional_arg_is_run_verifier(self) -> None:
-        """The first positional arg to app.call must be 'run_verifier'."""
+        """The first positional arg to app.call must contain 'run_verifier'.
+
+        fast_verify routes via f"{NODE_ID}.run_verifier"; the call target is
+        NODE_ID-prefixed so we check that 'run_verifier' appears in the arg.
+        """
         verify_response = {"passed": False, "summary": "", "criteria_results": [], "suggested_fixes": []}
         mock_app = MagicMock()
         mock_app.app.call = AsyncMock(return_value=verify_response)
+        mock_app.NODE_ID = "swe-fast"  # mimic the real module's NODE_ID
 
         with patch.dict("sys.modules", {"swe_af.fast.app": mock_app}):
             from swe_af.fast.verifier import fast_verify
@@ -426,13 +439,17 @@ class TestVerifierCallArgForwarding:
 
         call_args = mock_app.app.call.call_args
         first_arg = call_args.args[0] if call_args.args else None
-        assert first_arg == "run_verifier", (
-            f"fast_verify must call app.call('run_verifier', ...), "
+        assert isinstance(first_arg, str) and "run_verifier" in first_arg, (
+            f"fast_verify must call app.call with a target containing 'run_verifier', "
             f"got first arg: {first_arg!r}"
         )
 
     def test_task_results_forwarded_correctly(self) -> None:
-        """Executor-produced task_results must be forwarded to run_verifier unchanged."""
+        """Executor-produced task_results must reach run_verifier via completed/failed split.
+
+        fast_verify adapts task_results: completed → completed_issues,
+        non-completed → failed_issues (with task_name as issue_name).
+        """
         from swe_af.fast.schemas import FastTaskResult, FastExecutionResult
 
         exec_result = FastExecutionResult(
@@ -450,6 +467,7 @@ class TestVerifierCallArgForwarding:
         verify_response = {"passed": False, "summary": "partial", "criteria_results": [], "suggested_fixes": []}
         mock_app = MagicMock()
         mock_app.app.call = AsyncMock(return_value=verify_response)
+        mock_app.NODE_ID = "swe-fast"
 
         with patch.dict("sys.modules", {"swe_af.fast.app": mock_app}):
             from swe_af.fast.verifier import fast_verify
@@ -465,11 +483,16 @@ class TestVerifierCallArgForwarding:
             ))
 
         call_kwargs = mock_app.app.call.call_args.kwargs
-        forwarded = call_kwargs["task_results"]
-        assert len(forwarded) == 2, "Both task results must be forwarded"
-        assert forwarded[0]["task_name"] == "setup"
-        assert forwarded[1]["outcome"] == "timeout", (
-            "Timeout outcome from executor must reach verifier intact"
+        # fast_verify splits task_results into completed_issues + failed_issues
+        completed = call_kwargs.get("completed_issues", [])
+        failed = call_kwargs.get("failed_issues", [])
+        # 'setup' was completed → goes into completed_issues
+        assert any(entry.get("issue_name") == "setup" for entry in completed), (
+            "Completed task 'setup' must appear in completed_issues forwarded to run_verifier"
+        )
+        # 'test' had outcome='timeout' (non-completed) → goes into failed_issues
+        assert any(entry.get("issue_name") == "test" for entry in failed), (
+            "Timeout task 'test' must appear in failed_issues forwarded to run_verifier"
         )
 
 

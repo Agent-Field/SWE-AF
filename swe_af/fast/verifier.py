@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 @fast_router.reasoner()
 async def fast_verify(
+    *,
     prd: dict[str, Any],
     repo_path: str,
     task_results: list[dict[str, Any]],

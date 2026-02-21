@@ -334,6 +334,12 @@ class TestCoImportNodeIdDistinction:
 # ---------------------------------------------------------------------------
 
 
+def _docker_compose_path() -> str:
+    """Return the path to docker-compose.yml relative to this test file's project root."""
+    import pathlib  # noqa: PLC0415
+    return str(pathlib.Path(__file__).parent.parent.parent / "docker-compose.yml")
+
+
 class TestDockerComposeNodeIdIsolation:
     """Tests that docker-compose services have distinct, correctly set NODE_ID values."""
 
@@ -341,7 +347,7 @@ class TestDockerComposeNodeIdIsolation:
         """docker-compose.yml swe-fast service must have NODE_ID=swe-fast."""
         import yaml  # noqa: PLC0415
 
-        with open("/workspaces/swe-af/docker-compose.yml") as f:
+        with open(_docker_compose_path()) as f:
             dc = yaml.safe_load(f)
 
         assert "swe-fast" in dc["services"], "swe-fast service must exist in docker-compose.yml"
@@ -360,7 +366,7 @@ class TestDockerComposeNodeIdIsolation:
         """docker-compose.yml swe-agent service must have NODE_ID=swe-planner."""
         import yaml  # noqa: PLC0415
 
-        with open("/workspaces/swe-af/docker-compose.yml") as f:
+        with open(_docker_compose_path()) as f:
             dc = yaml.safe_load(f)
 
         svc_name = "swe-agent"
@@ -382,7 +388,7 @@ class TestDockerComposeNodeIdIsolation:
         """swe-fast and swe-planner services must have different NODE_IDs in docker-compose.yml."""
         import yaml  # noqa: PLC0415
 
-        with open("/workspaces/swe-af/docker-compose.yml") as f:
+        with open(_docker_compose_path()) as f:
             dc = yaml.safe_load(f)
 
         services = dc.get("services", {})
@@ -408,7 +414,7 @@ class TestDockerComposeNodeIdIsolation:
         """swe-fast service PORT env must be 8004 (not 8000, the planner's port)."""
         import yaml  # noqa: PLC0415
 
-        with open("/workspaces/swe-af/docker-compose.yml") as f:
+        with open(_docker_compose_path()) as f:
             dc = yaml.safe_load(f)
 
         svc = dc["services"]["swe-fast"]

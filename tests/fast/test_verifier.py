@@ -39,7 +39,7 @@ _CALL_KWARGS: dict[str, Any] = {
     "task_results": [{"task_name": "init", "outcome": "completed"}],
     "verifier_model": "haiku",
     "permission_mode": "default",
-    "ai_provider": "anthropic",
+    "ai_provider": "claude",
     "artifacts_dir": "/tmp/artifacts",
 }
 
@@ -276,10 +276,12 @@ class TestFastVerifyEdgeCases:
             result = _run(fast_verify(**kwargs))
 
         assert result["passed"] is True
-        # Verify app.call was invoked with empty task_results
+        # Verify app.call was invoked; fast_verify converts task_results to
+        # completed_issues + failed_issues + skipped_issues before forwarding.
         mock_app.call.assert_called_once()
         call_kwargs = mock_app.call.call_args.kwargs
-        assert call_kwargs["task_results"] == []
+        assert call_kwargs.get("completed_issues") == []
+        assert call_kwargs.get("failed_issues") == []
 
     def test_empty_task_results_exception_fallback(self) -> None:
         """empty task_results + exception still returns safe fallback."""
