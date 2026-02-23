@@ -12,6 +12,7 @@ import asyncio
 import os
 import re
 import subprocess
+import time
 import uuid
 
 from swe_af.reasoners import router
@@ -638,13 +639,17 @@ async def plan(
         f"Phase 4b: Writing {len(issues)} issue files in parallel",
         tags=["pipeline", "issue_writers"],
     )
-    writer_tasks = []
-    for issue in issues:
+
+    # AC4: Wrap Issue Writer calls with timing instrumentation
+    async def _write_issue_with_timing(issue: dict) -> dict:
+        """Wrap Issue Writer call with timing metrics."""
+        issue_name = issue.get("name", "unknown")
+        start = time.time()
         siblings = [
             {"name": i["name"], "title": i.get("title", ""), "provides": i.get("provides", [])}
             for i in issues if i["name"] != issue["name"]
         ]
-        writer_tasks.append(app.call(
+        result = await app.call(
             f"{NODE_ID}.run_issue_writer",
             issue=issue,
             prd_summary=prd_summary_str,
@@ -657,7 +662,15 @@ async def plan(
             model=issue_writer_model,
             permission_mode=permission_mode,
             ai_provider=ai_provider,
-        ))
+        )
+        duration = time.time() - start
+        app.note(
+            f"Issue Writer: {issue_name} in {duration:.1f}s",
+            tags=["issue_writer", "complete", issue_name, f"duration:{duration:.1f}"]
+        )
+        return result
+
+    writer_tasks = [_write_issue_with_timing(issue) for issue in issues]
     writer_results = await asyncio.gather(*writer_tasks, return_exceptions=True)
 
     succeeded = sum(1 for r in writer_results if isinstance(r, dict) and r.get("success"))

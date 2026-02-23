@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import traceback
 import uuid
 from typing import Callable
@@ -36,6 +37,28 @@ async def _call_with_timeout(coro, timeout: int = 2700, label: str = ""):
         return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
         raise TimeoutError(f"Agent call '{label}' timed out after {timeout}s")
+
+
+def _log_agent_metrics(
+    note_fn: Callable | None,
+    role: str,
+    duration: float,
+    success: bool,
+    iteration: int = 0,
+    extra_tags: list[str] | None = None
+) -> None:
+    """Log structured agent completion metrics."""
+    if note_fn is None:
+        return
+    tags = ["agent_metrics", f"role:{role}", f"duration:{duration:.1f}", f"success:{success}"]
+    if iteration > 0:
+        tags.append(f"iteration:{iteration}")
+    if extra_tags:
+        tags.extend(extra_tags)
+    note_fn(
+        f"{role}: {duration:.1f}s, success={success}",
+        tags=tags
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +547,7 @@ async def run_coding_loop(
     # Extract guidance — determines execution path
     guidance = issue.get("guidance") or {}
     needs_deeper_qa = guidance.get("needs_deeper_qa", False)
+    is_trivial = guidance.get("trivial", False)
 
     # Slim project context — paths only, agents read files if needed
     project_context = {
@@ -540,6 +564,12 @@ async def run_coding_loop(
             f"Coding loop starting: {issue_name} [{path_label}] (max {max_iterations} iterations)",
             tags=["coding_loop", "start", issue_name],
         )
+        # AC1: Log trivial flag for baseline instrumentation
+        if is_trivial:
+            note_fn(
+                f"{issue_name} marked trivial",
+                tags=["coding_loop", "trivial", "eligible", issue_name]
+            )
 
     feedback = ""
     iteration_history: list[dict] = []
@@ -573,6 +603,7 @@ async def run_coding_loop(
         memory_context = await _read_memory_context(memory_fn, issue)
 
         # --- 1. CODER ---
+        coder_start = time.time()
         try:
             coder_result = await _call_with_timeout(
                 call_fn(
@@ -590,6 +621,16 @@ async def run_coding_loop(
                 ),
                 timeout=timeout,
                 label=f"coder:{issue_name}:iter{iteration}",
+            )
+            coder_duration = time.time() - coder_start
+            # AC2 & AC3: Log coder metrics with test pass status
+            _log_agent_metrics(
+                note_fn=note_fn,
+                role="coder",
+                duration=coder_duration,
+                success=coder_result.get("complete", False),
+                iteration=iteration,
+                extra_tags=[issue_name, f"tests_passed:{coder_result.get('tests_passed')}"]
             )
         except Exception as e:
             if note_fn:
