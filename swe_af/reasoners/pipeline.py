@@ -155,6 +155,58 @@ def _assign_sequence_numbers(issues: list[dict], levels: list[list[str]]) -> lis
     return list(issue_by_name.values())
 
 
+def _serialize_prd_to_markdown(prd: PRD) -> str:
+    """Serialize a PRD object to markdown format.
+
+    This is used for atomic file writes - we serialize the structured output
+    before writing it to disk.
+    """
+    sections = []
+
+    # Validated description
+    sections.append("# Product Requirements Document\n")
+    sections.append("## Validated Product Description\n")
+    sections.append(f"{prd.validated_description}\n")
+
+    # Acceptance criteria
+    if prd.acceptance_criteria:
+        sections.append("## Acceptance Criteria\n")
+        for i, criterion in enumerate(prd.acceptance_criteria, 1):
+            sections.append(f"### AC{i}\n{criterion}\n")
+
+    # Must have
+    if prd.must_have:
+        sections.append("## Must Have\n")
+        for item in prd.must_have:
+            sections.append(f"- {item}\n")
+
+    # Nice to have
+    if prd.nice_to_have:
+        sections.append("## Nice to Have\n")
+        for item in prd.nice_to_have:
+            sections.append(f"- {item}\n")
+
+    # Out of scope
+    if prd.out_of_scope:
+        sections.append("## Out of Scope\n")
+        for item in prd.out_of_scope:
+            sections.append(f"- {item}\n")
+
+    # Assumptions
+    if prd.assumptions:
+        sections.append("## Assumptions\n")
+        for item in prd.assumptions:
+            sections.append(f"- {item}\n")
+
+    # Risks
+    if prd.risks:
+        sections.append("## Risks\n")
+        for item in prd.risks:
+            sections.append(f"- {item}\n")
+
+    return "\n".join(sections)
+
+
 # ---------------------------------------------------------------------------
 # Reasoners
 # ---------------------------------------------------------------------------
@@ -204,34 +256,42 @@ async def run_product_manager(
     if response.parsed is None:
         raise RuntimeError("Product manager failed to produce a valid PRD")
 
-    # Atomic write: If the PM agent wrote a PRD file, rewrite it atomically
-    # to prevent race conditions with concurrent Architect reads
+    # Atomic write: Write PRD file atomically to prevent race conditions with
+    # concurrent Architect reads. The agent returns structured output; we
+    # serialize and write it atomically here.
     prd_path = paths["prd"]
-    if os.path.isfile(prd_path):
-        try:
-            # Read the content that was written
-            with open(prd_path, 'r', encoding='utf-8') as f:
-                prd_content = f.read()
+    prd_content = _serialize_prd_to_markdown(response.parsed)
 
-            # Write to temp file in same directory (same filesystem for atomic rename)
-            temp_fd, temp_path = tempfile.mkstemp(
-                dir=os.path.dirname(prd_path),
-                prefix=".prd_",
-                suffix=".md.tmp"
-            )
+    # Create temp file in same directory (same filesystem for atomic rename)
+    temp_fd = None
+    temp_path = None
+    try:
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=os.path.dirname(prd_path),
+            prefix=".prd_",
+            suffix=".md.tmp"
+        )
+        # Write content to temp file (using os.write to avoid double-close of fd)
+        os.write(temp_fd, prd_content.encode('utf-8'))
+        os.close(temp_fd)
+        temp_fd = None  # Mark as closed
+
+        # Atomic rename (POSIX guarantee)
+        shutil.move(temp_path, prd_path)
+        temp_path = None  # Mark as successfully moved
+    except Exception:
+        # Clean up temp file on failure
+        if temp_fd is not None:
             try:
-                with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
-                    f.write(prd_content)
-                # Atomic rename (POSIX guarantee)
-                shutil.move(temp_path, prd_path)
+                os.close(temp_fd)
             except Exception:
-                # Clean up temp file on failure
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-                raise
-        except Exception as e:
-            router.note(f"Warning: Failed to rewrite PRD atomically: {e}", tags=["pm", "warning"])
-            # Non-fatal - the PRD was already written by the agent
+                pass
+        if temp_path is not None and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+        raise
 
     router.note("PM complete", tags=["pm", "complete"])
     return response.parsed.model_dump()

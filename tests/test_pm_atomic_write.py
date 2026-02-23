@@ -64,10 +64,6 @@ def test_temp_file_creation_and_atomic_rename(tmp_path):
     prd_dir.mkdir(parents=True)
     prd_path = prd_dir / "prd.md"
 
-    # Write initial PRD content (simulating what the PM agent would do)
-    initial_content = "# PRD\n\nTest content for atomic write"
-    prd_path.write_text(initial_content)
-
     # Mock AgentAI to return a valid PRD without actually running
     mock_response = MagicMock()
     mock_response.parsed = _make_valid_prd()
@@ -85,28 +81,24 @@ def test_temp_file_creation_and_atomic_rename(tmp_path):
 
         # Track calls to tempfile.mkstemp and shutil.move
         with patch("tempfile.mkstemp") as mock_mkstemp, \
-             patch("shutil.move") as mock_move:
+             patch("shutil.move") as mock_move, \
+             patch("os.write") as mock_write, \
+             patch("os.close") as mock_close:
 
             # Set up mock tempfile
             temp_fd = 999
             temp_path = str(prd_dir / ".prd_test.md.tmp")
             mock_mkstemp.return_value = (temp_fd, temp_path)
 
-            # Mock os.fdopen to return a writable file-like object
-            mock_file = MagicMock()
-            mock_file.__enter__ = MagicMock(return_value=mock_file)
-            mock_file.__exit__ = MagicMock(return_value=False)
+            # Import after patching
+            from swe_af.reasoners.pipeline import run_product_manager
 
-            with patch("os.fdopen", return_value=mock_file):
-                # Import after patching
-                from swe_af.reasoners.pipeline import run_product_manager
-
-                # Run the PM
-                result = _run(run_product_manager(
-                    goal="Test goal",
-                    repo_path=str(repo_path),
-                    artifacts_dir=artifacts_dir,
-                ))
+            # Run the PM
+            result = _run(run_product_manager(
+                goal="Test goal",
+                repo_path=str(repo_path),
+                artifacts_dir=artifacts_dir,
+            ))
 
             # Verify mkstemp was called with correct directory
             mock_mkstemp.assert_called_once()
@@ -114,6 +106,13 @@ def test_temp_file_creation_and_atomic_rename(tmp_path):
             assert call_kwargs["dir"] == str(prd_dir), "Temp file should be in same dir as PRD"
             assert call_kwargs["prefix"] == ".prd_"
             assert call_kwargs["suffix"] == ".md.tmp"
+
+            # Verify os.write was called with the file descriptor
+            mock_write.assert_called_once()
+            assert mock_write.call_args[0][0] == temp_fd
+
+            # Verify os.close was called to close the file descriptor
+            mock_close.assert_called_once_with(temp_fd)
 
             # Verify shutil.move was called for atomic rename
             mock_move.assert_called_once_with(temp_path, str(prd_path))
@@ -131,9 +130,6 @@ def test_exception_handling_cleans_temp_file(tmp_path):
     prd_dir = repo_path / artifacts_dir / "plan"
     prd_dir.mkdir(parents=True)
     prd_path = prd_dir / "prd.md"
-
-    # Write initial PRD content
-    prd_path.write_text("# PRD\n\nTest content")
 
     # Mock AgentAI
     mock_response = MagicMock()
@@ -153,7 +149,9 @@ def test_exception_handling_cleans_temp_file(tmp_path):
         with patch("tempfile.mkstemp") as mock_mkstemp, \
              patch("shutil.move") as mock_move, \
              patch("os.unlink") as mock_unlink, \
-             patch("os.path.exists") as mock_exists:
+             patch("os.path.exists") as mock_exists, \
+             patch("os.write") as mock_write, \
+             patch("os.close") as mock_close:
 
             temp_fd = 999
             temp_path = str(prd_dir / ".prd_test.md.tmp")
@@ -163,27 +161,22 @@ def test_exception_handling_cleans_temp_file(tmp_path):
             # Make shutil.move raise an exception
             mock_move.side_effect = OSError("Simulated write failure")
 
-            # Mock os.fdopen
-            mock_file = MagicMock()
-            mock_file.__enter__ = MagicMock(return_value=mock_file)
-            mock_file.__exit__ = MagicMock(return_value=False)
+            # Import after patching
+            from swe_af.reasoners.pipeline import run_product_manager
 
-            with patch("os.fdopen", return_value=mock_file):
-                # Import after patching
-                from swe_af.reasoners.pipeline import run_product_manager
-
-                # Run the PM - should not raise, but log warning
-                result = _run(run_product_manager(
+            # Run the PM - should raise exception
+            with pytest.raises(OSError, match="Simulated write failure"):
+                _run(run_product_manager(
                     goal="Test goal",
                     repo_path=str(repo_path),
                     artifacts_dir=artifacts_dir,
                 ))
 
+            # Verify file descriptor was closed even on failure
+            mock_close.assert_called_once_with(temp_fd)
+
             # Verify temp file cleanup was attempted
             mock_unlink.assert_called_once_with(temp_path)
-
-    # Should still return valid result even if atomic write fails
-    assert result is not None
 
 
 def test_preserves_existing_behavior_when_no_file(tmp_path):
@@ -240,11 +233,12 @@ def test_concurrent_read_no_partial_content(tmp_path):
     prd_dir.mkdir(parents=True)
     prd_path = prd_dir / "prd.md"
 
-    # Full PRD content that will be written
-    full_prd_content = "# PRD\n\n" + ("Line of content\n" * 1000)
+    # This will be the final PRD content after serialization
+    expected_content_start = "# Product Requirements Document"
     partial_reads = []
     read_thread_running = threading.Event()
     stop_reading = threading.Event()
+    write_started = threading.Event()
 
     def concurrent_reader():
         """Continuously read PRD file and check for partial content."""
@@ -253,13 +247,16 @@ def test_concurrent_read_no_partial_content(tmp_path):
             if prd_path.exists():
                 try:
                     content = prd_path.read_text()
-                    # If we can read it, it should be complete
-                    if content and content != full_prd_content:
-                        partial_reads.append(content)
+                    # Check if we see incomplete content (e.g., partial writes)
+                    # A complete PRD should have all sections
+                    if content and expected_content_start in content:
+                        # Check if content looks incomplete (e.g., truncated mid-line)
+                        if not content.endswith("\n") and write_started.is_set():
+                            partial_reads.append(("truncated", len(content)))
                 except Exception:
                     # File might be mid-operation, skip this read
                     pass
-            time.sleep(0.001)  # High-frequency polling
+            time.sleep(0.0001)  # High-frequency polling
 
     # Start concurrent reader thread
     reader_thread = threading.Thread(target=concurrent_reader)
@@ -267,9 +264,6 @@ def test_concurrent_read_no_partial_content(tmp_path):
 
     # Wait for reader to start
     read_thread_running.wait(timeout=1.0)
-
-    # Write initial content (simulating PM agent write)
-    prd_path.write_text(full_prd_content)
 
     # Mock AgentAI
     mock_response = MagicMock()
@@ -288,7 +282,9 @@ def test_concurrent_read_no_partial_content(tmp_path):
         # Import after patching
         from swe_af.reasoners.pipeline import run_product_manager
 
-        # Run PM (this will do the atomic rewrite)
+        write_started.set()
+
+        # Run PM (this will do the atomic write)
         _run(run_product_manager(
             goal="Test goal",
             repo_path=str(repo_path),
@@ -296,16 +292,19 @@ def test_concurrent_read_no_partial_content(tmp_path):
         ))
 
     # Stop reader and wait for it to finish
-    time.sleep(0.1)  # Let reader do a few more reads
+    time.sleep(0.05)  # Let reader do a few more reads
     stop_reading.set()
     reader_thread.join(timeout=2.0)
 
     # Verify no partial reads occurred
     assert len(partial_reads) == 0, \
-        f"Found {len(partial_reads)} partial reads! Atomic write failed."
+        f"Found {len(partial_reads)} partial reads! Atomic write failed: {partial_reads}"
 
-    # Verify final content is correct
-    assert prd_path.read_text() == full_prd_content
+    # Verify final content exists and is valid
+    assert prd_path.exists()
+    final_content = prd_path.read_text()
+    assert expected_content_start in final_content
+    assert final_content.endswith("\n")
 
 
 def test_prd_write_with_unicode_content(tmp_path):
@@ -317,13 +316,21 @@ def test_prd_write_with_unicode_content(tmp_path):
     prd_dir.mkdir(parents=True)
     prd_path = prd_dir / "prd.md"
 
-    # Unicode content with various characters
-    unicode_content = "# PRD\n\n测试内容 тест содержание ทดสอบเนื้อหา 🚀 ✨"
-    prd_path.write_text(unicode_content, encoding='utf-8')
+    # Create PRD with unicode content
+    unicode_desc = "测试内容 тест содержание ทดสอบเนื้อหา 🚀 ✨"
+    prd_with_unicode = PRD(
+        validated_description=unicode_desc,
+        acceptance_criteria=["AC-1: Unicode support works"],
+        must_have=["Unicode handling 🎯"],
+        nice_to_have=[],
+        out_of_scope=[],
+        assumptions=["UTF-8 encoding"],
+        risks=["None"],
+    )
 
     # Mock AgentAI
     mock_response = MagicMock()
-    mock_response.parsed = _make_valid_prd()
+    mock_response.parsed = prd_with_unicode
 
     # Create a mock router
     mock_router = Mock()
@@ -348,6 +355,8 @@ def test_prd_write_with_unicode_content(tmp_path):
     # Verify result is valid
     assert result is not None
 
-    # Verify content was preserved correctly
+    # Verify content was written with unicode correctly
     final_content = prd_path.read_text(encoding='utf-8')
-    assert final_content == unicode_content
+    assert unicode_desc in final_content
+    assert "🚀" in final_content
+    assert "测试内容" in final_content
