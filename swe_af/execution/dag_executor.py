@@ -600,7 +600,7 @@ async def _execute_single_issue(
                     model=config.issue_advisor_model,
                     ai_provider=config.ai_provider,
                 ),
-                timeout=config.agent_timeout_seconds,
+                timeout=config.timeout_for_role("issue_advisor"),
                 label=f"issue_advisor:{issue_name}:{advisor_round + 1}",
                 note_fn=note_fn,
                 role="issue_advisor",
@@ -1003,13 +1003,19 @@ async def _invoke_replanner_via_call(
             })
 
     replan_start = time.time()
-    decision_dict = await call_fn(
-        f"{node_id}.run_replanner",
-        dag_state=dag_state.model_dump(),
-        failed_issues=[f.model_dump() for f in unrecoverable],
-        replan_model=config.replan_model,
-        ai_provider=config.ai_provider,
-        escalation_notes=escalation_notes,
+    decision_dict = await _call_with_timeout(
+        call_fn(
+            f"{node_id}.run_replanner",
+            dag_state=dag_state.model_dump(),
+            failed_issues=[f.model_dump() for f in unrecoverable],
+            replan_model=config.replan_model,
+            ai_provider=config.ai_provider,
+            escalation_notes=escalation_notes,
+        ),
+        timeout=config.timeout_for_role("replan"),
+        label=f"replanner:{dag_state.current_level}",
+        note_fn=note_fn,
+        role="replan",
     )
     replan_duration = time.time() - replan_start
     decision = ReplanDecision(**decision_dict)

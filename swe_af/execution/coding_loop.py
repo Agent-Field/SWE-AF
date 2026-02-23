@@ -335,7 +335,7 @@ async def _run_default_path(
                 permission_mode=permission_mode,
                 ai_provider=config.ai_provider,
             ),
-            timeout=timeout,
+            timeout=config.timeout_for_role("code_reviewer"),
             label=f"review:{issue_name}:default",
         )
     except Exception as e:
@@ -404,7 +404,7 @@ async def _run_flagged_path(
                 permission_mode=permission_mode,
                 ai_provider=config.ai_provider,
             ),
-            timeout=timeout,
+            timeout=config.timeout_for_role("qa"),
             label=f"qa:{issue_name}:iter{iteration}",
         )
 
@@ -422,7 +422,7 @@ async def _run_flagged_path(
                 permission_mode=permission_mode,
                 ai_provider=config.ai_provider,
             ),
-            timeout=timeout,
+            timeout=config.timeout_for_role("code_reviewer"),
             label=f"review:{issue_name}:iter{iteration}",
         )
 
@@ -481,7 +481,7 @@ async def _run_flagged_path(
                 permission_mode=permission_mode,
                 ai_provider=config.ai_provider,
             ),
-            timeout=timeout,
+            timeout=config.timeout_for_role("qa_synthesizer"),
             label=f"synthesizer:{issue_name}:iter{iteration}",
         )
     except Exception as e:
@@ -541,7 +541,6 @@ async def run_coding_loop(
     worktree_path = issue.get("worktree_path", dag_state.repo_path)
     branch_name = issue.get("branch_name", "")
     max_iterations = config.max_coding_iterations
-    timeout = config.agent_timeout_seconds
     permission_mode = ""  # inherits from agent config
 
     # Extract guidance — determines execution path
@@ -619,7 +618,7 @@ async def run_coding_loop(
                     permission_mode=permission_mode,
                     ai_provider=config.ai_provider,
                 ),
-                timeout=timeout,
+                timeout=config.timeout_for_role("coder"),
                 label=f"coder:{issue_name}:iter{iteration}",
             )
             coder_duration = time.time() - coder_start
