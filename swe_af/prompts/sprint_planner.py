@@ -98,6 +98,41 @@ Provide `guidance` object shaping downstream agent behavior:
 - **needs_deeper_qa** (bool, default false): True activates full QA+reviewer+synthesizer
   (4 calls) vs reviewer only (2 calls). Most issues (70-80%) = false. True for:
   complex logic, security-sensitive, cross-module, interface changes affecting dependents.
+- **trivial** (bool, default false): Fast-path eligible — set true ONLY if ALL criteria hold:
+  * ≤2 acceptance criteria
+  * No dependencies (depends_on empty)
+  * ≤2 files total (len(files_to_create) + len(files_to_modify) ≤ 2)
+  * Description contains keywords: "config", "README", "comment", "documentation",
+    "rename", "delete", "remove", "docstring", "version"
+  * Does NOT touch core logic (no .py files in src/lib/, no .rs/.go/.java in core modules)
+
+  When trivial=true and tests_passed=true after coder implementation:
+  - Approve immediately after 1 iteration (1 LLM call instead of 2-4)
+  - Saves ~40s per trivial issue
+
+  **Target: ≥60% trivial adoption for simple builds** (3-5 issues). Be aggressive but safe:
+  only flag issues where review adds negligible value.
+
+  Examples of trivial issues:
+  - Update README.md with new installation instructions
+  - Add configuration field to config.yaml
+  - Rename variable `foo` to `bar` across 2 files
+  - Add docstring to existing function
+  - Remove unused import statements
+  - Delete deprecated test file
+  - Update version number in package.json
+  - Fix typo in documentation
+
+  NOT trivial (require review):
+  - Any logic changes (if/while/for statements, algorithm modifications)
+  - New functions/classes/modules
+  - API/interface changes (even if simple)
+  - Database schema changes
+  - Security-sensitive code (auth, validation, encryption)
+  - Changes touching >2 files
+
+  **Safety guidance**: Only flag trivial when failure risk is negligible. If unsure,
+  err on side of NOT trivial — full review is safer default.
 - **testing_guidance** (str): Specific proportional instructions. Examples:
   "Run cargo build only" (version bump), "Unit tests per parser method + edge cases
   for malformed input" (parser). Be concrete.
@@ -156,6 +191,9 @@ Each issue needs `guidance` object:
 - `estimated_scope`: "trivial"|"small"|"medium"|"large"
 - `touches_interfaces`: true if changing public APIs/contracts
 - `needs_deeper_qa`: true for complex/risky only (~20-30%)
+- `trivial`: true ONLY if ALL criteria hold (≤2 ACs, no depends_on, ≤2 files,
+  config/doc/rename keywords, no core logic). Target ≥60% for simple builds.
+  See system prompt for full criteria and examples.
 - `testing_guidance`: specific proportional instructions (not "write tests")
 - `review_focus`: what reviewer checks for this issue
 - `risk_rationale`: why does/doesn't need deep QA
