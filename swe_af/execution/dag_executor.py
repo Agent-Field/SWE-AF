@@ -457,6 +457,7 @@ async def _execute_single_issue(
     adaptations: list[IssueAdaptation] = []
     debt_items: list[dict] = []
     last_result: IssueResult | None = None
+    iteration_count = 0  # Track cumulative coding loop attempts
 
     max_advisor = config.max_advisor_invocations if config.enable_issue_advisor else 0
 
@@ -482,6 +483,7 @@ async def _execute_single_issue(
             raise ValueError("No execute_fn or call_fn — cannot execute issue")
 
         last_result = result
+        iteration_count += result.attempts  # Accumulate iteration attempts
 
         # Success — return with any accumulated adaptations/debt
         if result.outcome in (IssueOutcome.COMPLETED, IssueOutcome.COMPLETED_WITH_DEBT):
@@ -492,6 +494,15 @@ async def _execute_single_issue(
 
         # Advisor budget exhausted or disabled — return raw failure
         if advisor_round >= max_advisor or call_fn is None:
+            break
+
+        # GATE: Only invoke advisor after 3+ iterations
+        if iteration_count < 3:
+            if note_fn:
+                note_fn(
+                    f"Skipping Issue Advisor for {issue_name} (iteration {iteration_count} < 3)",
+                    tags=["issue_advisor", "skip", "early", issue_name],
+                )
             break
 
         # --- Invoke the Issue Advisor ---
