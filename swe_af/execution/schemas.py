@@ -611,6 +611,42 @@ class ExecutionConfig(BaseModel):
     enable_issue_advisor: bool = True
     enable_learning: bool = False
 
+    # Per-role turn limits
+    pm_turns: int = 50
+    architect_turns: int = 50
+    tech_lead_turns: int = 50
+    sprint_planner_turns: int = 50
+    issue_writer_turns: int = 30
+    coder_turns: int = 100
+    qa_turns: int = 75
+    code_reviewer_turns: int = 75
+    qa_synthesizer_turns: int = 30
+    issue_advisor_turns: int = 75
+    replan_turns: int = 75
+    verifier_turns: int = 75
+    retry_advisor_turns: int = 50
+    git_turns: int = 30
+    merger_turns: int = 50
+    integration_tester_turns: int = 75
+
+    # Per-role timeouts (in seconds)
+    pm_timeout: int = 1200          # 20 min
+    architect_timeout: int = 1200
+    tech_lead_timeout: int = 1200
+    sprint_planner_timeout: int = 1200
+    issue_writer_timeout: int = 900     # 15 min
+    coder_timeout: int = 1800           # 30 min
+    qa_timeout: int = 1500              # 25 min
+    code_reviewer_timeout: int = 1500
+    qa_synthesizer_timeout: int = 900
+    issue_advisor_timeout: int = 1500
+    replan_timeout: int = 1500
+    verifier_timeout: int = 1500
+    git_timeout: int = 900
+    merger_timeout: int = 1200
+    integration_tester_timeout: int = 1500
+    retry_advisor_timeout: int = 1200
+
     @model_validator(mode="before")
     @classmethod
     def _validate_v2_keys(cls, data: Any) -> Any:
@@ -625,6 +661,34 @@ class ExecutionConfig(BaseModel):
 
     def _model_for(self, field_name: str) -> str:
         return self._resolved_models[field_name]
+
+    def max_turns_for_role(self, role: str) -> int:
+        """Get max turns for a role, falling back to agent_max_turns.
+
+        Args:
+            role: Role key (e.g., "pm", "coder", "verifier")
+
+        Returns:
+            Role-specific turn limit, or agent_max_turns if role not recognized
+        """
+        field_name = f"{role}_turns"
+        if hasattr(self, field_name):
+            return getattr(self, field_name)
+        return self.agent_max_turns
+
+    def timeout_for_role(self, role: str) -> int:
+        """Get timeout for a role, falling back to agent_timeout_seconds.
+
+        Args:
+            role: Role key (e.g., "pm", "coder", "verifier")
+
+        Returns:
+            Role-specific timeout in seconds, or agent_timeout_seconds if not found
+        """
+        field_name = f"{role}_timeout"
+        if hasattr(self, field_name):
+            return getattr(self, field_name)
+        return self.agent_timeout_seconds
 
     @property
     def ai_provider(self) -> Literal["claude", "opencode"]:
