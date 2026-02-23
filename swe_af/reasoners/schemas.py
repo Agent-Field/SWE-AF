@@ -65,6 +65,12 @@ class IssueGuidance(BaseModel):
     estimated_scope: str = "medium"       # "trivial" | "small" | "medium" | "large"
     touches_interfaces: bool = False
     needs_deeper_qa: bool = False         # True => flagged path (QA + reviewer + synthesizer)
+    trivial: bool = False                 # True => fast-path eligible (skip review if tests pass)
+                                          # Triviality criteria (ALL must hold):
+                                          #   - ≤2 acceptance criteria
+                                          #   - No dependencies (depends_on empty)
+                                          #   - ≤2 files total (files_to_create + files_to_modify)
+                                          #   - Keywords: config, README, comment, doc, rename, delete, remove
 
     # Freeform — shapes agent behavior
     testing_guidance: str = ""            # Proportional test instructions
