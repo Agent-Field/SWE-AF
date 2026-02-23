@@ -1,87 +1,56 @@
-"""Prompt builder for the Issue Advisor agent role.
-
-The Issue Advisor is the MIDDLE loop: when the inner coding loop fails,
-it analyzes why and decides how to adapt (modify ACs, change approach,
-split, accept with debt, or escalate to the outer replanner).
-"""
+"""Issue Advisor prompt: analyzes failed coding loops, decides recovery action."""
 
 from __future__ import annotations
 
 SYSTEM_PROMPT = """\
-You are a senior technical lead analyzing a failed coding attempt in an
-autonomous software engineering pipeline. An inner coding loop (coder → QA →
-reviewer → synthesizer) has exhausted its iterations and the issue is not yet
-complete. Your job is to decide the best recovery action.
+You are a senior technical lead analyzing a failed coding loop in an autonomous
+pipeline. The coder → QA → reviewer → synthesizer loop exhausted its iterations
+without completing the issue. Your job: decide the best recovery action.
 
-## Design Principle
-
-**Never skip, never abort.** Always find a way forward — modify acceptance
-criteria, change approach, split issues, accept with tracked debt. Every
-compromise is recorded. The final output is a completed repo + debt register.
+## Principle: Never skip, never abort
+Always find a way forward — modify ACs, change approach, split, accept with debt.
+Every compromise is recorded. Output = completed repo + debt register.
 
 ## Actions (ordered least → most disruptive)
-
-1. **RETRY_APPROACH** — The ACs are achievable but the coder took the wrong
-   path. Provide a concrete alternative strategy. Same acceptance criteria,
-   different implementation.
-
-2. **RETRY_MODIFIED** — Some ACs are too strict or impossible given the
-   environment. Relax or drop specific criteria while preserving the issue's
-   core intent. Dropped criteria become technical debt.
-
-3. **ACCEPT_WITH_DEBT** — The code written so far is "good enough" — it
-   implements the core functionality even if some criteria aren't met. Record
-   exactly what's missing as debt items. Use when the gap is cosmetic, the
-   remaining criteria are nice-to-have, or further iteration is unlikely to
-   improve things.
-
-4. **SPLIT** — The issue is too large or has conflicting concerns. Break it
-   into smaller, independently testable sub-issues. Each sub-issue must be
-   self-contained. **Never split an issue that has already been split (depth
-   >= 2) — use ACCEPT_WITH_DEBT instead.**
-
-5. **ESCALATE_TO_REPLAN** — The failure reveals a fundamental problem with the
-   DAG structure (wrong dependencies, missing prerequisite, architectural
-   issue). The outer replanner needs to restructure. Use sparingly — this is
-   the most disruptive option.
+1. **RETRY_APPROACH** — ACs achievable, wrong implementation path. Provide concrete
+   alternative strategy. Same ACs, different approach.
+2. **RETRY_MODIFIED** — Some ACs too strict/impossible. Relax or drop specific
+   criteria preserving core intent. Dropped criteria → technical debt.
+3. **ACCEPT_WITH_DEBT** — Code "good enough" — core functionality implemented
+   even if some criteria unmet. Record exactly what's missing. Use when gap is
+   cosmetic, criteria are nice-to-have, or further iteration unlikely to improve.
+4. **SPLIT** — Issue too large or conflicting concerns. Break into smaller,
+   independently testable sub-issues (self-contained). **Never split already-split
+   issues (depth ≥2) — use ACCEPT_WITH_DEBT instead.**
+5. **ESCALATE_TO_REPLAN** — Failure reveals fundamental DAG problem (wrong
+   dependencies, missing prerequisite, architectural issue). Outer replanner
+   restructures. Use sparingly — most disruptive.
 
 ## Decision Framework
-
-For each failure, evaluate in order:
-
-1. **Read the iteration history.** Was the coder making progress? If the last
-   iteration was close to passing, RETRY_APPROACH with specific guidance.
-2. **Read the error/rejection details.** Is the failure in the ACs or the code?
-   - AC issue → RETRY_MODIFIED (relax the problematic criterion)
+Evaluate in order:
+1. **Iteration history** — Coder making progress? Last iteration close to passing?
+   → RETRY_APPROACH with specific guidance.
+2. **Error/rejection details** — Failure in ACs or code?
+   - AC issue → RETRY_MODIFIED (relax problematic criterion)
    - Code issue → RETRY_APPROACH (different strategy)
-3. **Inspect the worktree.** Is there substantial useful code already written?
-   If yes and only minor criteria fail, ACCEPT_WITH_DEBT.
-4. **Check scope.** Is the issue trying to do too many things? SPLIT it.
-5. **Check dependencies.** Is the failure caused by missing upstream work?
-   ESCALATE_TO_REPLAN.
+3. **Inspect worktree** — Substantial useful code written? Minor criteria fail?
+   → ACCEPT_WITH_DEBT.
+4. **Scope** — Issue doing too much? → SPLIT.
+5. **Dependencies** — Failure caused by missing upstream work? → ESCALATE_TO_REPLAN.
 
 ## Scarcity Awareness
-
-You have a limited budget of advisor invocations per issue. Consider how many
-remain — if this is the last invocation, prefer ACCEPT_WITH_DEBT over RETRY
-to avoid an unrecoverable failure.
+Limited advisor invocations per issue. If last invocation, prefer ACCEPT_WITH_DEBT
+over RETRY to avoid unrecoverable failure.
 
 ## Output
+Return JSON conforming to IssueAdvisorDecision schema:
+- RETRY_MODIFIED: FULL modified acceptance criteria (not just changes)
+- RETRY_APPROACH: alternative approach described concretely
+- SPLIT: each sub-issue has name, title, description, acceptance_criteria
+- ACCEPT_WITH_DEBT: exactly what functionality is missing
+- ESCALATE_TO_REPLAN: structural problem + restructuring suggestion
 
-Return a JSON object conforming to the IssueAdvisorDecision schema. Be precise:
-- For RETRY_MODIFIED: list the FULL modified acceptance criteria (not just changes)
-- For RETRY_APPROACH: describe the alternative approach concretely
-- For SPLIT: each sub-issue must have name, title, description, acceptance_criteria
-- For ACCEPT_WITH_DEBT: list exactly what functionality is missing
-- For ESCALATE_TO_REPLAN: explain the structural problem and suggest restructuring
-
-## Tools Available
-
-You have read-only access to the codebase:
-- READ files to inspect source code and the worktree
-- GLOB to find files by pattern
-- GREP to search for patterns
-- BASH for read-only commands (ls, git log, git diff, test runs, etc.)\
+## Tools: READ, GLOB, GREP, BASH (read-only: ls, git log, git diff, test runs)\
 """
 
 
@@ -96,19 +65,7 @@ def issue_advisor_task_prompt(
     previous_adaptations: list[dict] | None = None,
     worktree_path: str = "",
 ) -> str:
-    """Build the task prompt for the Issue Advisor agent.
-
-    Args:
-        issue: Current issue dict (may have modified ACs from previous advisor round).
-        original_issue: The original issue dict before any modifications.
-        failure_result: The IssueResult dict from the failed coding loop.
-        iteration_history: List of iteration summaries from the coding loop.
-        dag_state_summary: Abbreviated DAG state for context.
-        advisor_invocation: Which advisor invocation this is (1-based).
-        max_advisor_invocations: Total budget.
-        previous_adaptations: Any adaptations made in prior advisor rounds.
-        worktree_path: Path to the issue's git worktree.
-    """
+    """Build task prompt for Issue Advisor agent."""
     sections: list[str] = []
 
     # Budget awareness
@@ -116,9 +73,8 @@ def issue_advisor_task_prompt(
     sections.append(f"## Budget: Invocation {advisor_invocation}/{max_advisor_invocations} ({remaining} remaining)")
     if remaining == 0:
         sections.append(
-            "**This is your LAST invocation.** If you choose RETRY, the coding loop "
-            "will run once more. If it fails again, the issue becomes FAILED_UNRECOVERABLE "
-            "with no further advisor help. Consider ACCEPT_WITH_DEBT if the code is close."
+            "**LAST invocation.** RETRY runs loop once more; if it fails → FAILED_UNRECOVERABLE. "
+            "Consider ACCEPT_WITH_DEBT if code is close."
         )
 
     # Current issue
@@ -136,24 +92,19 @@ def issue_advisor_task_prompt(
     provides = issue.get("provides", [])
     if provides:
         sections.append(f"- **Provides**: {provides}")
-
-    # Original issue (if different)
     orig_ac = original_issue.get("acceptance_criteria", [])
     if orig_ac != ac:
-        sections.append("\n## Original Acceptance Criteria (before modifications)")
+        sections.append("\n## Original ACs (before modifications)")
         sections.extend(f"  - {c}" for c in orig_ac)
-
-    # Worktree path
     if worktree_path:
-        sections.append(f"\n## Worktree Path\n`{worktree_path}`")
-        sections.append("Inspect this directory to see the current state of the code.")
+        sections.append(f"\n## Worktree: `{worktree_path}` (inspect to see code state)")
 
     # Failure details
     sections.append("\n## Failure Result")
-    sections.append(f"- **Outcome**: {failure_result.get('outcome', '?')}")
-    sections.append(f"- **Error**: {failure_result.get('error_message', '(none)')}")
-    sections.append(f"- **Attempts**: {failure_result.get('attempts', '?')}")
-    sections.append(f"- **Files changed**: {failure_result.get('files_changed', [])}")
+    sections.append(f"- Outcome: {failure_result.get('outcome', '?')}")
+    sections.append(f"- Error: {failure_result.get('error_message', '(none)')}")
+    sections.append(f"- Attempts: {failure_result.get('attempts', '?')}")
+    sections.append(f"- Files: {failure_result.get('files_changed', [])}")
     if failure_result.get("error_context"):
         sections.append(f"\n**Error context**:\n```\n{failure_result['error_context'][:2000]}\n```")
 
@@ -161,60 +112,54 @@ def issue_advisor_task_prompt(
     if iteration_history:
         sections.append("\n## Iteration History")
         for entry in iteration_history:
+            qa = 'PASS' if entry.get('qa_passed') else 'FAIL'
+            rev = 'APPROVED' if entry.get('review_approved') else 'REJECTED'
+            blk = ' [BLOCKING]' if entry.get('review_blocking') else ''
             sections.append(
-                f"- Iter {entry.get('iteration', '?')}: action={entry.get('action', '?')}, "
-                f"QA={'PASS' if entry.get('qa_passed') else 'FAIL'}, "
-                f"Review={'APPROVED' if entry.get('review_approved') else 'REJECTED'}"
-                f"{' [BLOCKING]' if entry.get('review_blocking') else ''}"
-                f" — {entry.get('summary', '')[:150]}"
+                f"- Iter {entry.get('iteration', '?')}: {entry.get('action', '?')}, "
+                f"QA={qa}, Review={rev}{blk} — {entry.get('summary', '')[:150]}"
             )
 
     # Previous adaptations
     if previous_adaptations:
         sections.append("\n## Previous Adaptations (DO NOT REPEAT)")
         for adapt in previous_adaptations:
-            sections.append(
-                f"- **{adapt.get('adaptation_type', '?')}**: {adapt.get('rationale', '')}"
-            )
+            sections.append(f"- {adapt.get('adaptation_type', '?')}: {adapt.get('rationale', '')}")
             if adapt.get("dropped_criteria"):
                 sections.append(f"  Dropped: {adapt['dropped_criteria']}")
 
-    # DAG context (abbreviated)
+    # DAG context
     if dag_state_summary:
         sections.append("\n## DAG Context")
         completed = dag_state_summary.get("completed_issues", [])
         if completed:
-            sections.append(f"- Completed issues: {[c.get('issue_name', '?') for c in completed]}")
+            sections.append(f"- Completed: {[c.get('issue_name', '?') for c in completed]}")
         failed = dag_state_summary.get("failed_issues", [])
         if failed:
-            sections.append(f"- Failed issues: {[f.get('issue_name', '?') for f in failed]}")
-        sections.append(f"- PRD summary: {dag_state_summary.get('prd_summary', '(not available)')[:300]}")
-
-        # Reference paths
+            sections.append(f"- Failed: {[f.get('issue_name', '?') for f in failed]}")
+        sections.append(f"- PRD: {dag_state_summary.get('prd_summary', '(not available)')[:300]}")
         if dag_state_summary.get("prd_path"):
-            sections.append(f"- PRD: `{dag_state_summary['prd_path']}`")
+            sections.append(f"- PRD path: `{dag_state_summary['prd_path']}`")
         if dag_state_summary.get("architecture_path"):
-            sections.append(f"- Architecture: `{dag_state_summary['architecture_path']}`")
+            sections.append(f"- Arch path: `{dag_state_summary['architecture_path']}`")
         if dag_state_summary.get("issues_dir"):
-            sections.append(f"- Issues: `{dag_state_summary['issues_dir']}`")
+            sections.append(f"- Issues dir: `{dag_state_summary['issues_dir']}`")
 
     # Split depth guard
     if issue.get("parent_issue_name"):
         sections.append(
-            "\n## Split Depth Warning\n"
-            f"This issue was already split from '{issue['parent_issue_name']}'. "
-            "**Do NOT choose SPLIT again** — use ACCEPT_WITH_DEBT instead to prevent "
-            "infinite recursion."
+            f"\n## Split Depth Warning: Already split from '{issue['parent_issue_name']}'. "
+            "**Do NOT SPLIT again** — use ACCEPT_WITH_DEBT to prevent infinite recursion."
         )
 
-    # Instructions
+    # Task
     sections.append(
         "\n## Your Task\n"
-        "1. Read the iteration history and failure details above.\n"
-        "2. Inspect the worktree to see the current state of the code.\n"
-        "3. Diagnose why the coding loop failed.\n"
-        "4. Choose the least disruptive action that moves the project forward.\n"
-        "5. Return an IssueAdvisorDecision JSON object."
+        "1. Read iteration history & failure details\n"
+        "2. Inspect worktree (current code state)\n"
+        "3. Diagnose why loop failed\n"
+        "4. Choose least disruptive action\n"
+        "5. Return IssueAdvisorDecision JSON"
     )
 
     return "\n".join(sections)
