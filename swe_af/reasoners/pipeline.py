@@ -166,7 +166,7 @@ async def run_product_manager(
     artifacts_dir: str = ".artifacts",
     additional_context: str = "",
     model: str = "sonnet",
-    max_turns: int = DEFAULT_AGENT_MAX_TURNS,
+    max_turns: int = 30,
     permission_mode: str = "",
     ai_provider: str = "claude",
 ) -> dict:
@@ -212,7 +212,7 @@ async def run_architect(
     artifacts_dir: str = ".artifacts",
     feedback: str = "",
     model: str = "sonnet",
-    max_turns: int = DEFAULT_AGENT_MAX_TURNS,
+    max_turns: int = 30,
     permission_mode: str = "",
     ai_provider: str = "claude",
 ) -> dict:
@@ -260,7 +260,7 @@ async def run_tech_lead(
     artifacts_dir: str = ".artifacts",
     revision_number: int = 0,
     model: str = "sonnet",
-    max_turns: int = DEFAULT_AGENT_MAX_TURNS,
+    max_turns: int = 30,
     permission_mode: str = "",
     ai_provider: str = "claude",
 ) -> dict:
@@ -310,7 +310,7 @@ async def run_sprint_planner(
     repo_path: str,
     artifacts_dir: str = ".artifacts",
     model: str = "sonnet",
-    max_turns: int = DEFAULT_AGENT_MAX_TURNS,
+    max_turns: int = 30,
     permission_mode: str = "",
     ai_provider: str = "claude",
 ) -> dict:
