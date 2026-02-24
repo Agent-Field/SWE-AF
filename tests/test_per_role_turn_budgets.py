@@ -23,12 +23,12 @@ class TestPerRoleTurnBudgets:
         assert config.max_turns_for_role("pm") == 50
         assert config.max_turns_for_role("architect") == 50
         assert config.max_turns_for_role("tech_lead") == 50
-        assert config.max_turns_for_role("sprint_planner") == 50
+        assert config.max_turns_for_role("sprint_planner") == 40  # Reduced from 50
 
-        # Lightweight roles (30 turns)
-        assert config.max_turns_for_role("issue_writer") == 30
-        assert config.max_turns_for_role("qa_synthesizer") == 30
-        assert config.max_turns_for_role("git") == 30
+        # Lightweight roles (reduced turn budgets)
+        assert config.max_turns_for_role("issue_writer") == 25  # Reduced from 30
+        assert config.max_turns_for_role("qa_synthesizer") == 20  # Reduced from 30
+        assert config.max_turns_for_role("git") == 20  # Reduced from 30
 
         # Orchestration roles (75 turns)
         assert config.max_turns_for_role("qa") == 75

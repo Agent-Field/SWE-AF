@@ -619,17 +619,17 @@ class ExecutionConfig(BaseModel):
     pm_turns: int = 50
     architect_turns: int = 50
     tech_lead_turns: int = 50
-    sprint_planner_turns: int = 50
-    issue_writer_turns: int = 30
+    sprint_planner_turns: int = 40
+    issue_writer_turns: int = 25
     coder_turns: int = 100
     qa_turns: int = 75
     code_reviewer_turns: int = 75
-    qa_synthesizer_turns: int = 30
+    qa_synthesizer_turns: int = 20
     issue_advisor_turns: int = 75
     replan_turns: int = 75
     verifier_turns: int = 75
     retry_advisor_turns: int = 50
-    git_turns: int = 30
+    git_turns: int = 20
     merger_turns: int = 50
     integration_tester_turns: int = 75
 
