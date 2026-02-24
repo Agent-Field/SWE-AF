@@ -133,7 +133,7 @@ async def run_retry_advisor(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=20,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
         permission_mode=permission_mode or None,
     ))
@@ -215,7 +215,7 @@ async def run_issue_advisor(
         model=model,
         provider=ai_provider,
         cwd=cwd,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=20,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
         permission_mode=permission_mode or None,
     ))
@@ -293,7 +293,7 @@ async def run_replanner(
         model=replan_model,
         provider=ai_provider,
         cwd=state.repo_path or ".",
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=30,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
         permission_mode=permission_mode or None,
     ))
@@ -407,7 +407,7 @@ async def run_issue_writer(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=20,
         allowed_tools=[Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP],
         permission_mode=permission_mode or None,
     ))
@@ -472,7 +472,7 @@ async def run_verifier(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=20,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
         permission_mode=permission_mode or None,
     ))
@@ -558,7 +558,7 @@ async def run_git_init(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=10,
         allowed_tools=[Tool.BASH],
         permission_mode=permission_mode or None,
     ))
@@ -636,7 +636,7 @@ async def run_workspace_setup(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=10,
         allowed_tools=[Tool.BASH],
         permission_mode=permission_mode or None,
     ))
@@ -703,7 +703,7 @@ async def run_merger(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=10,
         allowed_tools=[Tool.BASH, Tool.READ, Tool.GLOB, Tool.GREP],
         permission_mode=permission_mode or None,
     ))
@@ -777,7 +777,7 @@ async def run_integration_tester(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=10,
         allowed_tools=[Tool.BASH, Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP],
         permission_mode=permission_mode or None,
     ))
@@ -848,7 +848,7 @@ async def run_workspace_cleanup(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=10,
         allowed_tools=[Tool.BASH],
         permission_mode=permission_mode or None,
     ))
@@ -922,7 +922,7 @@ async def run_coder(
         model=model,
         provider=ai_provider,
         cwd=worktree_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=50,
         allowed_tools=[
             Tool.READ, Tool.WRITE, Tool.EDIT,
             Tool.BASH, Tool.GLOB, Tool.GREP,
@@ -999,7 +999,7 @@ async def run_qa(
         model=model,
         provider=ai_provider,
         cwd=worktree_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=20,
         allowed_tools=[
             Tool.READ, Tool.WRITE, Tool.EDIT,
             Tool.BASH, Tool.GLOB, Tool.GREP,
@@ -1079,7 +1079,7 @@ async def run_code_reviewer(
         model=model,
         provider=ai_provider,
         cwd=worktree_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=20,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
         permission_mode=permission_mode or None,
     ))
@@ -1155,7 +1155,7 @@ async def run_qa_synthesizer(
         model=model,
         provider=ai_provider,
         cwd=worktree_path or ".",
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=10,
         allowed_tools=[],
         permission_mode=permission_mode or None,
     ))
@@ -1251,7 +1251,7 @@ async def generate_fix_issues(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=20,
         allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
         permission_mode=permission_mode or None,
     ))
@@ -1320,7 +1320,7 @@ async def run_repo_finalize(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=10,
         allowed_tools=[Tool.BASH, Tool.READ, Tool.GLOB, Tool.GREP],
         permission_mode=permission_mode or None,
     ))
@@ -1396,7 +1396,7 @@ async def run_github_pr(
         model=model,
         provider=ai_provider,
         cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
+        max_turns=10,
         allowed_tools=[Tool.BASH],
         permission_mode=permission_mode or None,
     ))
