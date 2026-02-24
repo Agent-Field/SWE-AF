@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Benchmark suite runner for pass rate validation.
 
-Executes multiple builds (5 simple + 3 complex) and collects verification pass rates
-from BuildResult.verification.passed fields. Validates optimizations don't degrade
-quality below 95% threshold.
+Executes multiple builds and collects verification pass rates from BuildResult.
+Used to validate optimizations don't degrade quality below 95% threshold.
 
 Usage:
     python scripts/run_benchmark_suite.py --builds 8 --output results.json
-    python scripts/run_benchmark_suite.py --builds 8 --output baseline.json --verify-pass-rate 0.95
+    python scripts/run_benchmark_suite.py --builds 10 --output baseline.json --threshold 0.95
 """
 
 from __future__ import annotations
@@ -15,311 +14,223 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import random
+import os
 import sys
+import tempfile
+import shutil
 from pathlib import Path
 
+# Add parent directory to path to import swe_af
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Build configurations for simple builds (3-5 issues each)
-SIMPLE_BUILD_CONFIGS = [
+from swe_af.app import app
+
+
+# Predefined test scenarios: simple builds (3-5 issues) and complex builds (10-15 issues)
+SIMPLE_BUILD_SCENARIOS = [
     {
-        "name": "simple-1-config-updates",
-        "goal": "Update configuration files and README",
-        "num_issues": 3,
+        "goal": "Add a README.md file with project description and usage instructions",
+        "num_issues": "3-5",
         "complexity": "simple",
     },
     {
-        "name": "simple-2-documentation",
-        "goal": "Add documentation and type hints",
-        "num_issues": 4,
+        "goal": "Add a config.py file with application settings and update main.py to use it",
+        "num_issues": "3-5",
         "complexity": "simple",
     },
     {
-        "name": "simple-3-refactor",
-        "goal": "Refactor utility functions",
-        "num_issues": 5,
+        "goal": "Create a utils.py helper module with string formatting and validation functions",
+        "num_issues": "3-5",
         "complexity": "simple",
     },
     {
-        "name": "simple-4-test-improvements",
-        "goal": "Improve test coverage",
-        "num_issues": 4,
+        "goal": "Add logging configuration and integrate logger into existing modules",
+        "num_issues": "3-5",
         "complexity": "simple",
     },
     {
-        "name": "simple-5-bug-fixes",
-        "goal": "Fix minor bugs and edge cases",
-        "num_issues": 3,
+        "goal": "Add CLI argument parsing with argparse and update entry point",
+        "num_issues": "3-5",
         "complexity": "simple",
     },
 ]
 
-# Build configurations for complex builds (10-15 issues each)
-COMPLEX_BUILD_CONFIGS = [
+COMPLEX_BUILD_SCENARIOS = [
     {
-        "name": "complex-1-feature",
-        "goal": "Implement new feature with full test coverage",
-        "num_issues": 12,
+        "goal": "Implement a REST API with FastAPI including authentication, database models, and CRUD endpoints",
+        "num_issues": "10-15",
         "complexity": "complex",
     },
     {
-        "name": "complex-2-architecture",
-        "goal": "Restructure codebase architecture",
-        "num_issues": 15,
+        "goal": "Build a data processing pipeline with ETL stages, validation, and error handling",
+        "num_issues": "10-15",
         "complexity": "complex",
     },
     {
-        "name": "complex-3-integration",
-        "goal": "Add third-party integration with tests",
-        "num_issues": 10,
+        "goal": "Create a plugin system with dynamic loading, configuration, and lifecycle management",
+        "num_issues": "10-15",
         "complexity": "complex",
     },
 ]
 
 
-def extract_metrics_from_dag_state(dag_state: dict) -> dict:
-    """Extract component metrics from DAG state.
-
-    Args:
-        dag_state: DAG execution state containing issue results
-
-    Returns:
-        dict: Metrics including advisor_invocations, replanner_count, trivial_count
-    """
-    metrics = {
-        "advisor_invocations": 0,
-        "replanner_count": dag_state.get("replan_count", 0),
-        "trivial_count": 0,
-        "total_iterations": 0,
-        "avg_turns_per_issue": 0.0,
-    }
-
-    # Extract from completed/failed issues
-    all_results = []
-    all_results.extend(dag_state.get("completed_issues", []))
-    all_results.extend(dag_state.get("failed_issues", []))
-    all_results.extend(dag_state.get("completed_with_debt", []))
-
-    total_turns = 0
-    issue_count = 0
-
-    for result in all_results:
-        if isinstance(result, dict):
-            # Count advisor invocations
-            advisor_invoc = result.get("advisor_invocations", 0)
-            metrics["advisor_invocations"] += advisor_invoc
-
-            # Count trivial issues (from iteration_history)
-            iter_history = result.get("iteration_history", [])
-            if iter_history and len(iter_history) == 1:
-                first_iter = iter_history[0]
-                if isinstance(first_iter, dict) and first_iter.get("fast_path"):
-                    metrics["trivial_count"] += 1
-
-            # Count total iterations/turns
-            attempts = result.get("attempts", 1)
-            metrics["total_iterations"] += attempts
-            total_turns += attempts
-            issue_count += 1
-
-    if issue_count > 0:
-        metrics["avg_turns_per_issue"] = total_turns / issue_count
-
-    return metrics
-
-
-async def run_single_build(
-    build_config: dict,
-    build_id: int,
-    verify: bool = False,
-) -> dict:
+async def run_single_build(build_id: int, scenario: dict, repo_path: str, config: dict | None = None) -> dict:
     """Execute a single build and return its result.
 
     Args:
-        build_config: Build configuration with name, goal, num_issues, complexity
         build_id: Sequential ID for this build
-        verify: Whether to run actual verification (default: False for testing)
+        scenario: Build scenario with goal, complexity, and expected num_issues
+        repo_path: Path to the repository
+        config: Optional BuildConfig dict for the build
 
     Returns:
-        dict: BuildResult containing verification status and metrics
+        dict: BuildResult containing verification status and metadata
     """
-    # Mock implementation for testing infrastructure
-    # In production, this would call app.build() with real execution
+    try:
+        print(f"[Build {build_id}] Starting {scenario['complexity']} build: {scenario['goal'][:60]}...", file=sys.stderr)
 
-    # Simulate realistic pass rates based on complexity
-    # Simple builds: ~97% pass rate
-    # Complex builds: ~93% pass rate (more likely to have issues)
-    if build_config["complexity"] == "simple":
-        base_pass_rate = 0.97
-    else:
-        base_pass_rate = 0.93
+        # Call the actual SWE-AF build function
+        result = await app.call(
+            f"{app.node_id}.build",
+            goal=scenario["goal"],
+            repo_path=repo_path,
+            artifacts_dir=".artifacts",
+            config=config or {},
+        )
 
-    # Add some randomness
-    passed = random.random() < base_pass_rate
+        # Extract BuildResult fields
+        build_result = {
+            "build_id": build_id,
+            "scenario": scenario,
+            "verification": result.get("verification", {"passed": False, "summary": "No verification data"}),
+            "success": result.get("success", False),
+            "summary": result.get("summary", ""),
+            "pr_url": result.get("pr_url", ""),
+        }
 
-    # Simulate realistic metrics based on complexity
-    num_issues = build_config["num_issues"]
+        passed = build_result["verification"].get("passed", False)
+        status = "PASS" if passed else "FAIL"
+        print(f"[Build {build_id}] {status}: {scenario['complexity']} build completed", file=sys.stderr)
 
-    if build_config["complexity"] == "simple":
-        # Simple builds have fewer advisor calls, more trivial issues
-        advisor_invocations = random.randint(0, 1)
-        replanner_count = 0
-        trivial_count = int(num_issues * 0.6)  # ~60% trivial
-        avg_turns = 2.5
-    else:
-        # Complex builds have more advisor calls, fewer trivial issues
-        advisor_invocations = random.randint(1, 3)
-        replanner_count = random.randint(0, 1)
-        trivial_count = int(num_issues * 0.2)  # ~20% trivial
-        avg_turns = 4.2
+        return build_result
 
-    # Build mock DAG state
-    dag_state = {
-        "replan_count": replanner_count,
-        "completed_issues": [
-            {
-                "issue_name": f"issue-{i}",
-                "advisor_invocations": 1 if i < advisor_invocations else 0,
-                "attempts": int(avg_turns),
-                "iteration_history": [{"fast_path": True}] if i < trivial_count else [{}],
-            }
-            for i in range(num_issues)
-        ],
-        "failed_issues": [],
-        "completed_with_debt": [],
-    }
-
-    metrics = extract_metrics_from_dag_state(dag_state)
-
-    return {
-        "build_id": build_id,
-        "build_name": build_config["name"],
-        "complexity": build_config["complexity"],
-        "num_issues": num_issues,
-        "verification": {
-            "passed": passed,
-            "summary": f"Build {build_id} ({build_config['name']}) verification",
-        },
-        "success": True,
-        "summary": f"Build {build_id} completed",
-        "metrics": metrics,
-        "dag_state": dag_state,
-    }
+    except Exception as e:
+        print(f"[Build {build_id}] ERROR: {str(e)}", file=sys.stderr)
+        # Return a failed build result
+        return {
+            "build_id": build_id,
+            "scenario": scenario,
+            "verification": {
+                "passed": False,
+                "summary": f"Build execution error: {str(e)}",
+            },
+            "success": False,
+            "summary": f"Build failed with exception: {str(e)}",
+            "error": str(e),
+        }
 
 
 async def run_benchmark_suite(
-    num_builds: int = 8,
-    verify_pass_rate: float = 0.95,
+    num_builds: int,
+    config: dict | None = None,
+    simple_count: int | None = None,
+    complex_count: int | None = None,
 ) -> dict:
-    """Execute benchmark suite with 5 simple + 3 complex builds.
+    """Execute multiple builds and collect verification results.
 
     Args:
-        num_builds: Total number of builds (default: 8 = 5 simple + 3 complex)
-        verify_pass_rate: Pass rate threshold (default: 0.95)
+        num_builds: Total number of builds to execute
+        config: Optional BuildConfig dict for builds
+        simple_count: Number of simple builds (3-5 issues). If None, defaults to 5.
+        complex_count: Number of complex builds (10-15 issues). If None, defaults to 3.
 
     Returns:
-        dict: Results with builds, pass_rate, aggregate_metrics, recommendation
+        dict: Results containing builds list, aggregate pass_rate, and per-component metrics
     """
-    # Validate input
-    if num_builds < 8:
-        print(
-            f"Warning: Recommended to run 8 builds (5 simple + 3 complex), got {num_builds}",
-            file=sys.stderr,
-        )
+    # Default to 5 simple + 3 complex = 8 total builds
+    if simple_count is None and complex_count is None:
+        if num_builds == 8:
+            simple_count = 5
+            complex_count = 3
+        elif num_builds < 8:
+            # For smaller runs, do all simple builds
+            simple_count = num_builds
+            complex_count = 0
+        else:
+            # For larger runs, maintain 5:3 ratio
+            simple_count = min(5, num_builds)
+            complex_count = num_builds - simple_count
+    elif simple_count is None:
+        simple_count = num_builds - (complex_count or 0)
+    elif complex_count is None:
+        complex_count = num_builds - simple_count
 
-    # Run 5 simple builds
-    num_simple = min(5, num_builds)
-    simple_builds = []
-    for i in range(num_simple):
-        config = SIMPLE_BUILD_CONFIGS[i % len(SIMPLE_BUILD_CONFIGS)]
-        print(
-            f"Executing simple build {i+1}/{num_simple}: {config['name']}...",
-            file=sys.stderr,
-        )
-        build_result = await run_single_build(config, i + 1, verify=True)
-        simple_builds.append(build_result)
+    # Ensure we don't exceed available scenarios
+    simple_count = min(simple_count, len(SIMPLE_BUILD_SCENARIOS))
+    complex_count = min(complex_count, len(COMPLEX_BUILD_SCENARIOS))
 
-    # Run 3 complex builds
-    num_complex = min(3, max(0, num_builds - num_simple))
-    complex_builds = []
-    for i in range(num_complex):
-        config = COMPLEX_BUILD_CONFIGS[i % len(COMPLEX_BUILD_CONFIGS)]
-        print(
-            f"Executing complex build {i+1}/{num_complex}: {config['name']}...",
-            file=sys.stderr,
-        )
-        build_result = await run_single_build(config, num_simple + i + 1, verify=True)
-        complex_builds.append(build_result)
+    # Select scenarios
+    scenarios = []
+    for i in range(simple_count):
+        scenarios.append(SIMPLE_BUILD_SCENARIOS[i % len(SIMPLE_BUILD_SCENARIOS)])
+    for i in range(complex_count):
+        scenarios.append(COMPLEX_BUILD_SCENARIOS[i % len(COMPLEX_BUILD_SCENARIOS)])
 
-    all_builds = simple_builds + complex_builds
+    # Create temporary directories for each build to isolate them
+    builds = []
+    build_id = 1
+
+    for scenario in scenarios:
+        # Create a temporary repo for this build
+        with tempfile.TemporaryDirectory(prefix=f"benchmark_build_{build_id}_") as tmpdir:
+            repo_path = os.path.join(tmpdir, "test-repo")
+            os.makedirs(repo_path)
+
+            # Initialize git repo
+            os.system(f"cd {repo_path} && git init && git config user.email 'test@example.com' && git config user.name 'Test User' && touch README.md && git add README.md && git commit -m 'Initial commit' > /dev/null 2>&1")
+
+            print(f"Executing build {build_id}/{len(scenarios)} ({scenario['complexity']})...", file=sys.stderr)
+            build_result = await run_single_build(build_id, scenario, repo_path, config)
+            builds.append(build_result)
+
+            build_id += 1
 
     # Calculate pass rate from BuildResult.verification.passed fields
     passed_count = sum(
-        1 for build in all_builds
+        1 for build in builds
         if build.get("verification", {}).get("passed", False)
     )
-    total_builds = len(all_builds)
+    total_builds = len(builds)
     pass_rate = passed_count / total_builds if total_builds > 0 else 0.0
 
-    # Aggregate metrics across all builds
-    aggregate_metrics = {
-        "total_advisor_invocations": sum(
-            build.get("metrics", {}).get("advisor_invocations", 0)
-            for build in all_builds
-        ),
-        "total_replanner_invocations": sum(
-            build.get("metrics", {}).get("replanner_count", 0)
-            for build in all_builds
-        ),
-        "total_trivial_issues": sum(
-            build.get("metrics", {}).get("trivial_count", 0)
-            for build in all_builds
-        ),
-        "avg_turns_per_issue": sum(
-            build.get("metrics", {}).get("avg_turns_per_issue", 0.0)
-            for build in all_builds
-        ) / total_builds if total_builds > 0 else 0.0,
-        "total_issues": sum(build.get("num_issues", 0) for build in all_builds),
-    }
+    # Calculate per-complexity metrics
+    simple_builds = [b for b in builds if b["scenario"]["complexity"] == "simple"]
+    complex_builds = [b for b in builds if b["scenario"]["complexity"] == "complex"]
 
-    # Calculate trivial adoption rate
-    if aggregate_metrics["total_issues"] > 0:
-        aggregate_metrics["trivial_adoption_rate"] = (
-            aggregate_metrics["total_trivial_issues"] / aggregate_metrics["total_issues"]
-        )
-    else:
-        aggregate_metrics["trivial_adoption_rate"] = 0.0
+    simple_passed = sum(1 for b in simple_builds if b.get("verification", {}).get("passed", False))
+    complex_passed = sum(1 for b in complex_builds if b.get("verification", {}).get("passed", False))
 
-    # Determine recommendation based on pass rate thresholds
-    if pass_rate >= verify_pass_rate:
-        recommendation = "PASS: Deployment approved"
-        status = "PASS"
-    elif pass_rate >= 0.90:
-        recommendation = "WARN: Pass rate acceptable with 5% tolerance, deployment allowed"
-        status = "WARN"
-    else:
-        recommendation = "FAIL: Pass rate <90%, rollback recommended"
-        status = "FAIL"
+    simple_pass_rate = simple_passed / len(simple_builds) if simple_builds else 0.0
+    complex_pass_rate = complex_passed / len(complex_builds) if complex_builds else 0.0
 
     return {
-        "builds": all_builds,
-        "num_simple_builds": num_simple,
-        "num_complex_builds": num_complex,
+        "builds": builds,
         "passed_count": passed_count,
-        "failed_count": total_builds - passed_count,
         "total_builds": total_builds,
         "pass_rate": pass_rate,
-        "threshold": verify_pass_rate,
-        "status": status,
-        "recommendation": recommendation,
-        "aggregate_metrics": aggregate_metrics,
+        "simple_builds": len(simple_builds),
+        "simple_passed": simple_passed,
+        "simple_pass_rate": simple_pass_rate,
+        "complex_builds": len(complex_builds),
+        "complex_passed": complex_passed,
+        "complex_pass_rate": complex_pass_rate,
     }
 
 
 def main():
     """Main entry point for benchmark suite runner."""
     parser = argparse.ArgumentParser(
-        description="Run benchmark suite for pass rate validation (5 simple + 3 complex builds)"
+        description="Run benchmark suite for pass rate validation"
     )
     parser.add_argument(
         "--builds",
@@ -330,40 +241,66 @@ def main():
     parser.add_argument(
         "--output",
         type=str,
-        default="benchmark_results.json",
-        help="Output JSON file path (default: benchmark_results.json)",
+        required=True,
+        help="Output JSON file path",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.95,
+        help="Pass rate threshold for PASS (default: 0.95 = 95%%)",
+    )
+    parser.add_argument(
+        "--warn-threshold",
+        type=float,
+        default=0.90,
+        help="Pass rate threshold for WARN vs FAIL (default: 0.90 = 90%%)",
+    )
+    parser.add_argument(
+        "--simple-count",
+        type=int,
+        help="Number of simple builds (3-5 issues). Default: 5",
+    )
+    parser.add_argument(
+        "--complex-count",
+        type=int,
+        help="Number of complex builds (10-15 issues). Default: 3",
     )
     parser.add_argument(
         "--verify-pass-rate",
         type=float,
-        default=0.95,
-        help="Pass rate threshold for deployment approval (default: 0.95 = 95%%)",
+        help="Alias for --threshold (for compatibility with testing strategy)",
     )
 
     args = parser.parse_args()
+
+    # Handle verify-pass-rate alias
+    if args.verify_pass_rate is not None:
+        args.threshold = args.verify_pass_rate
 
     # Validate arguments
     if args.builds <= 0:
         print("Error: --builds must be a positive integer", file=sys.stderr)
         sys.exit(1)
 
-    if args.verify_pass_rate < 0.0 or args.verify_pass_rate > 1.0:
-        print("Error: --verify-pass-rate must be between 0.0 and 1.0", file=sys.stderr)
+    if args.threshold < 0.0 or args.threshold > 1.0:
+        print("Error: --threshold must be between 0.0 and 1.0", file=sys.stderr)
+        sys.exit(1)
+
+    if args.warn_threshold < 0.0 or args.warn_threshold > 1.0:
+        print("Error: --warn-threshold must be between 0.0 and 1.0", file=sys.stderr)
         sys.exit(1)
 
     # Run benchmark suite
-    print(f"\n{'='*60}", file=sys.stderr)
-    print(f"Benchmark Suite: Pipeline Optimization Validation", file=sys.stderr)
-    print(f"{'='*60}", file=sys.stderr)
-    print(f"Configuration:", file=sys.stderr)
-    print(f"  Total builds: {args.builds}", file=sys.stderr)
-    print(f"  Pass rate threshold: {args.verify_pass_rate:.1%}", file=sys.stderr)
-    print(f"{'='*60}\n", file=sys.stderr)
+    print(f"Running benchmark suite with {args.builds} builds...", file=sys.stderr)
+    print(f"  Simple builds (3-5 issues): {args.simple_count or 'auto'}", file=sys.stderr)
+    print(f"  Complex builds (10-15 issues): {args.complex_count or 'auto'}", file=sys.stderr)
 
     results = asyncio.run(
         run_benchmark_suite(
             num_builds=args.builds,
-            verify_pass_rate=args.verify_pass_rate,
+            simple_count=args.simple_count,
+            complex_count=args.complex_count,
         )
     )
 
@@ -373,61 +310,45 @@ def main():
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
-    # Print detailed summary
+    # Print summary
     pass_rate = results["pass_rate"]
     passed = results["passed_count"]
-    failed = results["failed_count"]
     total = results["total_builds"]
-    status = results["status"]
-    recommendation = results["recommendation"]
-    metrics = results["aggregate_metrics"]
 
     print(f"\n{'='*60}", file=sys.stderr)
     print(f"Benchmark Suite Results", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
-    print(f"\nBuild Summary:", file=sys.stderr)
-    print(f"  Simple builds: {results['num_simple_builds']}", file=sys.stderr)
-    print(f"  Complex builds: {results['num_complex_builds']}", file=sys.stderr)
-    print(f"  Total builds: {total}", file=sys.stderr)
-    print(f"  Passed: {passed}", file=sys.stderr)
-    print(f"  Failed: {failed}", file=sys.stderr)
-    print(f"  Pass rate: {pass_rate:.2%}", file=sys.stderr)
-    print(f"  Threshold: {args.verify_pass_rate:.2%}", file=sys.stderr)
-
-    print(f"\nPer-Component Metrics:", file=sys.stderr)
-    print(f"  Total issues: {metrics['total_issues']}", file=sys.stderr)
-    print(f"  Trivial issues: {metrics['total_trivial_issues']} ({metrics['trivial_adoption_rate']:.1%})", file=sys.stderr)
-    print(f"  Advisor invocations: {metrics['total_advisor_invocations']}", file=sys.stderr)
-    print(f"  Replanner invocations: {metrics['total_replanner_invocations']}", file=sys.stderr)
-    print(f"  Avg turns per issue: {metrics['avg_turns_per_issue']:.1f}", file=sys.stderr)
-
-    print(f"\nPer-Build Verification Status:", file=sys.stderr)
-    for build in results["builds"]:
-        verification_status = "✓ PASS" if build["verification"]["passed"] else "✗ FAIL"
-        print(
-            f"  {build['build_name']:40s} [{build['complexity']:7s}] "
-            f"{build['num_issues']:2d} issues: {verification_status}",
-            file=sys.stderr,
-        )
-
-    print(f"\n{'='*60}", file=sys.stderr)
-    print(f"Final Status: {status}", file=sys.stderr)
-    print(f"Recommendation: {recommendation}", file=sys.stderr)
+    print(f"  Total builds:        {total}", file=sys.stderr)
+    print(f"  Passed:              {passed}", file=sys.stderr)
+    print(f"  Failed:              {total - passed}", file=sys.stderr)
+    print(f"  Overall pass rate:   {pass_rate:.2%}", file=sys.stderr)
+    print(f"", file=sys.stderr)
+    print(f"  Simple builds:       {results['simple_builds']} ({results['simple_passed']} passed, {results['simple_pass_rate']:.2%})", file=sys.stderr)
+    print(f"  Complex builds:      {results['complex_builds']} ({results['complex_passed']} passed, {results['complex_pass_rate']:.2%})", file=sys.stderr)
+    print(f"", file=sys.stderr)
+    print(f"  Thresholds:", file=sys.stderr)
+    print(f"    PASS:  >= {args.threshold:.2%}", file=sys.stderr)
+    print(f"    WARN:  >= {args.warn_threshold:.2%}", file=sys.stderr)
+    print(f"    FAIL:  <  {args.warn_threshold:.2%}", file=sys.stderr)
+    print(f"", file=sys.stderr)
+    print(f"  Results written to: {args.output}", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
-    print(f"\nResults written to: {args.output}", file=sys.stderr)
 
-    # Exit code based on status
-    if status == "PASS":
-        print(f"\n✓ PASS: Pass rate {pass_rate:.2%} >= threshold {args.verify_pass_rate:.2%}", file=sys.stderr)
-        print(f"         Deployment approved ✓", file=sys.stderr)
+    # Determine status based on thresholds (AC4, AC5, AC6)
+    if pass_rate >= args.threshold:
+        # AC4: Pass rate ≥95% for deployment approval
+        print(f"✓ PASS: Pass rate {pass_rate:.2%} >= threshold {args.threshold:.2%}", file=sys.stderr)
+        print(f"  Deployment APPROVED", file=sys.stderr)
         sys.exit(0)
-    elif status == "WARN":
-        print(f"\n⚠ WARN: Pass rate {pass_rate:.2%} within tolerance (90-{args.verify_pass_rate:.0%})", file=sys.stderr)
-        print(f"         Deployment allowed with warning", file=sys.stderr)
+    elif pass_rate >= args.warn_threshold:
+        # AC5: Pass rate ≥90% with 5% tolerance for warning (allows deployment)
+        print(f"⚠ WARN: Pass rate {pass_rate:.2%} >= {args.warn_threshold:.2%} but < {args.threshold:.2%}", file=sys.stderr)
+        print(f"  Deployment ALLOWED with warning", file=sys.stderr)
         sys.exit(0)
     else:
-        print(f"\n✗ FAIL: Pass rate {pass_rate:.2%} < 90% minimum", file=sys.stderr)
-        print(f"         Rollback recommended", file=sys.stderr)
+        # AC6: Pass rate <90% triggers rollback recommendation
+        print(f"✗ FAIL: Pass rate {pass_rate:.2%} < {args.warn_threshold:.2%}", file=sys.stderr)
+        print(f"  Deployment REJECTED - ROLLBACK RECOMMENDED", file=sys.stderr)
         sys.exit(1)
 
 
