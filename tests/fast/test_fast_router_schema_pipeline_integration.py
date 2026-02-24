@@ -550,16 +550,29 @@ class TestBuildConfigModelThreading:
 
         assert "git_model" in resolved, "fast_resolve_models must produce 'git_model' key"
 
-    def test_claude_code_runtime_produces_haiku_models_for_all_roles(self) -> None:
-        """For claude_code runtime, all 4 resolved models must be 'haiku'."""
-        from swe_af.fast.schemas import FastBuildConfig, fast_resolve_models  # noqa: PLC0415
+    def test_claude_code_runtime_produces_correct_model_defaults(self) -> None:
+        """For claude_code runtime, validate 4 haiku models and 12 sonnet models."""
+        from swe_af.execution.schemas import _RUNTIME_BASE_MODELS  # noqa: PLC0415
 
-        cfg = FastBuildConfig(runtime="claude_code")
-        resolved = fast_resolve_models(cfg)
+        claude_models = _RUNTIME_BASE_MODELS["claude_code"]
 
-        for role, model in resolved.items():
-            assert model == "haiku", (
-                f"claude_code runtime: role {role!r} should be 'haiku', got {model!r}"
+        # 4 models should be haiku
+        haiku_roles = {"qa_synthesizer_model", "git_model", "merger_model", "retry_advisor_model"}
+        for role in haiku_roles:
+            assert claude_models[role] == "haiku", (
+                f"claude_code runtime: {role!r} should be 'haiku', got {claude_models[role]!r}"
+            )
+
+        # 12 models should be sonnet
+        sonnet_roles = {
+            "pm_model", "architect_model", "tech_lead_model", "sprint_planner_model",
+            "coder_model", "qa_model", "code_reviewer_model", "replan_model",
+            "issue_writer_model", "issue_advisor_model", "verifier_model",
+            "integration_tester_model"
+        }
+        for role in sonnet_roles:
+            assert claude_models[role] == "sonnet", (
+                f"claude_code runtime: {role!r} should be 'sonnet', got {claude_models[role]!r}"
             )
 
     def test_open_code_runtime_produces_qwen_models_for_all_roles(self) -> None:

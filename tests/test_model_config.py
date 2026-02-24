@@ -16,11 +16,14 @@ from swe_af.execution.schemas import (
 class TestResolveRuntimeModels(unittest.TestCase):
     def test_claude_code_defaults(self) -> None:
         resolved = resolve_runtime_models(runtime="claude_code", models=None)
+        # 4 utility agents should use haiku
+        haiku_fields = {"qa_synthesizer_model", "git_model", "merger_model", "retry_advisor_model"}
+        for field in haiku_fields:
+            self.assertEqual(resolved[field], "haiku")
+        # All other 12 agents should use sonnet
         for field in ALL_MODEL_FIELDS:
-            if field == "qa_synthesizer_model":
-                continue
-            self.assertEqual(resolved[field], "sonnet")
-        self.assertEqual(resolved["qa_synthesizer_model"], "haiku")
+            if field not in haiku_fields:
+                self.assertEqual(resolved[field], "sonnet")
 
     def test_open_code_defaults(self) -> None:
         resolved = resolve_runtime_models(runtime="open_code", models=None)
@@ -107,7 +110,11 @@ class TestExecutionConfig(unittest.TestCase):
         self.assertEqual(cfg.runtime, "claude_code")
         self.assertEqual(cfg.ai_provider, "claude")
         self.assertEqual(cfg.coder_model, "sonnet")
+        # Verify 4 utility agents use haiku
         self.assertEqual(cfg.qa_synthesizer_model, "haiku")
+        self.assertEqual(cfg.git_model, "haiku")
+        self.assertEqual(cfg.merger_model, "haiku")
+        self.assertEqual(cfg.retry_advisor_model, "haiku")
 
     def test_open_code_resolution(self) -> None:
         cfg = ExecutionConfig(runtime="open_code")
