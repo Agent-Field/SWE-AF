@@ -704,6 +704,13 @@ async def run_coding_loop(
                     f"Coding loop APPROVED: {issue_name} after {iteration} iteration(s)",
                     tags=["coding_loop", "complete", issue_name],
                 )
+            # Fast-path detection for observability
+            if iteration == 1:
+                if note_fn:
+                    note_fn(
+                        f"Fast-path success: {issue_name} approved on first iteration",
+                        tags=["coding_loop", "fast_path", issue_name],
+                    )
             return IssueResult(
                 issue_name=issue_name,
                 outcome=IssueOutcome.COMPLETED,
