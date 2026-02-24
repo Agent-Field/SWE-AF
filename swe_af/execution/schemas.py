@@ -638,16 +638,16 @@ class ExecutionConfig(BaseModel):
     architect_timeout: int = 1200
     tech_lead_timeout: int = 1200
     sprint_planner_timeout: int = 1200
-    issue_writer_timeout: int = 900     # 15 min
+    issue_writer_timeout: int = 600     # 10 min
     coder_timeout: int = 1800           # 30 min
     qa_timeout: int = 1500              # 25 min
     code_reviewer_timeout: int = 1500
-    qa_synthesizer_timeout: int = 900
+    qa_synthesizer_timeout: int = 600   # 10 min
     issue_advisor_timeout: int = 1500
     replan_timeout: int = 1500
     verifier_timeout: int = 1500
-    git_timeout: int = 900
-    merger_timeout: int = 1200
+    git_timeout: int = 600              # 10 min
+    merger_timeout: int = 900           # 15 min
     integration_tester_timeout: int = 1500
     retry_advisor_timeout: int = 1200
 

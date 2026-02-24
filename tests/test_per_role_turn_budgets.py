@@ -84,12 +84,12 @@ class TestPerRoleTimeouts:
         assert config.timeout_for_role("tech_lead") == 1200
         assert config.timeout_for_role("sprint_planner") == 1200
         assert config.timeout_for_role("retry_advisor") == 1200
-        assert config.timeout_for_role("merger") == 1200
+        assert config.timeout_for_role("merger") == 900
 
-        # Lightweight roles (900s = 15 min)
-        assert config.timeout_for_role("issue_writer") == 900
-        assert config.timeout_for_role("qa_synthesizer") == 900
-        assert config.timeout_for_role("git") == 900
+        # Lightweight roles (600s = 10 min)
+        assert config.timeout_for_role("issue_writer") == 600
+        assert config.timeout_for_role("qa_synthesizer") == 600
+        assert config.timeout_for_role("git") == 600
 
         # Coding role (1800s = 30 min)
         assert config.timeout_for_role("coder") == 1800
