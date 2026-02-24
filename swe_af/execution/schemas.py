@@ -374,6 +374,9 @@ _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "claude_code": {
         **{field: "sonnet" for field in ALL_MODEL_FIELDS},
         "qa_synthesizer_model": "haiku",
+        "retry_advisor_model": "haiku",
+        "git_model": "haiku",
+        "merger_model": "haiku",
     },
     "open_code": {
         **{field: "minimax/minimax-m2.5" for field in ALL_MODEL_FIELDS},
