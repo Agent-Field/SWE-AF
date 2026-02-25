@@ -18,6 +18,7 @@ from swe_af.reasoners.pipeline import _assign_sequence_numbers, _compute_levels,
 from swe_af.reasoners.schemas import PlanResult, ReviewResult
 
 from agentfield import Agent
+from swe_af.approval import ApprovalClient
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.schemas import (
     BuildConfig,
@@ -418,6 +419,117 @@ async def build(
             "proceeding without git workflow",
             tags=["build", "git_init", "error"],
         )
+
+    # 1.5 APPROVAL CHECKPOINT — pause for human plan review if enabled
+    if cfg.enable_plan_approval and cfg.approval_project_id:
+        execution_id = app.ctx.execution_id if app.ctx else ""
+        if not execution_id:
+            app.note(
+                "Approval enabled but no execution context available — skipping",
+                tags=["build", "approval", "skipped"],
+            )
+        else:
+            app.note("Phase 1.5: Requesting plan approval", tags=["build", "approval"])
+
+            # Build markdown summary from plan_result for the template
+            plan_summary = plan_result.get("rationale", "")
+            prd_data = plan_result.get("prd", {})
+            arch_data = plan_result.get("architecture", {})
+
+            # Format PRD as markdown
+            prd_md_parts = []
+            if prd_data.get("validated_description"):
+                prd_md_parts.append(f"## Description\n{prd_data['validated_description']}")
+            if prd_data.get("must_have"):
+                prd_md_parts.append("## Must Have\n" + "\n".join(f"- {item}" for item in prd_data["must_have"]))
+            if prd_data.get("nice_to_have"):
+                prd_md_parts.append("## Nice to Have\n" + "\n".join(f"- {item}" for item in prd_data["nice_to_have"]))
+            if prd_data.get("acceptance_criteria"):
+                prd_md_parts.append("## Acceptance Criteria\n" + "\n".join(f"- {item}" for item in prd_data["acceptance_criteria"]))
+            prd_markdown = "\n\n".join(prd_md_parts) if prd_md_parts else ""
+
+            # Format architecture as markdown
+            arch_md_parts = []
+            if arch_data.get("summary"):
+                arch_md_parts.append(f"## Summary\n{arch_data['summary']}")
+            if arch_data.get("components"):
+                arch_md_parts.append("## Components")
+                for comp in arch_data["components"]:
+                    arch_md_parts.append(f"### {comp.get('name', 'Component')}\n{comp.get('responsibility', '')}")
+                    if comp.get("touches_files"):
+                        arch_md_parts.append("Files: " + ", ".join(f"`{f}`" for f in comp["touches_files"]))
+            if arch_data.get("decisions"):
+                arch_md_parts.append("## Key Decisions")
+                for dec in arch_data["decisions"]:
+                    arch_md_parts.append(f"- **{dec.get('decision', '')}**: {dec.get('rationale', '')}")
+            architecture_markdown = "\n\n".join(arch_md_parts) if arch_md_parts else ""
+
+            # Format issues for the template
+            issues_for_template = []
+            for issue in plan_result.get("issues", []):
+                issues_for_template.append({
+                    "name": issue.get("name", ""),
+                    "title": issue.get("title", ""),
+                    "description": issue.get("description", ""),
+                    "dependsOn": issue.get("depends_on", []),
+                    "filesToModify": issue.get("files_to_modify", []),
+                    "filesToCreate": issue.get("files_to_create", []),
+                    "acceptanceCriteria": issue.get("acceptance_criteria", []),
+                })
+
+            import json as _json
+            approval_state_path = os.path.join(abs_artifacts_dir, "approval_state.json")
+            os.makedirs(os.path.dirname(approval_state_path), exist_ok=True)
+
+            def _save_pending_state(req_id: str, req_url: str) -> None:
+                """Persist pending state before polling so resume_build can recover."""
+                with open(approval_state_path, "w") as _fp:
+                    _json.dump({
+                        "decision": "pending",
+                        "feedback": "",
+                        "request_id": req_id,
+                        "request_url": req_url,
+                    }, _fp, indent=2)
+
+            approval_client = ApprovalClient(app, cfg.approval_project_id)
+            approval_result = await approval_client.request_plan_approval(
+                execution_id=execution_id,
+                plan_summary=plan_summary,
+                issues=issues_for_template,
+                architecture=architecture_markdown,
+                prd=prd_markdown,
+                goal_description=goal,
+                repo_url=cfg.repo_url,
+                expires_in_hours=cfg.approval_expires_in_hours,
+                on_request_created=_save_pending_state,
+            )
+
+            # Update with final decision
+            with open(approval_state_path, "w") as _f:
+                _json.dump({
+                    "decision": approval_result.decision,
+                    "feedback": approval_result.feedback,
+                    "request_id": approval_result.request_id,
+                    "request_url": approval_result.request_url,
+                }, _f, indent=2)
+
+            if not approval_result.approved:
+                reason = approval_result.feedback or approval_result.decision
+                app.note(
+                    f"Plan {approval_result.decision} by human reviewer: {reason}",
+                    tags=["build", "approval", approval_result.decision],
+                )
+                return BuildResult(
+                    plan_result=plan_result,
+                    dag_state={},
+                    success=False,
+                    summary=f"Plan {approval_result.decision}: {reason}",
+                ).model_dump()
+
+            app.note(
+                "Plan approved — proceeding to execution",
+                tags=["build", "approval", "approved"],
+            )
 
     # 2. EXECUTE
     exec_config = cfg.to_execution_config_dict()
@@ -1068,6 +1180,59 @@ async def resume_build(
         "artifacts_dir": checkpoint.get("artifacts_dir", base),
         "rationale": checkpoint.get("original_plan_summary", ""),
     }
+
+    # Check for pending approval state — if process crashed while waiting,
+    # resume polling instead of re-requesting approval.
+    approval_state_path = os.path.join(base, "approval_state.json")
+    if os.path.exists(approval_state_path):
+        with open(approval_state_path, "r") as f:
+            approval_state = json.load(f)
+
+        prev_decision = approval_state.get("decision", "")
+
+        if prev_decision == "approved":
+            app.note(
+                "Approval already granted in previous run — skipping",
+                tags=["build", "resume", "approval", "skipped"],
+            )
+        elif prev_decision in ("rejected", "expired", "error"):
+            app.note(
+                f"Previous approval was {prev_decision} — cannot resume",
+                tags=["build", "resume", "approval", prev_decision],
+            )
+            return {
+                "success": False,
+                "error": f"Plan was {prev_decision} in previous run",
+            }
+        elif prev_decision == "pending" and approval_state.get("request_id"):
+            # Process crashed while polling — resume polling
+            app.note(
+                "Resuming approval polling from previous run",
+                tags=["build", "resume", "approval", "polling"],
+            )
+            cfg = BuildConfig(**config) if config else BuildConfig()
+            if cfg.approval_project_id:
+                execution_id = app.ctx.execution_id if app.ctx else ""
+                approval_client = ApprovalClient(app, cfg.approval_project_id)
+                result = await approval_client._poll_approval(
+                    execution_id=execution_id,
+                    request_id=approval_state["request_id"],
+                    request_url=approval_state.get("request_url", ""),
+                )
+                # Update saved state
+                with open(approval_state_path, "w") as f:
+                    json.dump({
+                        "decision": result.decision,
+                        "feedback": result.feedback,
+                        "request_id": result.request_id,
+                        "request_url": result.request_url,
+                    }, f, indent=2)
+
+                if not result.approved:
+                    return {
+                        "success": False,
+                        "error": f"Plan {result.decision}: {result.feedback}",
+                    }
 
     app.note("Resuming build from checkpoint", tags=["build", "resume"])
 

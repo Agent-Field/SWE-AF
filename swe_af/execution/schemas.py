@@ -625,6 +625,11 @@ class BuildConfig(BaseModel):
     max_concurrent_issues: int = 3          # max parallel issues per level (0 = unlimited)
     level_failure_abort_threshold: float = 0.8  # abort DAG when >= this fraction of a level fails
 
+    # Approval workflow — when enabled, pauses after planning for human review
+    enable_plan_approval: bool = False
+    approval_project_id: str = ""           # hax-sdk project UUID for approval requests
+    approval_expires_in_hours: int = 72     # how long before approval request expires
+
     @model_validator(mode="before")
     @classmethod
     def _validate_v2_keys(cls, data: Any) -> Any:
