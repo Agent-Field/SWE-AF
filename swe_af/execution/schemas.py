@@ -710,6 +710,7 @@ class BuildConfig(BaseModel):
         return {
             "runtime": self.runtime,
             "models": self.models,
+            "permission_mode": self.permission_mode,
             "max_retries_per_issue": self.max_retries_per_issue,
             "max_replans": self.max_replans,
             "enable_replanning": self.enable_replanning,
@@ -785,6 +786,7 @@ class ExecutionConfig(BaseModel):
     enable_integration_testing: bool = True
     max_coding_iterations: int = 5
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
+    permission_mode: str = ""
     agent_timeout_seconds: int = 2700       # 45 min
     max_advisor_invocations: int = 2
     enable_issue_advisor: bool = True
