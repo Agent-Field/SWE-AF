@@ -876,7 +876,7 @@ print("OK")
 
 
 class TestRuntimeToProviderCrossFeature:
-    """app._runtime_to_provider maps FastBuildConfig.runtime to AgentAI provider strings."""
+    """app._runtime_to_provider maps FastBuildConfig.runtime to harness provider strings."""
 
     def test_claude_code_runtime_maps_to_claude_provider(self) -> None:
         """FastBuildConfig runtime='claude_code' must map to ai_provider='claude'."""
@@ -896,24 +896,17 @@ class TestRuntimeToProviderCrossFeature:
             f"_runtime_to_provider('open_code') must return 'opencode', got {provider!r}"
         )
 
-    def test_runtime_to_provider_aligns_with_agentai_config_provider_field(self) -> None:
-        """AgentAIConfig.provider must accept the values returned by _runtime_to_provider."""
-        from swe_af.agent_ai import AgentAIConfig  # noqa: PLC0415
+    def test_runtime_to_provider_returns_valid_provider_strings(self) -> None:
+        """_runtime_to_provider must return known provider strings for all runtimes."""
         import swe_af.fast.app as fast_app  # noqa: PLC0415
 
+        valid_providers = {"claude", "opencode"}
         for runtime in ("claude_code", "open_code"):
             provider = fast_app._runtime_to_provider(runtime)
-            try:
-                cfg = AgentAIConfig(provider=provider, model="haiku", cwd="/tmp")
-                assert cfg.provider == provider, (
-                    f"AgentAIConfig.provider must accept {provider!r} from "
-                    f"_runtime_to_provider({runtime!r})"
-                )
-            except Exception as exc:
-                pytest.fail(
-                    f"AgentAIConfig rejected provider={provider!r} "
-                    f"(from runtime={runtime!r}): {exc}"
-                )
+            assert provider in valid_providers, (
+                f"_runtime_to_provider({runtime!r}) returned {provider!r}, "
+                f"expected one of {valid_providers}"
+            )
 
     def test_build_source_uses_runtime_to_provider(self) -> None:
         """build() must call _runtime_to_provider to convert config.runtime to ai_provider."""

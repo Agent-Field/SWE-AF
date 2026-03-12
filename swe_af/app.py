@@ -17,7 +17,12 @@ from swe_af.reasoners import router
 from swe_af.reasoners.pipeline import _assign_sequence_numbers, _compute_levels, _validate_file_conflicts
 from swe_af.reasoners.schemas import PlanResult, ReviewResult
 
-from agentfield import Agent
+from agentfield import Agent, AIConfig
+
+try:
+    from agentfield.types import HarnessConfig
+except ImportError:
+    HarnessConfig = None  # type: ignore[assignment,misc]
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.schemas import (
     BuildConfig,
@@ -30,12 +35,36 @@ from swe_af.execution.schemas import (
 
 NODE_ID = os.getenv("NODE_ID", "swe-planner")
 
+# Runtime selection: "opencode" (MiniMax) or "claude-code" (Claude Sonnet)
+_HARNESS_PROVIDER = os.getenv("SWE_AF_HARNESS_PROVIDER", "opencode")
+_HARNESS_MODEL = os.getenv("SWE_AF_HARNESS_MODEL", "minimax/minimax-m2.5")
+_AI_MODEL = os.getenv("SWE_AF_AI_MODEL", "minimax/minimax-m2.5")
+_OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "")
+
+_harness_kwargs: dict = {}
+if HarnessConfig is not None:
+    _harness_kwargs["harness_config"] = HarnessConfig(
+        provider=_HARNESS_PROVIDER,
+        model=_HARNESS_MODEL,
+        max_turns=30,
+        env={"OPENROUTER_API_KEY": _OPENROUTER_KEY},
+        opencode_bin=os.getenv("OPENCODE_BIN", "opencode"),
+        permission_mode="auto",
+    )
+
 app = Agent(
     node_id=NODE_ID,
     version="1.0.0",
     description="Autonomous SWE planning pipeline",
     agentfield_server=os.getenv("AGENTFIELD_SERVER", "http://localhost:8080"),
     api_key=os.getenv("AGENTFIELD_API_KEY"),
+    callback_url=os.getenv("AGENT_CALLBACK_URL", "http://127.0.0.1:8003"),
+    ai_config=AIConfig(
+        model=_AI_MODEL,
+        api_key=_OPENROUTER_KEY,
+        api_base="https://openrouter.ai/api/v1",
+    ),
+    **_harness_kwargs,
 )
 
 app.include_router(router)
@@ -422,16 +451,29 @@ async def build(
     # 2. EXECUTE
     exec_config = cfg.to_execution_config_dict()
 
-    dag_result = _unwrap(await app.call(
-        f"{NODE_ID}.execute",
-        plan_result=plan_result,
-        repo_path=repo_path,
-        execute_fn_target=cfg.execute_fn_target,
-        config=exec_config,
-        git_config=git_config,
-        build_id=build_id,
-        workspace_manifest=manifest.model_dump() if manifest else None,
-    ), "execute")
+    if cfg.streaming:
+        # PlanDB streaming executor — tasks start as soon as deps resolve
+        dag_result = _unwrap(await app.call(
+            f"{NODE_ID}.streaming_execute",
+            plan_result=plan_result,
+            repo_path=repo_path,
+            config=exec_config,
+            git_config=git_config,
+            build_id=build_id,
+            workspace_manifest=manifest.model_dump() if manifest else None,
+        ), "streaming_execute")
+    else:
+        # Level-based DAG executor (original)
+        dag_result = _unwrap(await app.call(
+            f"{NODE_ID}.execute",
+            plan_result=plan_result,
+            repo_path=repo_path,
+            execute_fn_target=cfg.execute_fn_target,
+            config=exec_config,
+            git_config=git_config,
+            build_id=build_id,
+            workspace_manifest=manifest.model_dump() if manifest else None,
+        ), "execute")
 
     # Refresh manifest with git_init_result populated by _init_all_repos() in
     # the DAG executor.  Must happen before the verify/fix loop which can
@@ -1021,6 +1063,64 @@ async def execute(
         node_id=NODE_ID,
         git_config=git_config,
         resume=resume,
+        build_id=build_id,
+        workspace_manifest=workspace_manifest,
+    )
+    return state.model_dump()
+
+
+@app.reasoner()
+async def streaming_execute(
+    plan_result: dict,
+    repo_path: str,
+    config: dict | None = None,
+    git_config: dict | None = None,
+    build_id: str = "",
+    workspace_manifest: dict | None = None,
+) -> dict:
+    """Execute a planned DAG using the streaming PlanDB-backed executor.
+
+    Unlike ``execute``, this uses PlanDB for task dispatch — tasks start the
+    moment their dependencies resolve (no level barriers).  Each worker appears
+    as a visible reasoner call in the AgentField graph, and all downstream
+    coding pipeline calls (coder, reviewer, merger, reassess) are visible
+    child edges.
+
+    Call graph produced::
+
+        streaming_execute
+        ├── run_plandb_planner          ← AI creates PlanDB tasks
+        ├── run_streaming_worker (×N)   ← parallel claim loops
+        │   ├── run_workspace_setup
+        │   ├── run_coder
+        │   ├── run_code_reviewer
+        │   ├── run_merger
+        │   ├── run_reassess
+        │   └── run_workspace_cleanup
+        └── (collects results → DAGState)
+
+    Args:
+        plan_result: Output from the ``plan`` reasoner.
+        repo_path: Path to the target repository.
+        config: ExecutionConfig overrides as a dict.
+        git_config: Optional git configuration from ``run_git_init``.
+        build_id: Unique build identifier.
+        workspace_manifest: Optional WorkspaceManifest.model_dump() for multi-repo.
+    """
+    from swe_af.execution.streaming_executor import run_streaming_dag
+    from swe_af.execution.schemas import ExecutionConfig
+
+    effective_config = dict(config) if config else {}
+    exec_config = ExecutionConfig(**effective_config) if effective_config else ExecutionConfig()
+
+    state = await run_streaming_dag(
+        plan_result=plan_result,
+        repo_path=repo_path,
+        config=exec_config,
+        note_fn=app.note,
+        call_fn=app.call,
+        node_id=NODE_ID,
+        git_config=git_config,
         build_id=build_id,
         workspace_manifest=workspace_manifest,
     )

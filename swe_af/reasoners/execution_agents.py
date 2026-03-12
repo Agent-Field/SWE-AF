@@ -10,8 +10,6 @@ import os
 
 from pydantic import BaseModel
 
-from swe_af.agent_ai import AgentAI, AgentAIConfig
-from swe_af.agent_ai.types import Tool
 from swe_af.execution.schemas import (
     DEFAULT_AGENT_MAX_TURNS,
     AdvisorAction,
@@ -141,29 +139,21 @@ async def run_retry_advisor(
     log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
     log_path = os.path.join(log_dir, f"retry_advisor_{issue_name}_{attempt_number}.jsonl") if log_dir else None
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=RETRY_ADVISOR_SYSTEM_PROMPT,
-            output_schema=RetryAdvice,
-            log_file=log_path,
+            schema=RetryAdvice,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Retry advisor: should_retry={response.parsed.should_retry}, "
-                f"confidence={response.parsed.confidence}",
+                f"Retry advisor: should_retry={result.parsed.should_retry}, "
+                f"confidence={result.parsed.confidence}",
                 tags=["retry_advisor", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Retry advisor agent failed: {e}",
@@ -227,28 +217,20 @@ async def run_issue_advisor(
     log_path = os.path.join(log_dir, f"issue_advisor_{issue_name}_{advisor_invocation}.jsonl") if log_dir else None
 
     cwd = worktree_path or dag_state_summary.get("repo_path", ".")
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=cwd,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=ISSUE_ADVISOR_SYSTEM_PROMPT,
-            output_schema=IssueAdvisorDecision,
-            log_file=log_path,
+            schema=IssueAdvisorDecision,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Issue advisor decision: {response.parsed.action.value} — {response.parsed.summary}",
+                f"Issue advisor decision: {result.parsed.action.value} — {result.parsed.summary}",
                 tags=["issue_advisor", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Issue advisor agent failed: {e}",
@@ -305,42 +287,34 @@ async def run_replanner(
     log_dir = os.path.join(state.artifacts_dir, "logs") if state.artifacts_dir else None
     log_path = os.path.join(log_dir, f"replanner_{state.replan_count}.jsonl") if log_dir else None
 
-    ai = AgentAI(AgentAIConfig(
-        model=replan_model,
-        provider=ai_provider,
-        cwd=state.repo_path or ".",
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     current_prompt = task_prompt
     for attempt in range(2):
         try:
-            response = await ai.run(
-                current_prompt,
+            result = await app.harness(
+                prompt=current_prompt,
                 system_prompt=REPLANNER_SYSTEM_PROMPT,
-                output_schema=ReplanDecision,
-                log_file=log_path,
+                schema=ReplanDecision,
             )
             # Log raw response for debugging (even on parse failure)
             if log_dir:
                 raw_log = os.path.join(log_dir, f"replanner_{state.replan_count}_raw_{attempt}.txt")
                 os.makedirs(log_dir, exist_ok=True)
                 with open(raw_log, "w") as f:
-                    f.write(response.text or "(empty)")
+                    f.write(result.text or "(empty)")
 
-            if response.parsed is not None:
+            if result.parsed is not None:
                 router.note(
-                    f"Replan decision: {response.parsed.action.value} — {response.parsed.summary}",
+                    f"Replan decision: {result.parsed.action.value} — {result.parsed.summary}",
                     tags=["replanner", "complete"],
                 )
-                return response.parsed.model_dump()
+                return result.parsed.model_dump()
 
             # Parse failed — retry with tighter prompt
             router.note(
                 f"Replanner produced unparseable output (attempt {attempt + 1}): "
-                f"{(response.text or '')[:500]}",
+                f"{(result.text or '')[:500]}",
                 tags=["replanner", "parse_error"],
             )
             current_prompt = (
@@ -423,28 +397,20 @@ async def run_issue_writer(
         issue_file_path: str
         success: bool
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=ISSUE_WRITER_SYSTEM_PROMPT,
-            output_schema=IssueWriterOutput,
-            log_file=log_path,
+            schema=IssueWriterOutput,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Issue writer complete for {issue_name}: {response.parsed.issue_file_path}",
+                f"Issue writer complete for {issue_name}: {result.parsed.issue_file_path}",
                 tags=["issue_writer", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Issue writer failed for {issue_name}: {e}",
@@ -492,29 +458,21 @@ async def run_verifier(
         workspace_manifest=ws_manifest,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=VERIFIER_SYSTEM_PROMPT,
-            output_schema=VerificationResult,
-            log_file=log_path,
+            schema=VerificationResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Verifier complete: passed={response.parsed.passed}, "
-                f"summary={response.parsed.summary}",
+                f"Verifier complete: passed={result.parsed.passed}, "
+                f"summary={result.parsed.summary}",
                 tags=["verifier", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Verifier agent failed: {e}",
@@ -578,29 +536,21 @@ async def run_git_init(
             "- If the error indicates a parsing issue, ensure your output is valid JSON\n"
         )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=system_prompt,
-            output_schema=GitInitResult,
-            log_file=log_path,
+            schema=GitInitResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Git init complete: mode={response.parsed.mode}, "
-                f"integration_branch={response.parsed.integration_branch}",
+                f"Git init complete: mode={result.parsed.mode}, "
+                f"integration_branch={result.parsed.integration_branch}",
                 tags=["git_init", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Git init agent failed: {e}",
@@ -656,28 +606,20 @@ async def run_workspace_setup(
         workspaces: list[WorkspaceInfo]
         success: bool
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=WORKSPACE_SETUP_SYSTEM_PROMPT,
-            output_schema=WorkspaceSetupResult,
-            log_file=log_path,
+            schema=WorkspaceSetupResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Workspace setup complete: {len(response.parsed.workspaces)} worktrees created",
+                f"Workspace setup complete: {len(result.parsed.workspaces)} worktrees created",
                 tags=["workspace_setup", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Workspace setup agent failed: {e}",
@@ -723,30 +665,22 @@ async def run_merger(
         architecture_summary=architecture_summary,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH, Tool.READ, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=MERGER_SYSTEM_PROMPT,
-            output_schema=MergeResult,
-            log_file=log_path,
+            schema=MergeResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Merger complete: merged={response.parsed.merged_branches}, "
-                f"failed={response.parsed.failed_branches}, "
-                f"needs_test={response.parsed.needs_integration_test}",
+                f"Merger complete: merged={result.parsed.merged_branches}, "
+                f"failed={result.parsed.failed_branches}, "
+                f"needs_test={result.parsed.needs_integration_test}",
                 tags=["merger", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Merger agent failed: {e}",
@@ -801,29 +735,21 @@ async def run_integration_tester(
         workspace_manifest=ws_manifest,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH, Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=INTEGRATION_TESTER_SYSTEM_PROMPT,
-            output_schema=IntegrationTestResult,
-            log_file=log_path,
+            schema=IntegrationTestResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Integration tester complete: passed={response.parsed.passed}, "
-                f"{response.parsed.tests_passed}/{response.parsed.tests_run} tests passed",
+                f"Integration tester complete: passed={result.parsed.passed}, "
+                f"{result.parsed.tests_passed}/{result.parsed.tests_run} tests passed",
                 tags=["integration_tester", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Integration tester agent failed: {e}",
@@ -872,28 +798,20 @@ async def run_workspace_cleanup(
         success: bool
         cleaned: list[str] = []
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=WORKSPACE_CLEANUP_SYSTEM_PROMPT,
-            output_schema=WorkspaceCleanupResult,
-            log_file=log_path,
+            schema=WorkspaceCleanupResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Workspace cleanup complete: {len(response.parsed.cleaned)} cleaned",
+                f"Workspace cleanup complete: {len(result.parsed.cleaned)} cleaned",
                 tags=["workspace_cleanup", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Workspace cleanup agent failed: {e}",
@@ -952,33 +870,22 @@ async def run_coder(
         target_repo=target_repo,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=worktree_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[
-            Tool.READ, Tool.WRITE, Tool.EDIT,
-            Tool.BASH, Tool.GLOB, Tool.GREP,
-        ],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=CODER_SYSTEM_PROMPT,
-            output_schema=CoderResult,
-            log_file=log_path,
+            schema=CoderResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
                 f"Coder complete: {issue_name}, "
-                f"files={len(response.parsed.files_changed)}, "
-                f"complete={response.parsed.complete}",
+                f"files={len(result.parsed.files_changed)}, "
+                f"complete={result.parsed.complete}",
                 tags=["coder", "complete"],
             )
-            result = response.parsed.model_dump()
+            result = result.parsed.model_dump()
             result["iteration_id"] = iteration_id
             return result
     except Exception as e:
@@ -1035,31 +942,20 @@ async def run_qa(
         target_repo=target_repo,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=worktree_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[
-            Tool.READ, Tool.WRITE, Tool.EDIT,
-            Tool.BASH, Tool.GLOB, Tool.GREP,
-        ],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=QA_SYSTEM_PROMPT,
-            output_schema=QAResult,
-            log_file=log_path,
+            schema=QAResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"QA complete: {issue_name}, passed={response.parsed.passed}",
+                f"QA complete: {issue_name}, passed={result.parsed.passed}",
                 tags=["qa", "complete"],
             )
-            result = response.parsed.model_dump()
+            result = result.parsed.model_dump()
             result["iteration_id"] = iteration_id
             return result
     except Exception as e:
@@ -1121,30 +1017,22 @@ async def run_code_reviewer(
         target_repo=target_repo,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=worktree_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=CODE_REVIEWER_SYSTEM_PROMPT,
-            output_schema=CodeReviewResult,
-            log_file=log_path,
+            schema=CodeReviewResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
                 f"Code reviewer complete: {issue_name}, "
-                f"approved={response.parsed.approved}, "
-                f"blocking={response.parsed.blocking}",
+                f"approved={result.parsed.approved}, "
+                f"blocking={result.parsed.blocking}",
                 tags=["code_reviewer", "complete"],
             )
-            result = response.parsed.model_dump()
+            result = result.parsed.model_dump()
             result["iteration_id"] = iteration_id
             return result
     except Exception as e:
@@ -1202,29 +1090,21 @@ async def run_qa_synthesizer(
         workspace_manifest=ws_manifest,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=worktree_path or ".",
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=QA_SYNTHESIZER_SYSTEM_PROMPT,
-            output_schema=QASynthesisResult,
-            log_file=log_path,
+            schema=QASynthesisResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"QA synthesizer complete: action={response.parsed.action.value}, "
-                f"stuck={response.parsed.stuck}",
+                f"QA synthesizer complete: action={result.parsed.action.value}, "
+                f"stuck={result.parsed.stuck}",
                 tags=["qa_synthesizer", "complete"],
             )
-            result = response.parsed.model_dump()
+            result = result.parsed.model_dump()
             result["iteration_id"] = iteration_id
             return result
     except Exception as e:
@@ -1311,29 +1191,21 @@ async def generate_fix_issues(
         debt_items: list[dict] = []
         summary: str = ""
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=FIX_GENERATOR_SYSTEM_PROMPT,
-            output_schema=FixGeneratorOutput,
-            log_file=log_path,
+            schema=FixGeneratorOutput,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Fix generator complete: {len(response.parsed.fix_issues)} fix issues, "
-                f"{len(response.parsed.debt_items)} debt items",
+                f"Fix generator complete: {len(result.parsed.fix_issues)} fix issues, "
+                f"{len(result.parsed.debt_items)} debt items",
                 tags=["fix_generator", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Fix generator agent failed: {e}",
@@ -1380,29 +1252,21 @@ async def run_repo_finalize(
 
     task_prompt = repo_finalize_task_prompt(repo_path=repo_path)
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH, Tool.READ, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=REPO_FINALIZE_SYSTEM_PROMPT,
-            output_schema=RepoFinalizeResult,
-            log_file=log_path,
+            schema=RepoFinalizeResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Repo finalize complete: {len(response.parsed.files_removed)} files removed, "
-                f"gitignore_updated={response.parsed.gitignore_updated}",
+                f"Repo finalize complete: {len(result.parsed.files_removed)} files removed, "
+                f"gitignore_updated={result.parsed.gitignore_updated}",
                 tags=["repo_finalize", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Repo finalize agent failed: {e}",
@@ -1456,28 +1320,20 @@ async def run_github_pr(
         accumulated_debt=accumulated_debt,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    from swe_af.app import app  # noqa: PLC0415
 
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
             system_prompt=GITHUB_PR_SYSTEM_PROMPT,
-            output_schema=GitHubPRResult,
-            log_file=log_path,
+            schema=GitHubPRResult,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"GitHub PR complete: {response.parsed.pr_url}",
+                f"GitHub PR complete: {result.parsed.pr_url}",
                 tags=["github_pr", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"GitHub PR agent failed: {e}",
@@ -1488,3 +1344,438 @@ async def run_github_pr(
         success=False,
         error_message="GitHub PR agent failed to produce a valid result.",
     ).model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Streaming executor reasoners (PlanDB-backed)
+# ---------------------------------------------------------------------------
+
+from swe_af.prompts.plandb_planner import SYSTEM_PROMPT as PLANDB_PLANNER_SYSTEM_PROMPT
+from swe_af.prompts.plandb_planner import plandb_planner_task_prompt
+from swe_af.prompts.reassess import SYSTEM_PROMPT as REASSESS_SYSTEM_PROMPT
+from swe_af.prompts.reassess import reassess_task_prompt
+
+
+class PlanDBPlannerResult(BaseModel):
+    """Output from the PlanDB planning harness."""
+
+    project_id: str = ""
+    task_count: int = 0
+    ready_count: int = 0
+    task_map: dict = {}  # issue_name -> plandb task_id
+
+
+class ReassessResult(BaseModel):
+    """Output from the reassessment harness.
+
+    Per archei rules: amendments/insertions/splits were list[dict] that nothing
+    consumed programmatically (actual mutations happen via plandb CLI during
+    the harness run).  Collapsed to a single summary string.
+    """
+
+    adjustments_made: int = 0
+    summary: str = ""
+
+
+@router.reasoner()
+async def run_plandb_planner(
+    plan_result: dict,
+    build_id: str,
+    db_path: str,
+    model: str = "sonnet",
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+) -> dict:
+    """Populate PlanDB with tasks derived from a plan_result.
+
+    Uses an app.harness() call that reads the plan and creates tasks via
+    ``plandb`` CLI.  Returns a summary with task_count, ready_count, and
+    a mapping of issue names to PlanDB task IDs.
+
+    This reasoner is invoked via ``call_fn`` so it appears as a visible
+    node in the AgentField call graph.
+    """
+    router.note(
+        f"PlanDB planner starting: {len(plan_result.get('issues', []))} issues, build={build_id}",
+        tags=["plandb_planner", "start"],
+    )
+
+    task_prompt = plandb_planner_task_prompt(
+        plan_result=plan_result,
+        build_id=build_id,
+        db_path=db_path,
+    )
+
+    # Run in a temp dir — all work happens via plandb CLI
+    cwd = os.path.dirname(db_path) or "/tmp"
+
+    from swe_af.app import app  # noqa: PLC0415
+
+    try:
+        result = await app.harness(
+            prompt=task_prompt,
+            system_prompt=PLANDB_PLANNER_SYSTEM_PROMPT,
+            schema=PlanDBPlannerResult,
+        )
+        if result.parsed is not None:
+            router.note(
+                f"PlanDB planner done: {result.parsed.task_count} tasks, "
+                f"{result.parsed.ready_count} ready",
+                tags=["plandb_planner", "complete"],
+            )
+            return result.parsed.model_dump()
+    except Exception as e:
+        router.note(
+            f"PlanDB planner agent failed: {e}",
+            tags=["plandb_planner", "error"],
+        )
+
+    return PlanDBPlannerResult(
+        project_id=f"build-{build_id}",
+    ).model_dump()
+
+
+@router.reasoner()
+async def run_reassess(
+    completed_task: dict,
+    issue_result: dict,
+    db_path: str,
+    repo_path: str,
+    model: str = "sonnet",
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+) -> dict:
+    """Reassess the remaining plan after a task completes.
+
+    Uses an app.harness() call to examine what was built, compare with
+    remaining PlanDB tasks, and make adjustments (amend, insert, split).
+
+    Invoked by each worker after completing a task.  Appears as a visible
+    node in the AgentField call graph.
+    """
+    task_title = completed_task.get("title", "unknown")
+    router.note(
+        f"Reassessing plan after completing: {task_title}",
+        tags=["reassess", "start"],
+    )
+
+    task_prompt = reassess_task_prompt(
+        completed_task=completed_task,
+        issue_result=issue_result,
+        db_path=db_path,
+        repo_path=repo_path,
+    )
+
+    from swe_af.app import app  # noqa: PLC0415
+
+    try:
+        result = await app.harness(
+            prompt=task_prompt,
+            system_prompt=REASSESS_SYSTEM_PROMPT,
+            schema=ReassessResult,
+        )
+        if result.parsed is not None:
+            router.note(
+                f"Reassessment done: {result.parsed.adjustments_made} adjustments",
+                tags=["reassess", "complete"],
+            )
+            return result.parsed.model_dump()
+    except Exception as e:
+        router.note(
+            f"Reassessment agent failed: {e}",
+            tags=["reassess", "error"],
+        )
+
+    return ReassessResult(summary="Reassessment agent failed.").model_dump()
+
+
+@router.reasoner()
+async def run_streaming_worker(
+    repo_path: str,
+    agent_id: str,
+    db_path: str,
+    integration_branch: str,
+    artifacts_dir: str,
+    config_dict: dict,
+    build_id: str = "",
+    dag_state_dict: dict | None = None,
+    task_map: dict | None = None,
+    model: str = "sonnet",
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+) -> dict:
+    """Streaming worker: claim tasks from PlanDB, execute, merge, reassess, loop.
+
+    This reasoner is invoked N times in parallel by ``run_streaming_dag()``.
+    Each invocation loops until PlanDB has no more ready tasks.
+
+    The coding pipeline is invoked via ``app.call()`` (lazy import), so each
+    coder → reviewer → QA call appears as a child edge in the call graph.
+
+    Returns ``{"completed": [...], "failed": [...], "tasks_processed": N}``.
+    """
+    import json
+    import subprocess
+
+    from swe_af.execution.dag_executor import _execute_single_issue
+    from swe_af.execution.schemas import DAGState, ExecutionConfig, IssueOutcome
+
+    # Lazy import to avoid circular dependency — gives us app.call
+    from swe_af.app import app, NODE_ID
+
+    config = ExecutionConfig(**config_dict)
+    dag_state = DAGState(**(dag_state_dict or {}))
+
+    # Invert task_map: plandb_task_id -> issue_name
+    task_map = task_map or {}
+    id_to_issue_name = {v: k for k, v in task_map.items()}
+
+    # Build issue lookup from dag_state
+    issue_by_name = {i["name"]: i for i in dag_state.all_issues}
+
+    completed: list[dict] = []
+    failed: list[dict] = []
+    tasks_processed = 0
+
+    # Merge lock file for serializing branch merges across workers
+    merge_lock_path = os.path.join(artifacts_dir, "plandb", ".merge_lock") if artifacts_dir else "/tmp/.merge_lock"
+
+    router.note(
+        f"Worker {agent_id} starting claim loop",
+        tags=["streaming_worker", "start", agent_id],
+    )
+
+    while True:
+        # --- Claim next ready task ---
+        claim_result = subprocess.run(
+            ["plandb", "go", "--agent", agent_id, "--db", db_path, "--json"],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if claim_result.returncode != 0:
+            router.note(
+                f"Worker {agent_id}: no more tasks (plandb go returned {claim_result.returncode})",
+                tags=["streaming_worker", "idle", agent_id],
+            )
+            break
+
+        try:
+            task_info = json.loads(claim_result.stdout)
+        except json.JSONDecodeError:
+            router.note(
+                f"Worker {agent_id}: invalid JSON from plandb go",
+                tags=["streaming_worker", "error", agent_id],
+            )
+            break
+
+        task_id = task_info.get("task", {}).get("id", task_info.get("id", ""))
+        task_title = task_info.get("task", {}).get("title", task_info.get("title", "unknown"))
+
+        # Resolve the issue dict from the task
+        issue_name = id_to_issue_name.get(task_id, task_title)
+        issue = issue_by_name.get(issue_name)
+
+        if issue is None:
+            # Fallback: build a minimal issue from the PlanDB task
+            task_desc = task_info.get("task", {}).get("description", task_info.get("description", ""))
+            issue = {
+                "name": issue_name,
+                "title": task_title,
+                "description": task_desc,
+                "acceptance_criteria": [],
+            }
+
+        router.note(
+            f"Worker {agent_id}: claimed task {task_id} ({task_title})",
+            tags=["streaming_worker", "claimed", agent_id],
+        )
+
+        # --- Setup worktree ---
+        if integration_branch and app:
+            try:
+                ws_result = await app.call(
+                    f"{NODE_ID}.run_workspace_setup",
+                    repo_path=repo_path,
+                    integration_branch=integration_branch,
+                    issues=[issue],
+                    worktrees_dir=os.path.join(repo_path, ".worktrees"),
+                    artifacts_dir=artifacts_dir,
+                    model=config.git_model,
+                    ai_provider=config.ai_provider,
+                    build_id=build_id,
+                )
+                # Enrich issue with worktree info
+                workspaces = ws_result.get("workspaces", [])
+                if workspaces:
+                    ws = workspaces[0]
+                    issue = {
+                        **issue,
+                        "worktree_path": ws.get("worktree_path", repo_path),
+                        "branch_name": ws.get("branch_name", ""),
+                    }
+            except Exception as e:
+                router.note(
+                    f"Worker {agent_id}: worktree setup failed: {e}",
+                    tags=["streaming_worker", "worktree_error", agent_id],
+                )
+
+        # --- Execute coding pipeline ---
+        try:
+            issue_result = await _execute_single_issue(
+                issue=issue,
+                dag_state=dag_state,
+                execute_fn=None,
+                config=config,
+                call_fn=app.call,
+                node_id=NODE_ID,
+                note_fn=router.note,
+            )
+        except Exception as e:
+            issue_result = IssueResult(
+                issue_name=issue_name,
+                outcome=IssueOutcome.FAILED_UNRECOVERABLE,
+                error_message=str(e),
+            )
+
+        tasks_processed += 1
+
+        # --- Report result to PlanDB ---
+        if issue_result.outcome in (IssueOutcome.COMPLETED, IssueOutcome.COMPLETED_WITH_DEBT):
+            result_json = json.dumps({
+                "branch": issue_result.branch_name,
+                "files": issue_result.files_changed,
+                "outcome": issue_result.outcome.value,
+                "summary": issue_result.result_summary[:500],
+            })
+            subprocess.run(
+                ["plandb", "done", task_id, "--result", result_json, "--db", db_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            completed.append(issue_result.model_dump())
+
+            # --- Merge to integration branch (serialized via file lock) ---
+            if integration_branch and issue_result.branch_name:
+                await _merge_with_lock(
+                    repo_path=repo_path,
+                    integration_branch=integration_branch,
+                    issue_result=issue_result,
+                    issue=issue,
+                    config=config,
+                    lock_path=merge_lock_path,
+                    agent_id=agent_id,
+                    artifacts_dir=artifacts_dir,
+                    dag_state=dag_state,
+                )
+
+            # --- Reassess: AI decides if future tasks need adjustment ---
+            try:
+                await app.call(
+                    f"{NODE_ID}.run_reassess",
+                    completed_task={"id": task_id, "title": task_title},
+                    issue_result=issue_result.model_dump(),
+                    db_path=db_path,
+                    repo_path=repo_path,
+                    model=model,
+                    ai_provider=ai_provider,
+                )
+            except Exception as e:
+                router.note(
+                    f"Worker {agent_id}: reassessment failed (non-fatal): {e}",
+                    tags=["streaming_worker", "reassess_error", agent_id],
+                )
+
+        else:
+            # Task failed
+            error_msg = issue_result.error_message or "Unknown error"
+            subprocess.run(
+                ["plandb", "task", "fail", task_id, "--error", error_msg[:500], "--db", db_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            failed.append(issue_result.model_dump())
+
+        # Update dag_state with latest results for downstream context
+        if issue_result.outcome in (IssueOutcome.COMPLETED, IssueOutcome.COMPLETED_WITH_DEBT):
+            dag_state.completed_issues.append(issue_result)
+        else:
+            dag_state.failed_issues.append(issue_result)
+
+        # --- Cleanup worktree ---
+        if integration_branch and issue.get("branch_name"):
+            try:
+                await app.call(
+                    f"{NODE_ID}.run_workspace_cleanup",
+                    repo_path=repo_path,
+                    worktrees_dir=os.path.join(repo_path, ".worktrees"),
+                    branches_to_clean=[issue["branch_name"]],
+                    artifacts_dir=artifacts_dir,
+                    model=config.git_model,
+                    ai_provider=config.ai_provider,
+                )
+            except Exception:
+                pass  # cleanup failure is non-fatal
+
+    router.note(
+        f"Worker {agent_id} finished: {len(completed)} completed, {len(failed)} failed",
+        tags=["streaming_worker", "done", agent_id],
+    )
+
+    return {
+        "completed": completed,
+        "failed": failed,
+        "tasks_processed": tasks_processed,
+        "agent_id": agent_id,
+    }
+
+
+async def _merge_with_lock(
+    *,
+    repo_path: str,
+    integration_branch: str,
+    issue_result: IssueResult,
+    issue: dict,
+    config,
+    lock_path: str,
+    agent_id: str,
+    artifacts_dir: str,
+    dag_state: DAGState,
+) -> None:
+    """Merge a completed branch to the integration branch, serialized via flock.
+
+    Only one worker can merge at a time.  Others continue coding while waiting.
+    """
+    import fcntl
+    from swe_af.app import app, NODE_ID
+
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+
+    with open(lock_path, "w") as lock_file:
+        # Acquire exclusive lock (blocking — other workers wait here)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            router.note(
+                f"Worker {agent_id}: merging {issue_result.branch_name}",
+                tags=["streaming_worker", "merge", agent_id],
+            )
+            await app.call(
+                f"{NODE_ID}.run_merger",
+                repo_path=repo_path,
+                integration_branch=integration_branch,
+                branches_to_merge=[{
+                    "branch_name": issue_result.branch_name,
+                    "issue_name": issue_result.issue_name,
+                    "files_changed": issue_result.files_changed,
+                }],
+                file_conflicts=[],
+                prd_summary=dag_state.prd_summary,
+                architecture_summary=dag_state.architecture_summary,
+                artifacts_dir=artifacts_dir,
+                model=config.merger_model,
+                ai_provider=config.ai_provider,
+            )
+        except Exception as e:
+            router.note(
+                f"Worker {agent_id}: merge failed: {e}",
+                tags=["streaming_worker", "merge_error", agent_id],
+            )
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

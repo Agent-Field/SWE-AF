@@ -1,12 +1,10 @@
-"""Replanner agent — invokes AgentAI to restructure the DAG after failures."""
+"""Replanner agent — invokes app.harness() to restructure the DAG after failures."""
 
 from __future__ import annotations
 
 import os
 from typing import Callable
 
-from swe_af.agent_ai import AgentAI, AgentAIConfig
-from swe_af.agent_ai.types import Tool
 from swe_af.execution.schemas import (
     DAGState,
     ExecutionConfig,
@@ -25,20 +23,14 @@ async def invoke_replanner(
 ) -> ReplanDecision:
     """Call the replanner agent to decide how to handle unrecoverable failures.
 
-    The replanner gets read-only codebase access and the full DAG context
-    (completed work, failures with error context, remaining issues, PRD,
-    architecture). It returns a structured ReplanDecision.
-
-    Args:
-        dag_state: Current execution state with all context.
-        failed_issues: The unrecoverable failures that triggered replanning.
-        config: Execution configuration (model, etc.).
-        note_fn: Optional callback for observability notes.
+    Uses app.harness() with read-only codebase access and the full DAG context.
 
     Returns:
         ReplanDecision from the replanner agent. Falls back to ABORT if the
         agent fails to produce valid output.
     """
+    from swe_af.app import app  # noqa: PLC0415
+
     if note_fn:
         failed_names = [f.issue_name for f in failed_issues]
         note_fn(
@@ -49,32 +41,21 @@ async def invoke_replanner(
 
     task_prompt = replanner_task_prompt(dag_state, failed_issues)
 
-    log_dir = os.path.join(dag_state.artifacts_dir, "logs") if dag_state.artifacts_dir else None
-    log_path = os.path.join(log_dir, f"replanner_{dag_state.replan_count}.jsonl") if log_dir else None
-
-    ai = AgentAI(AgentAIConfig(
-        model=config.replan_model,
-        provider=config.ai_provider,
-        cwd=dag_state.repo_path or ".",
-        max_turns=15,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-    ))
-
     try:
-        response = await ai.run(
-            task_prompt,
+        result = await app.harness(
+            prompt=task_prompt,
+            schema=ReplanDecision,
             system_prompt=SYSTEM_PROMPT,
-            output_schema=ReplanDecision,
-            log_file=log_path,
+            cwd=dag_state.repo_path or ".",
         )
 
-        if response.parsed is not None:
+        if result.parsed is not None:
             if note_fn:
                 note_fn(
-                    f"Replan decision: {response.parsed.action.value} — {response.parsed.summary}",
+                    f"Replan decision: {result.parsed.action.value} — {result.parsed.summary}",
                     tags=["execution", "replan", "complete"],
                 )
-            return response.parsed
+            return result.parsed
 
     except Exception as e:
         if note_fn:

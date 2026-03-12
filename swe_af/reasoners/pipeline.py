@@ -1,8 +1,8 @@
 """Internal reasoners for the SWE planning pipeline.
 
 Each reasoner wraps a single agent role (PM, Architect, Tech Lead, Sprint Planner)
-and uses AgentAI for actual AI execution. The @router.reasoner() decorator provides
-FastAPI endpoints, workflow DAG tracking, and observability via router.note().
+and uses AgentField's native .harness() primitive. The @router.reasoner() decorator
+provides FastAPI endpoints, workflow DAG tracking, and observability via router.note().
 """
 
 from __future__ import annotations
@@ -14,8 +14,6 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from swe_af.agent_ai import AgentAI, AgentAIConfig
-from swe_af.agent_ai.types import Tool
 from swe_af.execution.schemas import DEFAULT_AGENT_MAX_TURNS
 from swe_af.reasoners.schemas import (
     Architecture,
@@ -174,15 +172,7 @@ async def run_product_manager(
     paths = _ensure_paths(base)
     log_path = os.path.join(base, "logs", "product_manager.jsonl")
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=max_turns,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
-
+    from swe_af.app import app  # noqa: PLC0415
     from swe_af.prompts.product_manager import product_manager_prompts, pm_task_prompt  # noqa: PLC0415
     from swe_af.execution.schemas import WorkspaceManifest  # noqa: PLC0415
     system_prompt, _ = product_manager_prompts(
@@ -199,17 +189,17 @@ async def run_product_manager(
         additional_context=additional_context,
         workspace_manifest=ws_manifest,
     )
-    response = await ai.run(
-        task_prompt,
+    result = await app.harness(
+        prompt=task_prompt,
+        schema=PRD,
         system_prompt=system_prompt,
-        output_schema=PRD,
-        log_file=log_path,
+        cwd=repo_path,
     )
-    if response.parsed is None:
+    if result.parsed is None:
         raise RuntimeError("Product manager failed to produce a valid PRD")
 
     router.note("PM complete", tags=["pm", "complete"])
-    return response.parsed.model_dump()
+    return result.parsed.model_dump()
 
 
 @router.reasoner()
@@ -231,15 +221,7 @@ async def run_architect(
     paths = _ensure_paths(base)
     log_path = os.path.join(base, "logs", "architect.jsonl")
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=max_turns,
-        allowed_tools=[Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
-
+    from swe_af.app import app  # noqa: PLC0415
     prd_obj = PRD(**prd)
     from swe_af.prompts.architect import architect_prompts, architect_task_prompt  # noqa: PLC0415
     from swe_af.execution.schemas import WorkspaceManifest  # noqa: PLC0415
@@ -259,17 +241,17 @@ async def run_architect(
         feedback=feedback or None,
         workspace_manifest=ws_manifest,
     )
-    response = await ai.run(
-        task_prompt,
+    result = await app.harness(
+        prompt=task_prompt,
+        schema=Architecture,
         system_prompt=system_prompt,
-        output_schema=Architecture,
-        log_file=log_path,
+        cwd=repo_path,
     )
-    if response.parsed is None:
+    if result.parsed is None:
         raise RuntimeError("Architect failed to produce a valid architecture")
 
     router.note("Architect complete", tags=["architect", "complete"])
-    return response.parsed.model_dump()
+    return result.parsed.model_dump()
 
 
 @router.reasoner()
@@ -291,15 +273,7 @@ async def run_tech_lead(
     paths = _ensure_paths(base)
     log_path = os.path.join(base, "logs", "tech_lead.jsonl")
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=max_turns,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
-
+    from swe_af.app import app  # noqa: PLC0415
     from swe_af.prompts.tech_lead import tech_lead_prompts, tech_lead_task_prompt  # noqa: PLC0415
     from swe_af.execution.schemas import WorkspaceManifest  # noqa: PLC0415
     system_prompt, _ = tech_lead_prompts(
@@ -314,16 +288,16 @@ async def run_tech_lead(
         revision_number=revision_number,
         workspace_manifest=ws_manifest,
     )
-    response = await ai.run(
-        task_prompt,
+    result = await app.harness(
+        prompt=task_prompt,
+        schema=ReviewResult,
         system_prompt=system_prompt,
-        output_schema=ReviewResult,
-        log_file=log_path,
+        cwd=repo_path,
     )
-    if response.parsed is None:
+    if result.parsed is None:
         raise RuntimeError("Tech lead failed to produce a valid review")
 
-    review = response.parsed.model_dump()
+    review = result.parsed.model_dump()
     review_json_path = os.path.join(base, "plan", "review.json")
     with open(review_json_path, "w") as f:
         json.dump(review, f, indent=2, default=str)
@@ -358,15 +332,7 @@ async def run_sprint_planner(
     paths = _ensure_paths(base)
     log_path = os.path.join(base, "logs", "sprint_planner.jsonl")
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=max_turns,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
-
+    from swe_af.app import app  # noqa: PLC0415
     prd_obj = PRD(**prd)
     arch_obj = Architecture(**architecture)
     from swe_af.prompts.sprint_planner import sprint_planner_prompts, sprint_planner_task_prompt  # noqa: PLC0415
@@ -388,17 +354,17 @@ async def run_sprint_planner(
         prd_path=paths["prd"],
         architecture_path=paths["architecture"],
     )
-    response = await ai.run(
-        task_prompt,
+    result = await app.harness(
+        prompt=task_prompt,
+        schema=SprintPlanOutput,
         system_prompt=system_prompt,
-        output_schema=SprintPlanOutput,
-        log_file=log_path,
+        cwd=repo_path,
     )
-    if response.parsed is None:
+    if result.parsed is None:
         raise RuntimeError("Sprint planner failed to produce valid issues")
 
     router.note("Sprint Planner complete", tags=["sprint_planner", "complete"])
     return {
-        "issues": [issue.model_dump() for issue in response.parsed.issues],
-        "rationale": response.parsed.rationale,
+        "issues": [issue.model_dump() for issue in result.parsed.issues],
+        "rationale": result.parsed.rationale,
     }

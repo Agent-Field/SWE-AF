@@ -74,7 +74,7 @@ async def fast_plan_tasks(
         repo_path: Absolute path to the target repository on disk.
         max_tasks: Maximum number of tasks to produce (default 10).
         pm_model: Model string to use for the planning LLM call.
-        permission_mode: Optional permission mode forwarded to AgentAI.
+        permission_mode: Optional permission mode forwarded to the harness.
         ai_provider: AI provider string (e.g. ``"claude"``).
         additional_context: Optional extra constraints or background info.
         artifacts_dir: Optional path for writing plan artefacts (unused by

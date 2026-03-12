@@ -624,6 +624,7 @@ class BuildConfig(BaseModel):
     enable_learning: bool = False  # Cross-issue shared memory (conventions, failure patterns, bug patterns)
     max_concurrent_issues: int = 3          # max parallel issues per level (0 = unlimited)
     level_failure_abort_threshold: float = 0.8  # abort DAG when >= this fraction of a level fails
+    streaming: bool = False                   # Use PlanDB streaming executor instead of level-based DAG
 
     @model_validator(mode="before")
     @classmethod
@@ -724,6 +725,7 @@ class BuildConfig(BaseModel):
             "enable_learning": self.enable_learning,
             "max_concurrent_issues": self.max_concurrent_issues,
             "level_failure_abort_threshold": self.level_failure_abort_threshold,
+            "streaming": self.streaming,
         }
 
 
@@ -793,6 +795,7 @@ class ExecutionConfig(BaseModel):
     enable_learning: bool = False
     max_concurrent_issues: int = 3          # max parallel issues per level (0 = unlimited)
     level_failure_abort_threshold: float = 0.8  # abort DAG when >= this fraction of a level fails
+    streaming: bool = False                   # Use PlanDB streaming executor
 
     @model_validator(mode="before")
     @classmethod
