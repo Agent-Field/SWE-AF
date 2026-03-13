@@ -33,6 +33,8 @@ Thumbs.db
 # AgentField runtime worktrees
 .worktrees/
 **/.worktrees/
+_worktrees/
+**/_worktrees/
 
 # Root runtime artifacts for this node (example artifacts are versioned separately)
 /.artifacts/

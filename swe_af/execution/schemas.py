@@ -6,10 +6,30 @@ import re
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 # Global default for all agent max_turns. Change this one value to adjust everywhere.
 DEFAULT_AGENT_MAX_TURNS: int = 150
+
+
+# ---------------------------------------------------------------------------
+# Provider normalization
+# ---------------------------------------------------------------------------
+
+
+def _normalize_provider(ai_provider: str) -> str:
+    """Map legacy provider names to AgentField native names.
+
+    Ensures backward compatibility between old "claude" provider name
+    and AgentField's native "claude-code" provider name.
+    """
+    return {"claude": "claude-code"}.get(ai_provider, ai_provider)
 
 
 # ---------------------------------------------------------------------------
@@ -42,13 +62,13 @@ def _derive_repo_name(url: str) -> str:
 class RepoSpec(BaseModel):
     """Specification for a single repository in a multi-repo build."""
 
-    repo_url: str = ""          # GitHub/git URL (required if repo_path empty)
-    repo_path: str = ""         # Absolute path to an existing local repo
-    role: str                   # 'primary' or 'dependency'
-    branch: str = ""            # Branch to checkout (empty = default branch)
+    repo_url: str = ""  # GitHub/git URL (required if repo_path empty)
+    repo_path: str = ""  # Absolute path to an existing local repo
+    role: str  # 'primary' or 'dependency'
+    branch: str = ""  # Branch to checkout (empty = default branch)
     sparse_paths: list[str] = []  # For sparse checkout; empty = full checkout
-    mount_point: str = ""       # Workspace subdirectory override
-    create_pr: bool = True      # Whether to create a PR for this repo
+    mount_point: str = ""  # Workspace subdirectory override
+    create_pr: bool = True  # Whether to create a PR for this repo
 
     @field_validator("role")
     @classmethod
@@ -60,23 +80,25 @@ class RepoSpec(BaseModel):
     @field_validator("repo_url")
     @classmethod
     def _validate_repo_url(cls, v: str) -> str:
-        if v and not (v.startswith("http://") or v.startswith("https://") or v.startswith("git@")):
-            raise ValueError(
-                f"repo_url must be an HTTP(S) or SSH git URL, got {v!r}"
-            )
+        if v and not (
+            v.startswith("http://") or v.startswith("https://") or v.startswith("git@")
+        ):
+            raise ValueError(f"repo_url must be an HTTP(S) or SSH git URL, got {v!r}")
         return v
 
 
 class WorkspaceRepo(BaseModel):
     """A repository that has been cloned into the workspace."""
 
-    model_config = ConfigDict(frozen=False)  # Mutable: git_init_result assigned post-clone
+    model_config = ConfigDict(
+        frozen=False
+    )  # Mutable: git_init_result assigned post-clone
 
-    repo_name: str              # Derived name (from _derive_repo_name)
-    repo_url: str               # Original git URL
-    role: str                   # 'primary' or 'dependency'
-    absolute_path: str          # Path where the repo was cloned
-    branch: str                 # Actual checked-out branch
+    repo_name: str  # Derived name (from _derive_repo_name)
+    repo_url: str  # Original git URL
+    role: str  # 'primary' or 'dependency'
+    absolute_path: str  # Path where the repo was cloned
+    branch: str  # Actual checked-out branch
     sparse_paths: list[str] = []
     create_pr: bool = True
     git_init_result: dict | None = None  # Populated by _init_all_repos after cloning
@@ -85,9 +107,9 @@ class WorkspaceRepo(BaseModel):
 class WorkspaceManifest(BaseModel):
     """Snapshot of all repositories cloned for a multi-repo build."""
 
-    workspace_root: str         # Parent directory containing all repos
+    workspace_root: str  # Parent directory containing all repos
     repos: list[WorkspaceRepo]  # All cloned repos
-    primary_repo_name: str      # Name of the primary repo
+    primary_repo_name: str  # Name of the primary repo
 
     @property
     def primary_repo(self) -> WorkspaceRepo | None:
@@ -112,10 +134,10 @@ class RepoPRResult(BaseModel):
 class AdvisorAction(str, Enum):
     """What the Issue Advisor decided to do after a coding loop failure."""
 
-    RETRY_MODIFIED = "retry_modified"          # Relax ACs, retry coding loop
-    RETRY_APPROACH = "retry_approach"          # Keep ACs, different strategy
-    SPLIT = "split"                            # Break into sub-issues
-    ACCEPT_WITH_DEBT = "accept_with_debt"      # Close enough, record gaps
+    RETRY_MODIFIED = "retry_modified"  # Relax ACs, retry coding loop
+    RETRY_APPROACH = "retry_approach"  # Keep ACs, different strategy
+    SPLIT = "split"  # Break into sub-issues
+    ACCEPT_WITH_DEBT = "accept_with_debt"  # Close enough, record gaps
     ESCALATE_TO_REPLAN = "escalate_to_replan"  # Flag for outer loop
 
 
@@ -123,11 +145,11 @@ class IssueOutcome(str, Enum):
     """Outcome of executing a single issue."""
 
     COMPLETED = "completed"
-    COMPLETED_WITH_DEBT = "completed_with_debt"   # Accepted via ACCEPT_WITH_DEBT
+    COMPLETED_WITH_DEBT = "completed_with_debt"  # Accepted via ACCEPT_WITH_DEBT
     FAILED_RETRYABLE = "failed_retryable"
     FAILED_UNRECOVERABLE = "failed_unrecoverable"
-    FAILED_NEEDS_SPLIT = "failed_needs_split"     # Advisor wants to split
-    FAILED_ESCALATED = "failed_escalated"         # Advisor escalated to replanner
+    FAILED_NEEDS_SPLIT = "failed_needs_split"  # Advisor wants to split
+    FAILED_ESCALATED = "failed_escalated"  # Advisor escalated to replanner
     SKIPPED = "skipped"
 
 
@@ -165,7 +187,7 @@ class IssueAdvisorDecision(BaseModel):
 
     action: AdvisorAction
     failure_diagnosis: str
-    failure_category: str = ""   # environment|logic|dependency|approach|scope
+    failure_category: str = ""  # environment|logic|dependency|approach|scope
     rationale: str
     confidence: float = 0.5
     # RETRY_MODIFIED
@@ -293,7 +315,9 @@ class DAGState(BaseModel):
     adaptation_history: list[dict] = []
 
     # --- Multi-repo workspace ---
-    workspace_manifest: dict | None = None  # Serialised WorkspaceManifest (dict for JSON compat)
+    workspace_manifest: dict | None = (
+        None  # Serialised WorkspaceManifest (dict for JSON compat)
+    )
 
 
 class GitInitResult(BaseModel):
@@ -305,9 +329,9 @@ class GitInitResult(BaseModel):
     initial_commit_sha: str  # commit SHA before any work
     success: bool
     error_message: str = ""
-    remote_url: str = ""            # origin URL (set if repo was cloned)
-    remote_default_branch: str = "" # e.g. "main" — for PR base
-    repo_name: str = ""             # Repo this result belongs to (multi-repo)
+    remote_url: str = ""  # origin URL (set if repo was cloned)
+    remote_default_branch: str = ""  # e.g. "main" — for PR base
+    repo_name: str = ""  # Repo this result belongs to (multi-repo)
 
 
 class WorkspaceInfo(BaseModel):
@@ -385,11 +409,11 @@ class CoderResult(BaseModel):
     summary: str = ""
     complete: bool = True
     iteration_id: str = ""
-    tests_passed: bool | None = None       # Self-reported: did tests pass?
-    test_summary: str = ""                 # Brief test run output
-    codebase_learnings: list[str] = []     # Conventions discovered (for shared memory)
-    agent_retro: dict = {}                 # What worked, what didn't (for shared memory)
-    repo_name: str = ""                    # Repo where coder ran (multi-repo)
+    tests_passed: bool | None = None  # Self-reported: did tests pass?
+    test_summary: str = ""  # Brief test run output
+    codebase_learnings: list[str] = []  # Conventions discovered (for shared memory)
+    agent_retro: dict = {}  # What worked, what didn't (for shared memory)
+    repo_name: str = ""  # Repo where coder ran (multi-repo)
 
 
 class QAResult(BaseModel):
@@ -398,7 +422,7 @@ class QAResult(BaseModel):
     passed: bool
     summary: str = ""
     test_failures: list[dict] = []  # [{test_name, file, error, expected, actual}]
-    coverage_gaps: list[str] = []   # ACs without test coverage
+    coverage_gaps: list[str] = []  # ACs without test coverage
     iteration_id: str = ""
 
 
@@ -491,7 +515,9 @@ def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode"]:
         return "claude"
     if runtime == "open_code":
         return "opencode"
-    raise ValueError(f"Unsupported runtime {runtime!r}. Valid runtimes: {', '.join(RUNTIME_VALUES)}")
+    raise ValueError(
+        f"Unsupported runtime {runtime!r}. Valid runtimes: {', '.join(RUNTIME_VALUES)}"
+    )
 
 
 def _legacy_hint_for_model_key(key: str) -> str:
@@ -614,16 +640,20 @@ class BuildConfig(BaseModel):
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
     execute_fn_target: str = ""
     permission_mode: str = ""
-    repo_url: str = ""                # GitHub URL to clone (single-repo shorthand)
-    repos: list[RepoSpec] = []        # Multi-repo list; normalised by _normalize_repos
-    enable_github_pr: bool = True     # Create draft PR after build
-    github_pr_base: str = ""          # PR base branch (default: repo's default branch)
+    repo_url: str = ""  # GitHub URL to clone (single-repo shorthand)
+    repos: list[RepoSpec] = []  # Multi-repo list; normalised by _normalize_repos
+    enable_github_pr: bool = True  # Create draft PR after build
+    github_pr_base: str = ""  # PR base branch (default: repo's default branch)
     agent_timeout_seconds: int = 2700
     max_advisor_invocations: int = 2
     enable_issue_advisor: bool = True
-    enable_learning: bool = False  # Cross-issue shared memory (conventions, failure patterns, bug patterns)
-    max_concurrent_issues: int = 3          # max parallel issues per level (0 = unlimited)
-    level_failure_abort_threshold: float = 0.8  # abort DAG when >= this fraction of a level fails
+    enable_learning: bool = (
+        False  # Cross-issue shared memory (conventions, failure patterns, bug patterns)
+    )
+    max_concurrent_issues: int = 3  # max parallel issues per level (0 = unlimited)
+    level_failure_abort_threshold: float = (
+        0.8  # abort DAG when >= this fraction of a level fails
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -787,17 +817,26 @@ class ExecutionConfig(BaseModel):
     max_coding_iterations: int = 5
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
     permission_mode: str = ""
-    agent_timeout_seconds: int = 2700       # 45 min
+    agent_timeout_seconds: int = 2700  # 45 min
     max_advisor_invocations: int = 2
     enable_issue_advisor: bool = True
     enable_learning: bool = False
-    max_concurrent_issues: int = 3          # max parallel issues per level (0 = unlimited)
-    level_failure_abort_threshold: float = 0.8  # abort DAG when >= this fraction of a level fails
+    max_concurrent_issues: int = 3  # max parallel issues per level (0 = unlimited)
+    level_failure_abort_threshold: float = (
+        0.8  # abort DAG when >= this fraction of a level fails
+    )
 
     @model_validator(mode="before")
     @classmethod
     def _validate_v2_keys(cls, data: Any) -> Any:
         return _reject_legacy_config_keys(data)
+
+    @model_validator(mode="after")
+    def _normalize_provider_field(self) -> "ExecutionConfig":
+        # Normalize legacy provider names at config boundary for defense-in-depth
+        # (inline mappings in execution_agents.py/pipeline.py provide first layer)
+        self.runtime = "claude_code" if self.runtime == "claude" else self.runtime
+        return self
 
     def model_post_init(self, __context: Any) -> None:
         """Resolve runtime model selection once at construction time."""

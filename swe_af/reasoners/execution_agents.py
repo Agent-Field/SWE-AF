@@ -10,8 +10,6 @@ import os
 
 from pydantic import BaseModel
 
-from swe_af.agent_ai import AgentAI, AgentAIConfig
-from swe_af.agent_ai.types import Tool
 from swe_af.execution.schemas import (
     DEFAULT_AGENT_MAX_TURNS,
     AdvisorAction,
@@ -45,7 +43,9 @@ from swe_af.prompts.github_pr import SYSTEM_PROMPT as GITHUB_PR_SYSTEM_PROMPT
 from swe_af.prompts.github_pr import github_pr_task_prompt
 from swe_af.prompts.repo_finalize import SYSTEM_PROMPT as REPO_FINALIZE_SYSTEM_PROMPT
 from swe_af.prompts.repo_finalize import repo_finalize_task_prompt
-from swe_af.prompts.integration_tester import SYSTEM_PROMPT as INTEGRATION_TESTER_SYSTEM_PROMPT
+from swe_af.prompts.integration_tester import (
+    SYSTEM_PROMPT as INTEGRATION_TESTER_SYSTEM_PROMPT,
+)
 from swe_af.prompts.integration_tester import integration_tester_task_prompt
 from swe_af.prompts.issue_writer import SYSTEM_PROMPT as ISSUE_WRITER_SYSTEM_PROMPT
 from swe_af.prompts.issue_writer import issue_writer_task_prompt
@@ -61,9 +61,16 @@ from swe_af.prompts.retry_advisor import SYSTEM_PROMPT as RETRY_ADVISOR_SYSTEM_P
 from swe_af.prompts.retry_advisor import retry_advisor_task_prompt
 from swe_af.prompts.verifier import SYSTEM_PROMPT as VERIFIER_SYSTEM_PROMPT
 from swe_af.prompts.verifier import verifier_task_prompt
-from swe_af.prompts.workspace import CLEANUP_SYSTEM_PROMPT as WORKSPACE_CLEANUP_SYSTEM_PROMPT
-from swe_af.prompts.workspace import SETUP_SYSTEM_PROMPT as WORKSPACE_SETUP_SYSTEM_PROMPT
-from swe_af.prompts.workspace import workspace_cleanup_task_prompt, workspace_setup_task_prompt
+from swe_af.prompts.workspace import (
+    CLEANUP_SYSTEM_PROMPT as WORKSPACE_CLEANUP_SYSTEM_PROMPT,
+)
+from swe_af.prompts.workspace import (
+    SETUP_SYSTEM_PROMPT as WORKSPACE_SETUP_SYSTEM_PROMPT,
+)
+from swe_af.prompts.workspace import (
+    workspace_cleanup_task_prompt,
+    workspace_setup_task_prompt,
+)
 
 from . import router
 
@@ -73,6 +80,7 @@ def _maybe_workspace_manifest(raw: dict | None):
     if raw is None:
         return None
     from swe_af.execution.schemas import WorkspaceManifest
+
     return WorkspaceManifest(**raw)
 
 
@@ -80,21 +88,25 @@ def _maybe_workspace_manifest(raw: dict | None):
 # Helper for the replanner: reconstruct DAGState from dict
 # ---------------------------------------------------------------------------
 
+
 def _build_dag_state(dag_state_dict: dict):
     """Reconstruct a DAGState from a dict (for prompt building)."""
     from swe_af.execution.schemas import DAGState
+
     return DAGState(**dag_state_dict)
 
 
 def _build_issue_results(failed_issues: list[dict]):
     """Reconstruct IssueResult list from dicts (for prompt building)."""
     from swe_af.execution.schemas import IssueResult
+
     return [IssueResult(**f) for f in failed_issues]
 
 
 # ---------------------------------------------------------------------------
 # Reasoners
 # ---------------------------------------------------------------------------
+
 
 @router.reasoner()
 async def run_retry_advisor(
@@ -137,33 +149,27 @@ async def run_retry_advisor(
         workspace_manifest=ws_manifest,
     )
 
-    issue_name = issue.get("name", "unknown")
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, f"retry_advisor_{issue_name}_{attempt_number}.jsonl") if log_dir else None
-
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=RETRY_ADVISOR_SYSTEM_PROMPT,
-            output_schema=RetryAdvice,
-            log_file=log_path,
+            schema=RetryAdvice,
+            model=model,
+            provider=provider,
+            tools=["Read", "Glob", "Grep", "Bash"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Retry advisor: should_retry={response.parsed.should_retry}, "
-                f"confidence={response.parsed.confidence}",
+                f"Retry advisor: should_retry={result.parsed.should_retry}, "
+                f"confidence={result.parsed.confidence}",
                 tags=["retry_advisor", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Retry advisor agent failed: {e}",
@@ -222,33 +228,27 @@ async def run_issue_advisor(
         workspace_manifest=ws_manifest,
     )
 
-    artifacts_dir = dag_state_summary.get("artifacts_dir", "")
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, f"issue_advisor_{issue_name}_{advisor_invocation}.jsonl") if log_dir else None
-
     cwd = worktree_path or dag_state_summary.get("repo_path", ".")
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=cwd,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=ISSUE_ADVISOR_SYSTEM_PROMPT,
-            output_schema=IssueAdvisorDecision,
-            log_file=log_path,
+            schema=IssueAdvisorDecision,
+            model=model,
+            provider=provider,
+            tools=["Read", "Glob", "Grep", "Bash"],
+            cwd=cwd,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Issue advisor decision: {response.parsed.action.value} — {response.parsed.summary}",
+                f"Issue advisor decision: {result.parsed.action.value} — {result.parsed.summary}",
                 tags=["issue_advisor", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Issue advisor agent failed: {e}",
@@ -297,50 +297,51 @@ async def run_replanner(
     )
 
     task_prompt = replanner_task_prompt(
-        state, failures,
+        state,
+        failures,
         escalation_notes=escalation_notes,
-        adaptation_history=state.adaptation_history if hasattr(state, "adaptation_history") else [],
+        adaptation_history=state.adaptation_history
+        if hasattr(state, "adaptation_history")
+        else [],
     )
 
     log_dir = os.path.join(state.artifacts_dir, "logs") if state.artifacts_dir else None
-    log_path = os.path.join(log_dir, f"replanner_{state.replan_count}.jsonl") if log_dir else None
-
-    ai = AgentAI(AgentAIConfig(
-        model=replan_model,
-        provider=ai_provider,
-        cwd=state.repo_path or ".",
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     current_prompt = task_prompt
     for attempt in range(2):
         try:
-            response = await ai.run(
+            result = await router.harness(
                 current_prompt,
                 system_prompt=REPLANNER_SYSTEM_PROMPT,
-                output_schema=ReplanDecision,
-                log_file=log_path,
+                schema=ReplanDecision,
+                model=replan_model,
+                provider=provider,
+                tools=["Read", "Glob", "Grep", "Bash"],
+                cwd=state.repo_path or ".",
+                max_turns=DEFAULT_AGENT_MAX_TURNS,
+                permission_mode=permission_mode or None,
             )
             # Log raw response for debugging (even on parse failure)
             if log_dir:
-                raw_log = os.path.join(log_dir, f"replanner_{state.replan_count}_raw_{attempt}.txt")
+                raw_log = os.path.join(
+                    log_dir, f"replanner_{state.replan_count}_raw_{attempt}.txt"
+                )
                 os.makedirs(log_dir, exist_ok=True)
                 with open(raw_log, "w") as f:
-                    f.write(response.text or "(empty)")
+                    f.write(getattr(result, "text", "") or "(empty)")
 
-            if response.parsed is not None:
+            if result.parsed is not None:
                 router.note(
-                    f"Replan decision: {response.parsed.action.value} — {response.parsed.summary}",
+                    f"Replan decision: {result.parsed.action.value} — {result.parsed.summary}",
                     tags=["replanner", "complete"],
                 )
-                return response.parsed.model_dump()
+                return result.parsed.model_dump()
 
             # Parse failed — retry with tighter prompt
             router.note(
                 f"Replanner produced unparseable output (attempt {attempt + 1}): "
-                f"{(response.text or '')[:500]}",
+                f"{(getattr(result, 'text', '') or '')[:500]}",
                 tags=["replanner", "parse_error"],
             )
             current_prompt = (
@@ -395,11 +396,6 @@ async def run_issue_writer(
     Multiple instances can run in parallel (one per issue).
     """
     issue_name = issue.get("name", "unknown")
-    # issues_dir is <artifacts>/plan/issues — derive log_dir from grandparent
-    _artifacts_base = os.path.dirname(os.path.dirname(issues_dir)) if issues_dir else ""
-    log_dir = os.path.join(_artifacts_base, "logs") if _artifacts_base else None
-    log_path = os.path.join(log_dir, f"issue_writer_{issue_name}.jsonl") if log_dir else None
-
     router.note(
         f"Issue writer starting for {issue_name}",
         tags=["issue_writer", "start"],
@@ -423,28 +419,26 @@ async def run_issue_writer(
         issue_file_path: str
         success: bool
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=ISSUE_WRITER_SYSTEM_PROMPT,
-            output_schema=IssueWriterOutput,
-            log_file=log_path,
+            schema=IssueWriterOutput,
+            model=model,
+            provider=provider,
+            tools=["Read", "Write", "Glob", "Grep"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Issue writer complete for {issue_name}: {response.parsed.issue_file_path}",
+                f"Issue writer complete for {issue_name}: {result.parsed.issue_file_path}",
                 tags=["issue_writer", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Issue writer failed for {issue_name}: {e}",
@@ -476,9 +470,6 @@ async def run_verifier(
 
     Returns a VerificationResult dict.
     """
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, "verifier.jsonl") if log_dir else None
-
     router.note("Verifier starting", tags=["verifier", "start"])
 
     ws_manifest = _maybe_workspace_manifest(workspace_manifest)
@@ -492,29 +483,26 @@ async def run_verifier(
         workspace_manifest=ws_manifest,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=VERIFIER_SYSTEM_PROMPT,
-            output_schema=VerificationResult,
-            log_file=log_path,
+            schema=VerificationResult,
+            model=model,
+            provider=provider,
+            tools=["Read", "Glob", "Grep", "Bash"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Verifier complete: passed={response.parsed.passed}, "
-                f"summary={response.parsed.summary}",
+                f"Verifier complete: passed={result.parsed.passed}, summary={result.parsed.summary}",
                 tags=["verifier", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Verifier agent failed: {e}",
@@ -555,15 +543,14 @@ async def run_git_init(
             will be injected into the system prompt to help the agent learn from
             the previous failure.
     """
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, "git_init.jsonl") if log_dir else None
-
     router.note(
         f"Git init starting for: {goal[:80]}",
         tags=["git_init", "start"],
     )
 
-    task_prompt = git_init_task_prompt(repo_path=repo_path, goal=goal, build_id=build_id)
+    task_prompt = git_init_task_prompt(
+        repo_path=repo_path, goal=goal, build_id=build_id
+    )
 
     # Build system prompt with error context if retrying
     system_prompt = GIT_INIT_SYSTEM_PROMPT
@@ -578,29 +565,27 @@ async def run_git_init(
             "- If the error indicates a parsing issue, ensure your output is valid JSON\n"
         )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=system_prompt,
-            output_schema=GitInitResult,
-            log_file=log_path,
+            schema=GitInitResult,
+            model=model,
+            provider=provider,
+            tools=["Bash"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Git init complete: mode={response.parsed.mode}, "
-                f"integration_branch={response.parsed.integration_branch}",
+                f"Git init complete: mode={result.parsed.mode}, "
+                f"integration_branch={result.parsed.integration_branch}",
                 tags=["git_init", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Git init agent failed: {e}",
@@ -635,9 +620,6 @@ async def run_workspace_setup(
 
     Returns {workspaces: [WorkspaceInfo, ...], success: bool}.
     """
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, f"workspace_setup_level_{level}.jsonl") if log_dir else None
-
     issue_names = [i.get("name", "?") for i in issues]
     router.note(
         f"Workspace setup: creating {len(issues)} worktrees for {issue_names}",
@@ -656,28 +638,26 @@ async def run_workspace_setup(
         workspaces: list[WorkspaceInfo]
         success: bool
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=WORKSPACE_SETUP_SYSTEM_PROMPT,
-            output_schema=WorkspaceSetupResult,
-            log_file=log_path,
+            schema=WorkspaceSetupResult,
+            model=model,
+            provider=provider,
+            tools=["Bash"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Workspace setup complete: {len(response.parsed.workspaces)} worktrees created",
+                f"Workspace setup complete: {len(result.parsed.workspaces)} worktrees created",
                 tags=["workspace_setup", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Workspace setup agent failed: {e}",
@@ -706,9 +686,6 @@ async def run_merger(
     Returns a MergeResult dict.
     """
     branch_names = [b.get("branch_name", "?") for b in branches_to_merge]
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, f"merger_level_{level}.jsonl") if log_dir else None
-
     router.note(
         f"Merger starting: {len(branches_to_merge)} branches {branch_names}",
         tags=["merger", "start"],
@@ -723,30 +700,28 @@ async def run_merger(
         architecture_summary=architecture_summary,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH, Tool.READ, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=MERGER_SYSTEM_PROMPT,
-            output_schema=MergeResult,
-            log_file=log_path,
+            schema=MergeResult,
+            model=model,
+            provider=provider,
+            tools=["Bash", "Read", "Glob", "Grep"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Merger complete: merged={response.parsed.merged_branches}, "
-                f"failed={response.parsed.failed_branches}, "
-                f"needs_test={response.parsed.needs_integration_test}",
+                f"Merger complete: merged={result.parsed.merged_branches}, "
+                f"failed={result.parsed.failed_branches}, "
+                f"needs_test={result.parsed.needs_integration_test}",
                 tags=["merger", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Merger agent failed: {e}",
@@ -781,9 +756,6 @@ async def run_integration_tester(
 
     Returns an IntegrationTestResult dict.
     """
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, f"integration_tester_level_{level}.jsonl") if log_dir else None
-
     router.note(
         f"Integration tester starting: {len(merged_branches)} merged branches",
         tags=["integration_tester", "start"],
@@ -801,29 +773,27 @@ async def run_integration_tester(
         workspace_manifest=ws_manifest,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH, Tool.READ, Tool.WRITE, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=INTEGRATION_TESTER_SYSTEM_PROMPT,
-            output_schema=IntegrationTestResult,
-            log_file=log_path,
+            schema=IntegrationTestResult,
+            model=model,
+            provider=provider,
+            tools=["Bash", "Read", "Write", "Glob", "Grep"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Integration tester complete: passed={response.parsed.passed}, "
-                f"{response.parsed.tests_passed}/{response.parsed.tests_run} tests passed",
+                f"Integration tester complete: passed={result.parsed.passed}, "
+                f"{result.parsed.tests_passed}/{result.parsed.tests_run} tests passed",
                 tags=["integration_tester", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Integration tester agent failed: {e}",
@@ -854,9 +824,6 @@ async def run_workspace_cleanup(
 
     Returns {success: bool, cleaned: list[str]}.
     """
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, f"workspace_cleanup_level_{level}.jsonl") if log_dir else None
-
     router.note(
         f"Workspace cleanup: {len(branches_to_clean)} branches to clean",
         tags=["workspace_cleanup", "start"],
@@ -872,28 +839,26 @@ async def run_workspace_cleanup(
         success: bool
         cleaned: list[str] = []
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=WORKSPACE_CLEANUP_SYSTEM_PROMPT,
-            output_schema=WorkspaceCleanupResult,
-            log_file=log_path,
+            schema=WorkspaceCleanupResult,
+            model=model,
+            provider=provider,
+            tools=["Bash"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Workspace cleanup complete: {len(response.parsed.cleaned)} cleaned",
+                f"Workspace cleanup complete: {len(result.parsed.cleaned)} cleaned",
                 tags=["workspace_cleanup", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Workspace cleanup agent failed: {e}",
@@ -930,10 +895,6 @@ async def run_coder(
     """
     project_context = project_context or {}
     issue_name = issue.get("name", "?")
-    _artifacts_dir = project_context.get("artifacts_dir", "")
-    log_dir = os.path.join(_artifacts_dir, "logs") if _artifacts_dir else None
-    log_path = os.path.join(log_dir, f"coder_{issue_name}_iter_{iteration}.jsonl") if log_dir else None
-
     router.note(
         f"Coder starting: {issue_name} (iteration {iteration})",
         tags=["coder", "start"],
@@ -952,35 +913,30 @@ async def run_coder(
         target_repo=target_repo,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=worktree_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[
-            Tool.READ, Tool.WRITE, Tool.EDIT,
-            Tool.BASH, Tool.GLOB, Tool.GREP,
-        ],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=CODER_SYSTEM_PROMPT,
-            output_schema=CoderResult,
-            log_file=log_path,
+            schema=CoderResult,
+            model=model,
+            provider=provider,
+            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+            cwd=worktree_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
                 f"Coder complete: {issue_name}, "
-                f"files={len(response.parsed.files_changed)}, "
-                f"complete={response.parsed.complete}",
+                f"files={len(result.parsed.files_changed)}, "
+                f"complete={result.parsed.complete}",
                 tags=["coder", "complete"],
             )
-            result = response.parsed.model_dump()
-            result["iteration_id"] = iteration_id
-            return result
+            out = result.parsed.model_dump()
+            out["iteration_id"] = iteration_id
+            return out
     except Exception as e:
         router.note(
             f"Coder agent failed: {issue_name}: {e}",
@@ -1014,10 +970,6 @@ async def run_qa(
     """
     project_context = project_context or {}
     issue_name = issue.get("name", "?")
-    _artifacts_dir = project_context.get("artifacts_dir", "")
-    log_dir = os.path.join(_artifacts_dir, "logs") if _artifacts_dir else None
-    log_path = os.path.join(log_dir, f"qa_{issue_name}_iter_{iteration_id}.jsonl") if log_dir else None
-
     router.note(
         f"QA starting: {issue_name}",
         tags=["qa", "start"],
@@ -1035,33 +987,28 @@ async def run_qa(
         target_repo=target_repo,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=worktree_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[
-            Tool.READ, Tool.WRITE, Tool.EDIT,
-            Tool.BASH, Tool.GLOB, Tool.GREP,
-        ],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=QA_SYSTEM_PROMPT,
-            output_schema=QAResult,
-            log_file=log_path,
+            schema=QAResult,
+            model=model,
+            provider=provider,
+            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+            cwd=worktree_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"QA complete: {issue_name}, passed={response.parsed.passed}",
+                f"QA complete: {issue_name}, passed={result.parsed.passed}",
                 tags=["qa", "complete"],
             )
-            result = response.parsed.model_dump()
-            result["iteration_id"] = iteration_id
-            return result
+            out = result.parsed.model_dump()
+            out["iteration_id"] = iteration_id
+            return out
     except Exception as e:
         router.note(
             f"QA agent failed: {issue_name}: {e}",
@@ -1098,10 +1045,6 @@ async def run_code_reviewer(
     """
     project_context = project_context or {}
     issue_name = issue.get("name", "?")
-    _artifacts_dir = project_context.get("artifacts_dir", "")
-    log_dir = os.path.join(_artifacts_dir, "logs") if _artifacts_dir else None
-    log_path = os.path.join(log_dir, f"reviewer_{issue_name}_iter_{iteration_id}.jsonl") if log_dir else None
-
     router.note(
         f"Code reviewer starting: {issue_name}",
         tags=["code_reviewer", "start"],
@@ -1121,32 +1064,30 @@ async def run_code_reviewer(
         target_repo=target_repo,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=worktree_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=CODE_REVIEWER_SYSTEM_PROMPT,
-            output_schema=CodeReviewResult,
-            log_file=log_path,
+            schema=CodeReviewResult,
+            model=model,
+            provider=provider,
+            tools=["Read", "Glob", "Grep", "Bash"],
+            cwd=worktree_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
                 f"Code reviewer complete: {issue_name}, "
-                f"approved={response.parsed.approved}, "
-                f"blocking={response.parsed.blocking}",
+                f"approved={result.parsed.approved}, "
+                f"blocking={result.parsed.blocking}",
                 tags=["code_reviewer", "complete"],
             )
-            result = response.parsed.model_dump()
-            result["iteration_id"] = iteration_id
-            return result
+            out = result.parsed.model_dump()
+            out["iteration_id"] = iteration_id
+            return out
     except Exception as e:
         router.note(
             f"Code reviewer agent failed: {issue_name}: {e}",
@@ -1181,10 +1122,6 @@ async def run_qa_synthesizer(
     Returns a QASynthesisResult dict with action, summary, stuck.
     """
     issue_summary = issue_summary or {}
-    _issue_name = issue_summary.get("name", "unknown")
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, f"synthesizer_{_issue_name}_iter_{iteration_id}.jsonl") if log_dir else None
-
     router.note(
         "QA synthesizer starting",
         tags=["qa_synthesizer", "start"],
@@ -1202,31 +1139,22 @@ async def run_qa_synthesizer(
         workspace_manifest=ws_manifest,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=worktree_path or ".",
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[],
-        permission_mode=permission_mode or None,
-    ))
-
     try:
-        response = await ai.run(
+        result = await router.ai(
             task_prompt,
-            system_prompt=QA_SYNTHESIZER_SYSTEM_PROMPT,
-            output_schema=QASynthesisResult,
-            log_file=log_path,
+            system=QA_SYNTHESIZER_SYSTEM_PROMPT,
+            schema=QASynthesisResult,
+            model=model,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"QA synthesizer complete: action={response.parsed.action.value}, "
-                f"stuck={response.parsed.stuck}",
+                f"QA synthesizer complete: action={result.parsed.action.value}, "
+                f"stuck={result.parsed.stuck}",
                 tags=["qa_synthesizer", "complete"],
             )
-            result = response.parsed.model_dump()
-            result["iteration_id"] = iteration_id
-            return result
+            out = result.parsed.model_dump()
+            out["iteration_id"] = iteration_id
+            return out
     except Exception as e:
         router.note(
             f"QA synthesizer agent failed: {e}",
@@ -1240,10 +1168,14 @@ async def run_qa_synthesizer(
 
     if tests_passed and review_approved and not review_blocking:
         fallback_action = "approve"
-        fallback_summary = "Synthesizer failed but QA passed and review approved — approving."
+        fallback_summary = (
+            "Synthesizer failed but QA passed and review approved — approving."
+        )
     elif review_blocking:
         fallback_action = "block"
-        fallback_summary = "Synthesizer failed and review has blocking issues — blocking."
+        fallback_summary = (
+            "Synthesizer failed and review has blocking issues — blocking."
+        )
     else:
         fallback_action = "fix"
         fallback_summary = (
@@ -1285,9 +1217,6 @@ async def generate_fix_issues(
     )
 
     repo_path = dag_state.get("repo_path", ".")
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, "fix_generator.jsonl") if log_dir else None
-
     task_prompt = fix_generator_task_prompt(
         failed_criteria=failed_criteria,
         dag_state_summary=dag_state,
@@ -1304,36 +1233,36 @@ async def generate_fix_issues(
             "applied to. Available repos:\n"
         )
         for repo in ws_manifest.repos:
-            task_prompt += f"- **{repo.repo_name}** (role: {repo.role}): `{repo.absolute_path}`\n"
+            task_prompt += (
+                f"- **{repo.repo_name}** (role: {repo.role}): `{repo.absolute_path}`\n"
+            )
 
     class FixGeneratorOutput(BaseModel):
         fix_issues: list[dict] = []
         debt_items: list[dict] = []
         summary: str = ""
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.READ, Tool.GLOB, Tool.GREP, Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=FIX_GENERATOR_SYSTEM_PROMPT,
-            output_schema=FixGeneratorOutput,
-            log_file=log_path,
+            schema=FixGeneratorOutput,
+            model=model,
+            provider=provider,
+            tools=["Read", "Glob", "Grep", "Bash"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Fix generator complete: {len(response.parsed.fix_issues)} fix issues, "
-                f"{len(response.parsed.debt_items)} debt items",
+                f"Fix generator complete: {len(result.parsed.fix_issues)} fix issues, "
+                f"{len(result.parsed.debt_items)} debt items",
                 tags=["fix_generator", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Fix generator agent failed: {e}",
@@ -1373,36 +1302,31 @@ async def run_repo_finalize(
     Returns a RepoFinalizeResult dict. Non-blocking: failure does not affect
     build success.
     """
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, "repo_finalize.jsonl") if log_dir else None
-
     router.note("Repo finalize starting", tags=["repo_finalize", "start"])
 
     task_prompt = repo_finalize_task_prompt(repo_path=repo_path)
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH, Tool.READ, Tool.GLOB, Tool.GREP],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=REPO_FINALIZE_SYSTEM_PROMPT,
-            output_schema=RepoFinalizeResult,
-            log_file=log_path,
+            schema=RepoFinalizeResult,
+            model=model,
+            provider=provider,
+            tools=["Bash", "Read", "Glob", "Grep"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"Repo finalize complete: {len(response.parsed.files_removed)} files removed, "
-                f"gitignore_updated={response.parsed.gitignore_updated}",
+                f"Repo finalize complete: {len(result.parsed.files_removed)} files removed, "
+                f"gitignore_updated={result.parsed.gitignore_updated}",
                 tags=["repo_finalize", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"Repo finalize agent failed: {e}",
@@ -1438,9 +1362,6 @@ async def run_github_pr(
 
     Returns a GitHubPRResult dict.
     """
-    log_dir = os.path.join(artifacts_dir, "logs") if artifacts_dir else None
-    log_path = os.path.join(log_dir, "github_pr.jsonl") if log_dir else None
-
     router.note(
         f"GitHub PR: pushing {integration_branch} and creating draft PR",
         tags=["github_pr", "start"],
@@ -1456,28 +1377,26 @@ async def run_github_pr(
         accumulated_debt=accumulated_debt,
     )
 
-    ai = AgentAI(AgentAIConfig(
-        model=model,
-        provider=ai_provider,
-        cwd=repo_path,
-        max_turns=DEFAULT_AGENT_MAX_TURNS,
-        allowed_tools=[Tool.BASH],
-        permission_mode=permission_mode or None,
-    ))
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
 
     try:
-        response = await ai.run(
+        result = await router.harness(
             task_prompt,
             system_prompt=GITHUB_PR_SYSTEM_PROMPT,
-            output_schema=GitHubPRResult,
-            log_file=log_path,
+            schema=GitHubPRResult,
+            model=model,
+            provider=provider,
+            tools=["Bash"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        if response.parsed is not None:
+        if result.parsed is not None:
             router.note(
-                f"GitHub PR complete: {response.parsed.pr_url}",
+                f"GitHub PR complete: {result.parsed.pr_url}",
                 tags=["github_pr", "complete"],
             )
-            return response.parsed.model_dump()
+            return result.parsed.model_dump()
     except Exception as e:
         router.note(
             f"GitHub PR agent failed: {e}",

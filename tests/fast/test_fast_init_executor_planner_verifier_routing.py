@@ -81,7 +81,7 @@ def _run_subprocess(
 ) -> subprocess.CompletedProcess:
     """Run python -c <code> in a fresh subprocess with clean env."""
     env = os.environ.copy()
-    for key in (unset_keys or []):
+    for key in unset_keys or []:
         env.pop(key, None)
     env.setdefault("AGENTFIELD_SERVER", "http://localhost:9999")
     if extra_env:
@@ -99,6 +99,7 @@ def _run_subprocess(
 def _patch_fast_router_note():
     """Suppress fast_router.note() calls to avoid 'Router not attached' errors."""
     import swe_af.fast as fast_pkg  # noqa: PLC0415
+
     router = fast_pkg.fast_router
     old = router.__dict__.get("note", None)
     router.__dict__["note"] = MagicMock(return_value=None)
@@ -122,6 +123,7 @@ class TestFastInitThinWrapperDelegation:
     def test_run_coder_wrapper_delegates_to_execution_agents(self) -> None:
         """run_coder wrapper in __init__ must call _ea.run_coder via lazy import."""
         import swe_af.fast as fast_pkg  # noqa: PLC0415
+
         src = inspect.getsource(fast_pkg)
 
         assert "_ea.run_coder" in src, (
@@ -132,6 +134,7 @@ class TestFastInitThinWrapperDelegation:
     def test_run_verifier_wrapper_delegates_to_execution_agents(self) -> None:
         """run_verifier wrapper in __init__ must call _ea.run_verifier via lazy import."""
         import swe_af.fast as fast_pkg  # noqa: PLC0415
+
         src = inspect.getsource(fast_pkg)
 
         assert "_ea.run_verifier" in src, (
@@ -142,6 +145,7 @@ class TestFastInitThinWrapperDelegation:
     def test_run_git_init_wrapper_delegates_to_execution_agents(self) -> None:
         """run_git_init wrapper in __init__ must call _ea.run_git_init via lazy import."""
         import swe_af.fast as fast_pkg  # noqa: PLC0415
+
         src = inspect.getsource(fast_pkg)
 
         assert "_ea.run_git_init" in src, (
@@ -151,6 +155,7 @@ class TestFastInitThinWrapperDelegation:
     def test_run_repo_finalize_wrapper_delegates_to_execution_agents(self) -> None:
         """run_repo_finalize wrapper in __init__ must call _ea.run_repo_finalize."""
         import swe_af.fast as fast_pkg  # noqa: PLC0415
+
         src = inspect.getsource(fast_pkg)
 
         assert "_ea.run_repo_finalize" in src, (
@@ -160,6 +165,7 @@ class TestFastInitThinWrapperDelegation:
     def test_run_github_pr_wrapper_delegates_to_execution_agents(self) -> None:
         """run_github_pr wrapper in __init__ must call _ea.run_github_pr via lazy import."""
         import swe_af.fast as fast_pkg  # noqa: PLC0415
+
         src = inspect.getsource(fast_pkg)
 
         assert "_ea.run_github_pr" in src, (
@@ -169,6 +175,7 @@ class TestFastInitThinWrapperDelegation:
     def test_fast_init_source_has_lazy_imports_for_all_wrappers(self) -> None:
         """__init__ wrappers must all use lazy imports (inside function body)."""
         import swe_af.fast as fast_pkg  # noqa: PLC0415
+
         src = inspect.getsource(fast_pkg)
 
         # All thin wrappers must use lazy import of execution_agents
@@ -179,8 +186,7 @@ class TestFastInitThinWrapperDelegation:
         # The imports must be inside function bodies (indented)
         lines = src.splitlines()
         import_lines = [
-            line for line in lines
-            if "import swe_af.reasoners.execution_agents" in line
+            line for line in lines if "import swe_af.reasoners.execution_agents" in line
         ]
         assert import_lines, "Must have execution_agents imports"
         for line in import_lines:
@@ -197,19 +203,23 @@ class TestFastInitThinWrapperDelegation:
         """
         import ast  # noqa: PLC0415
         import swe_af.fast as fast_pkg  # noqa: PLC0415
+
         src = inspect.getsource(fast_pkg)
 
         # Parse AST to check actual imported names (not docstring text)
         tree = ast.parse(src)
         pipeline_agents = {
-            "run_architect", "run_tech_lead", "run_sprint_planner",
-            "run_product_manager", "run_issue_writer",
+            "run_architect",
+            "run_tech_lead",
+            "run_sprint_planner",
+            "run_product_manager",
+            "run_issue_writer",
         }
 
         # Verify: no direct import of pipeline agents at the module level
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
-                for alias in (node.names or []):
+                for alias in node.names or []:
                     name = alias.name or ""
                     assert name not in pipeline_agents, (
                         f"__init__ must not import pipeline agent {name!r} "
@@ -218,19 +228,24 @@ class TestFastInitThinWrapperDelegation:
 
         # Verify: fast_router tag is 'swe-fast' (not reusing a pipeline router)
         from swe_af.fast import fast_router  # noqa: PLC0415
+
         tags = getattr(fast_router, "tags", None) or getattr(fast_router, "_tags", [])
         assert "swe-fast" in tags, (
             f"fast_router tags must be 'swe-fast', got {tags!r}; "
             "this ensures it's not mistakenly using the pipeline router"
         )
+
     def test_all_five_thin_wrappers_registered_on_fast_router(self) -> None:
         """All five thin wrappers must be registered on fast_router at import time."""
         import swe_af.fast as fast_pkg  # noqa: PLC0415
 
         names = {r["func"].__name__ for r in fast_pkg.fast_router.reasoners}
         expected_wrappers = {
-            "run_git_init", "run_coder", "run_verifier",
-            "run_repo_finalize", "run_github_pr",
+            "run_git_init",
+            "run_coder",
+            "run_verifier",
+            "run_repo_finalize",
+            "run_github_pr",
         }
         missing = expected_wrappers - names
         assert not missing, (
@@ -258,8 +273,7 @@ print("OK")
 """
         result = _run_subprocess(code, unset_keys=["NODE_ID"])
         assert result.returncode == 0, (
-            f"swe_af.fast import must NOT load pipeline.py; "
-            f"stderr={result.stderr!r}"
+            f"swe_af.fast import must NOT load pipeline.py; stderr={result.stderr!r}"
         )
         assert "OK" in result.stdout
 
@@ -289,8 +303,7 @@ print("OK")
 """
         result = _run_subprocess(code, unset_keys=["NODE_ID"])
         assert result.returncode == 0, (
-            f"No fast submodule should load pipeline; "
-            f"stderr={result.stderr!r}"
+            f"No fast submodule should load pipeline; stderr={result.stderr!r}"
         )
         assert "OK" in result.stdout
 
@@ -337,8 +350,7 @@ print("OK")
 """
         result = _run_subprocess(code, unset_keys=["NODE_ID"])
         assert result.returncode == 0, (
-            f"executor must use 'swe-fast.run_coder' route; "
-            f"stderr={result.stderr!r}"
+            f"executor must use 'swe-fast.run_coder' route; stderr={result.stderr!r}"
         )
         assert "OK" in result.stdout
 
@@ -436,8 +448,10 @@ class TestPlannerBuildVerifierPrdContract:
 
         called_prd: list = []
         verify_response = {
-            "passed": True, "summary": "ok",
-            "criteria_results": [], "suggested_fixes": [],
+            "passed": True,
+            "summary": "ok",
+            "criteria_results": [],
+            "suggested_fixes": [],
         }
         mock_app = MagicMock()
 
@@ -450,15 +464,17 @@ class TestPlannerBuildVerifierPrdContract:
         with patch.dict("sys.modules", {"swe_af.fast.app": mock_app}):
             from swe_af.fast.verifier import fast_verify  # noqa: PLC0415
 
-            _run_coro(fast_verify(
-                prd=fallback_prd,
-                repo_path="/tmp/repo",
-                task_results=[],
-                verifier_model="haiku",
-                permission_mode="",
-                ai_provider="claude",
-                artifacts_dir="",
-            ))
+            _run_coro(
+                fast_verify(
+                    prd=fallback_prd,
+                    repo_path="/tmp/repo",
+                    task_results=[],
+                    verifier_model="haiku",
+                    permission_mode="",
+                    ai_provider="claude",
+                    artifacts_dir="",
+                )
+            )
 
         assert len(called_prd) == 1, "fast_verify must call app.call once"
         received_prd = called_prd[0]
@@ -507,8 +523,14 @@ class TestExecutorCompleteFieldInterpretation:
             import swe_af.fast.executor as ex  # noqa: PLC0415
 
             result = await ex.fast_execute_tasks(
-                tasks=[{"name": "t1", "title": "T1", "description": "d",
-                        "acceptance_criteria": ["ac"]}],
+                tasks=[
+                    {
+                        "name": "t1",
+                        "title": "T1",
+                        "description": "d",
+                        "acceptance_criteria": ["ac"],
+                    }
+                ],
                 repo_path="/tmp/repo",
                 task_timeout_seconds=30,
             )
@@ -541,8 +563,14 @@ class TestExecutorCompleteFieldInterpretation:
             import swe_af.fast.executor as ex  # noqa: PLC0415
 
             result = await ex.fast_execute_tasks(
-                tasks=[{"name": "t1", "title": "T1", "description": "d",
-                        "acceptance_criteria": ["ac"]}],
+                tasks=[
+                    {
+                        "name": "t1",
+                        "title": "T1",
+                        "description": "d",
+                        "acceptance_criteria": ["ac"],
+                    }
+                ],
                 repo_path="/tmp/repo",
                 task_timeout_seconds=30,
             )
@@ -571,8 +599,14 @@ class TestExecutorCompleteFieldInterpretation:
             import swe_af.fast.executor as ex  # noqa: PLC0415
 
             result = await ex.fast_execute_tasks(
-                tasks=[{"name": "t1", "title": "T1", "description": "d",
-                        "acceptance_criteria": ["ac"]}],
+                tasks=[
+                    {
+                        "name": "t1",
+                        "title": "T1",
+                        "description": "d",
+                        "acceptance_criteria": ["ac"],
+                    }
+                ],
                 repo_path="/tmp/repo",
                 task_timeout_seconds=30,
             )
@@ -602,8 +636,14 @@ class TestExecutorCompleteFieldInterpretation:
             import swe_af.fast.executor as ex  # noqa: PLC0415
 
             result = await ex.fast_execute_tasks(
-                tasks=[{"name": "api-task", "title": "API Task", "description": "d",
-                        "acceptance_criteria": ["ac"]}],
+                tasks=[
+                    {
+                        "name": "api-task",
+                        "title": "API Task",
+                        "description": "d",
+                        "acceptance_criteria": ["ac"],
+                    }
+                ],
                 repo_path="/tmp/repo",
                 task_timeout_seconds=30,
             )
@@ -636,15 +676,17 @@ class TestVerifierFastVerificationResultRoundTrip:
         with patch.dict("sys.modules", {"swe_af.fast.app": mock_app}):
             from swe_af.fast.verifier import fast_verify  # noqa: PLC0415
 
-            result = _run_coro(fast_verify(
-                prd="goal",
-                repo_path="/tmp",
-                task_results=[],
-                verifier_model="haiku",
-                permission_mode="",
-                ai_provider="claude",
-                artifacts_dir="",
-            ))
+            result = _run_coro(
+                fast_verify(
+                    prd="goal",
+                    repo_path="/tmp",
+                    task_results=[],
+                    verifier_model="haiku",
+                    permission_mode="",
+                    ai_provider="claude",
+                    artifacts_dir="",
+                )
+            )
 
         # FastVerificationResult defaults: criteria_results=[], suggested_fixes=[]
         assert "passed" in result and result["passed"] is True
@@ -672,15 +714,17 @@ class TestVerifierFastVerificationResultRoundTrip:
         with patch.dict("sys.modules", {"swe_af.fast.app": mock_app}):
             from swe_af.fast.verifier import fast_verify  # noqa: PLC0415
 
-            result = _run_coro(fast_verify(
-                prd="goal",
-                repo_path="/tmp",
-                task_results=[],
-                verifier_model="haiku",
-                permission_mode="",
-                ai_provider="claude",
-                artifacts_dir="",
-            ))
+            result = _run_coro(
+                fast_verify(
+                    prd="goal",
+                    repo_path="/tmp",
+                    task_results=[],
+                    verifier_model="haiku",
+                    permission_mode="",
+                    ai_provider="claude",
+                    artifacts_dir="",
+                )
+            )
 
         assert result["passed"] is False
         assert result["summary"] == "failed"
@@ -692,7 +736,8 @@ class TestVerifierFastVerificationResultRoundTrip:
         for verification, expected_passed in [
             (
                 {
-                    "passed": True, "summary": "All criteria met",
+                    "passed": True,
+                    "summary": "All criteria met",
                     "criteria_results": [{"name": "ac-1", "passed": True}],
                     "suggested_fixes": [],
                 },
@@ -700,7 +745,8 @@ class TestVerifierFastVerificationResultRoundTrip:
             ),
             (
                 {
-                    "passed": False, "summary": "2 criteria failed",
+                    "passed": False,
+                    "summary": "2 criteria failed",
                     "criteria_results": [],
                     "suggested_fixes": ["fix A", "fix B"],
                 },
@@ -709,7 +755,11 @@ class TestVerifierFastVerificationResultRoundTrip:
         ]:
             build_result = FastBuildResult(
                 plan_result={"tasks": []},
-                execution_result={"completed_count": 1, "failed_count": 0, "task_results": []},
+                execution_result={
+                    "completed_count": 1,
+                    "failed_count": 0,
+                    "task_results": [],
+                },
                 verification=verification,
                 success=expected_passed,
                 summary="test",
@@ -848,9 +898,7 @@ print("OK")
         import swe_af.fast.verifier  # noqa: F401, PLC0415
 
         names = {r["func"].__name__ for r in fast_pkg.fast_router.reasoners}
-        assert "fast_verify" in names, (
-            "fast_verify must be registered on fast_router"
-        )
+        assert "fast_verify" in names, "fast_verify must be registered on fast_router"
 
     def test_no_pipeline_reasoners_on_fast_router(self) -> None:
         """fast_router must not contain any swe-planner pipeline planning agents."""
@@ -861,8 +909,11 @@ print("OK")
 
         names = {r["func"].__name__ for r in fast_pkg.fast_router.reasoners}
         pipeline_forbidden = {
-            "run_architect", "run_tech_lead", "run_sprint_planner",
-            "run_product_manager", "run_issue_writer",
+            "run_architect",
+            "run_tech_lead",
+            "run_sprint_planner",
+            "run_product_manager",
+            "run_issue_writer",
         }
         leaked = pipeline_forbidden & names
         assert not leaked, (
@@ -895,25 +946,6 @@ class TestRuntimeToProviderCrossFeature:
         assert provider == "opencode", (
             f"_runtime_to_provider('open_code') must return 'opencode', got {provider!r}"
         )
-
-    def test_runtime_to_provider_aligns_with_agentai_config_provider_field(self) -> None:
-        """AgentAIConfig.provider must accept the values returned by _runtime_to_provider."""
-        from swe_af.agent_ai import AgentAIConfig  # noqa: PLC0415
-        import swe_af.fast.app as fast_app  # noqa: PLC0415
-
-        for runtime in ("claude_code", "open_code"):
-            provider = fast_app._runtime_to_provider(runtime)
-            try:
-                cfg = AgentAIConfig(provider=provider, model="haiku", cwd="/tmp")
-                assert cfg.provider == provider, (
-                    f"AgentAIConfig.provider must accept {provider!r} from "
-                    f"_runtime_to_provider({runtime!r})"
-                )
-            except Exception as exc:
-                pytest.fail(
-                    f"AgentAIConfig rejected provider={provider!r} "
-                    f"(from runtime={runtime!r}): {exc}"
-                )
 
     def test_build_source_uses_runtime_to_provider(self) -> None:
         """build() must call _runtime_to_provider to convert config.runtime to ai_provider."""

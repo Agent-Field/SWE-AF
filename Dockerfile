@@ -25,14 +25,14 @@ ENV PATH="/root/.opencode/bin:${PATH}"
 # Git identity — env vars take highest precedence and are inherited by all
 # subprocesses including Claude Code agent instances spawned by the SDK
 ENV GIT_AUTHOR_NAME="SWE-AF" \
-    GIT_AUTHOR_EMAIL="contact@agentfield.com" \
+    GIT_AUTHOR_EMAIL="eng@agentfield.ai" \
     GIT_COMMITTER_NAME="SWE-AF" \
-    GIT_COMMITTER_EMAIL="contact@agentfield.com"
+    GIT_COMMITTER_EMAIL="eng@agentfield.ai"
 
 # Configure git identity and use gh CLI as credential helper so all git
 # HTTPS operations (clone, push, fetch) authenticate via GH_TOKEN at runtime.
 RUN git config --global user.name "SWE-AF" && \
-    git config --global user.email "contact@agentfield.com" && \
+    git config --global user.email "eng@agentfield.ai" && \
     gh auth setup-git --hostname github.com --force
 
 # Install uv for fast package installation
