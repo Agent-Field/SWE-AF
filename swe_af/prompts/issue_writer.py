@@ -83,6 +83,24 @@ Read <architecture_path> Section X.Y (<component name>) for:
 - Check: `<command that proves AC passes>`
 ```
 
+## CRITICAL: You Own the Detail
+
+The sprint planner intentionally produces MINIMAL stubs — just names, titles,
+short descriptions, dependencies, and file metadata. YOU are responsible for
+generating all the rich detail by reading the PRD and architecture documents:
+
+1. **Acceptance criteria**: Map PRD-level acceptance criteria to this specific
+   issue. Each criterion must be binary pass/fail and testable by command.
+2. **Testing strategy**: Name exact test file paths, the test framework, test
+   categories, and which acceptance criteria each test covers.
+3. **Provides**: What specific capabilities this issue exports (function names,
+   types, modules) — critical for recovery if the issue fails.
+4. **Guidance**: Testing guidance, review focus, risk rationale — all derived
+   from reading the architecture and understanding the issue's role.
+
+Return the acceptance criteria you generate in your structured output so the
+coding loop can use them programmatically.
+
 ## Constraints
 
 - Do NOT write implementation code. Do NOT copy function bodies from the
@@ -136,23 +154,14 @@ def issue_writer_task_prompt(
     if ws_block:
         sections.append(ws_block)
 
-    sections.append("## Issue to Write")
+    sections.append("## Issue Skeleton (from sprint planner)")
     sections.append(f"- **Name**: {issue.get('name', '(unknown)')}")
     sections.append(f"- **Title**: {issue.get('title', '(unknown)')}")
     sections.append(f"- **Description**: {issue.get('description', '(not available)')}")
 
-    ac = issue.get("acceptance_criteria", [])
-    if ac:
-        sections.append("- **Acceptance Criteria**:")
-        sections.extend(f"  - {c}" for c in ac)
-
     deps = issue.get("depends_on", [])
     if deps:
         sections.append(f"- **Dependencies**: {deps}")
-
-    provides = issue.get("provides", [])
-    if provides:
-        sections.append(f"- **Provides**: {provides}")
 
     files_create = issue.get("files_to_create", [])
     files_modify = issue.get("files_to_modify", [])
@@ -161,23 +170,21 @@ def issue_writer_task_prompt(
     if files_modify:
         sections.append(f"- **Files to modify**: {files_modify}")
 
-    testing_strategy = issue.get("testing_strategy", "")
-    if testing_strategy:
-        sections.append(f"- **Testing Strategy (from sprint planner)**: {testing_strategy}")
+    sections.append(f"- **Estimated scope**: {issue.get('estimated_scope', 'medium')}")
+    sections.append(f"- **Needs deeper QA**: {issue.get('needs_deeper_qa', False)}")
 
-    # Sprint planner guidance
+    # Legacy support: if old-format issues have acceptance_criteria or guidance, show them
+    ac = issue.get("acceptance_criteria", [])
+    if ac:
+        sections.append("- **Acceptance Criteria (from sprint planner)**:")
+        sections.extend(f"  - {c}" for c in ac)
+
     guidance = issue.get("guidance") or {}
     if guidance:
-        sections.append("- **Sprint Planner Guidance**:")
         if guidance.get("testing_guidance"):
-            sections.append(f"  - Testing: {guidance['testing_guidance']}")
+            sections.append(f"- **Testing hint**: {guidance['testing_guidance']}")
         if guidance.get("review_focus"):
-            sections.append(f"  - Review focus: {guidance['review_focus']}")
-        if guidance.get("risk_rationale"):
-            sections.append(f"  - Risk: {guidance['risk_rationale']}")
-        sections.append(f"  - Scope: {guidance.get('estimated_scope', 'medium')}")
-        sections.append(f"  - Needs new tests: {guidance.get('needs_new_tests', True)}")
-        sections.append(f"  - Deeper QA: {guidance.get('needs_deeper_qa', False)}")
+            sections.append(f"- **Review focus hint**: {guidance['review_focus']}")
 
     # Reference documents
     sections.append(f"\n## PRD Summary\n{prd_summary}")
@@ -202,13 +209,15 @@ def issue_writer_task_prompt(
 
     sections.append(
         "\n## Your Task\n"
-        "1. Read the architecture document for the relevant section and interface details.\n"
-        "2. Read the PRD for requirements context.\n"
-        "3. Write a lean issue-*.md file (~30-50 lines) at the specified location.\n"
-        "4. Reference architecture sections by name — do NOT copy implementation code.\n"
-        "5. Include Interface Contracts with key signatures only (3-5 lines max).\n"
-        "6. Return a JSON object with `issue_name`, `issue_file_path`, and "
-        "`success` (boolean)."
+        "1. Read the FULL PRD document for requirements, scope, and acceptance criteria.\n"
+        "2. Read the architecture document for the relevant section and interface details.\n"
+        "3. Generate acceptance criteria for THIS issue by mapping PRD-level criteria.\n"
+        "4. Write a lean issue-*.md file (~30-50 lines) at the specified location.\n"
+        "   Include: description, architecture reference, interface contracts,\n"
+        "   acceptance criteria, testing strategy, provides, and guidance.\n"
+        "5. Reference architecture sections by name — do NOT copy implementation code.\n"
+        "6. Return a JSON object with `issue_name`, `issue_file_path`, `success` (boolean),\n"
+        "   and `acceptance_criteria` (list of strings — the criteria you generated)."
     )
 
     return "\n".join(sections)

@@ -186,11 +186,8 @@ async def build(
     app.note("Fast build: verify", tags=["fast_build", "verify"])
     # Use a minimal PRD dict if the planner didn't produce one (fast path has no PM)
     prd_dict = plan_result.get("prd") or {
-        "validated_description": goal,
+        "summary": goal,
         "acceptance_criteria": [],
-        "must_have": [],
-        "nice_to_have": [],
-        "out_of_scope": [],
     }
     verification: dict = {}
     try:

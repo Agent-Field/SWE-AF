@@ -50,3 +50,6 @@ build/
 
 # Pipeline output files
 .claude_output_*.json
+
+# Benchmark staged repos (large cloned repos for pre-commit benchmarks)
+staged_repos/

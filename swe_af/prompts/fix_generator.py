@@ -76,7 +76,7 @@ def fix_generator_task_prompt(
         )
 
     sections.append("\n## Project Context")
-    sections.append(f"- PRD description: {prd.get('validated_description', '(not available)')[:500]}")
+    sections.append(f"- PRD description: {(prd.get('summary', '') or prd.get('validated_description', '(not available)'))[:500]}")
     ac = prd.get("acceptance_criteria", [])
     if ac:
         sections.append("- PRD Acceptance Criteria:")

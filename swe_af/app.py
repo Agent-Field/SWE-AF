@@ -875,10 +875,7 @@ async def plan(
     if not review["approved"]:
         review = ReviewResult(
             approved=True,
-            feedback=review["feedback"],
-            scope_issues=review.get("scope_issues", []),
-            complexity_assessment=review.get("complexity_assessment", "appropriate"),
-            summary=review["summary"] + " [auto-approved after max iterations]",
+            feedback=review["feedback"] + "\n\n[Auto-approved after max iterations]",
         ).model_dump()
 
     # 4. Sprint planner decomposes into issues
@@ -909,7 +906,7 @@ async def plan(
     architecture_path = os.path.join(base, "plan", "architecture.md")
     os.makedirs(issues_dir, exist_ok=True)
 
-    prd_summary_str = prd.get("validated_description", "")
+    prd_summary_str = prd.get("summary", "") or prd.get("validated_description", "")
     prd_ac = prd.get("acceptance_criteria", [])
     if prd_ac:
         prd_summary_str += "\n\nAcceptance Criteria:\n" + "\n".join(f"- {c}" for c in prd_ac)
@@ -941,7 +938,29 @@ async def plan(
         ))
     writer_results = await asyncio.gather(*writer_tasks, return_exceptions=True)
 
-    succeeded = sum(1 for r in writer_results if isinstance(r, dict) and r.get("success"))
+    succeeded = 0
+    for wr in writer_results:
+        if isinstance(wr, Exception):
+            continue
+        wr_dict = _unwrap(wr, "run_issue_writer") if not isinstance(wr, dict) else wr
+        if not wr_dict.get("success"):
+            continue
+        succeeded += 1
+        # Merge acceptance_criteria from issue writer back into issue dicts
+        writer_ac = wr_dict.get("acceptance_criteria", [])
+        writer_name = wr_dict.get("issue_name", "")
+        if writer_ac and writer_name:
+            for issue in issues:
+                if issue["name"] == writer_name:
+                    issue["acceptance_criteria"] = writer_ac
+                    if wr_dict.get("issue_file_path"):
+                        issue["issue_file_path"] = wr_dict["issue_file_path"]
+                    break
+    # Fallback: issues without AC get PRD-level ACs
+    for issue in issues:
+        if not issue.get("acceptance_criteria"):
+            issue["acceptance_criteria"] = list(prd_ac)
+
     failed = len(writer_results) - succeeded
     app.note(
         f"Issue writers complete: {succeeded} succeeded, {failed} failed",

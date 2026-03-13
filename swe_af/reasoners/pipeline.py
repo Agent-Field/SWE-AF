@@ -12,14 +12,13 @@ import os
 from collections import defaultdict, deque
 from pathlib import Path
 
-from pydantic import BaseModel
-
-from swe_af.execution.schemas import DEFAULT_AGENT_MAX_TURNS
+from swe_af.execution.schemas import DEFAULT_AGENT_MAX_TURNS, _normalize_provider
 from swe_af.reasoners.schemas import (
-    Architecture,
-    PlannedIssue,
-    PRD,
+    ArchitectureOutput,
+    IssueSkeleton,
+    PRDOutput,
     ReviewResult,
+    SprintDecomposition,
 )
 
 from . import router
@@ -190,10 +189,10 @@ async def run_product_manager(
         additional_context=additional_context,
         workspace_manifest=ws_manifest,
     )
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = _normalize_provider(ai_provider)
     result = await router.harness(
         prompt=task_prompt,
-        schema=PRD,
+        schema=PRDOutput,
         provider=provider,
         model=model,
         max_turns=max_turns,
@@ -227,7 +226,7 @@ async def run_architect(
     base = os.path.join(os.path.abspath(repo_path), artifacts_dir)
     paths = _ensure_paths(base)
 
-    prd_obj = PRD(**prd)
+    prd_obj = PRDOutput(**prd)
     from swe_af.prompts.architect import architect_prompts, architect_task_prompt  # noqa: PLC0415
     from swe_af.execution.schemas import WorkspaceManifest  # noqa: PLC0415
 
@@ -249,10 +248,10 @@ async def run_architect(
         feedback=feedback or None,
         workspace_manifest=ws_manifest,
     )
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = _normalize_provider(ai_provider)
     result = await router.harness(
         prompt=task_prompt,
-        schema=Architecture,
+        schema=ArchitectureOutput,
         provider=provider,
         model=model,
         max_turns=max_turns,
@@ -303,7 +302,7 @@ async def run_tech_lead(
         revision_number=revision_number,
         workspace_manifest=ws_manifest,
     )
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = _normalize_provider(ai_provider)
     result = await router.harness(
         prompt=task_prompt,
         schema=ReviewResult,
@@ -345,15 +344,11 @@ async def run_sprint_planner(
     """
     router.note("Sprint Planner starting", tags=["sprint_planner", "start"])
 
-    class SprintPlanOutput(BaseModel):
-        issues: list[PlannedIssue]
-        rationale: str
-
     base = os.path.join(os.path.abspath(repo_path), artifacts_dir)
     paths = _ensure_paths(base)
 
-    prd_obj = PRD(**prd)
-    arch_obj = Architecture(**architecture)
+    prd_obj = PRDOutput(**prd)
+    arch_obj = ArchitectureOutput(**architecture)
     from swe_af.prompts.sprint_planner import (
         sprint_planner_prompts,
         sprint_planner_task_prompt,
@@ -371,7 +366,7 @@ async def run_sprint_planner(
         WorkspaceManifest(**workspace_manifest) if workspace_manifest else None
     )
     task_prompt = sprint_planner_task_prompt(
-        goal=prd_obj.validated_description,
+        goal=prd_obj.summary,
         prd=prd_obj,
         architecture=arch_obj,
         workspace_manifest=ws_manifest,
@@ -379,10 +374,10 @@ async def run_sprint_planner(
         prd_path=paths["prd"],
         architecture_path=paths["architecture"],
     )
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = _normalize_provider(ai_provider)
     result = await router.harness(
         prompt=task_prompt,
-        schema=SprintPlanOutput,
+        schema=SprintDecomposition,
         provider=provider,
         model=model,
         max_turns=max_turns,

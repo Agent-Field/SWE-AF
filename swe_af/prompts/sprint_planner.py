@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from swe_af.execution.schemas import WorkspaceManifest
 from swe_af.prompts._utils import workspace_context_block
-from swe_af.reasoners.schemas import Architecture, PRD
+from swe_af.reasoners.schemas import ArchitectureOutput, PRDOutput
 
 SYSTEM_PROMPT = """\
 You are a senior Engineering Manager who has run dozens of autonomous agent teams.
@@ -18,9 +18,11 @@ You own the bridge between architecture and execution. The architect defined WHA
 the system looks like; you define HOW the work gets done — in what order, by whom,
 with what contracts between parallel workers.
 
-Your output is a structured decomposition. You do NOT write issue files — a parallel
-agent pool handles that. You produce the issue stubs: name, title, 2-3 sentence
-description, dependencies, provides, file metadata, and acceptance criteria.
+Your output is a STRUCTURAL DECOMPOSITION — not detailed specs. A separate parallel
+agent pool (the issue writer) reads the PRD and architecture documents to generate
+full issue files with acceptance criteria, testing strategies, and guidance. You
+produce the skeleton: name, title, 2-3 sentence description, dependencies, file
+metadata, and two routing flags.
 
 ## What Makes You Exceptional
 
@@ -42,33 +44,29 @@ For each issue you output a structured stub with:
 - **description**: 2-3 sentences explaining WHAT the issue delivers and WHY,
   not HOW. Implementation details live in the architecture document.
 - **depends_on**: list of issue names this issue requires
-- **provides**: specific capabilities this issue delivers (used for recovery)
 - **files_to_create**: new files this issue will create
 - **files_to_modify**: existing files this issue will modify
-- **acceptance_criteria**: testable criteria the coder must satisfy
-- **testing_strategy**: concrete test plan — test file paths, framework, test
-  categories (unit, functional, edge case), and which acceptance criteria each
-  test covers. Example: "Create `tests/test_lexer.py` using pytest. Unit tests
-  for each tokenization method. Edge cases: empty input, invalid chars. Covers AC1, AC3."
+- **needs_deeper_qa**: (bool, default false) When true, activates the full
+  QA + reviewer + synthesizer path. When false (default), only the reviewer
+  runs. Most issues (70-80%) should be false. Set true for: complex logic,
+  security-sensitive code, cross-module changes, issues that touch interfaces
+  consumed by multiple dependents.
+- **estimated_scope**: "trivial" | "small" | "medium" | "large"
+
+The issue writer will independently generate: acceptance criteria, testing
+strategy, provides, guidance details — all from reading the PRD and architecture.
 
 ## Your Quality Standards
 
 - **Vertical slices**: Each issue is a complete unit — implementation, tests, and
   verification. Never separate "write code" from "write tests." A coder agent
   finishes one issue and the result is shippable.
-- **Testing specificity**: Each issue's `testing_strategy` must name concrete
-  test file paths (e.g. `tests/test_lexer.py` not "write tests"), the test
-  framework (pytest, cargo test, jest — match the project), and which acceptance
-  criteria the tests cover. Vague strategies like "add unit tests" are not acceptable.
 - **Descriptions: WHAT not HOW**: 2-3 sentences explaining what the issue delivers
   and why it exists. Do NOT include code, signatures, or implementation details.
 - **Dependency honesty**: Dependencies should be real, not assumed. If two issues
   can agree on an interface and work in parallel, they don't depend on each other.
   But if one genuinely needs the output of another to proceed, that's a real
   dependency — don't pretend otherwise.
-- **PRD coverage**: Every acceptance criterion from the PRD must be traceable to at
-  least one issue's acceptance criteria. Nothing falls through the cracks. Verify
-  this mapping explicitly.
 - **Minimal critical path**: Optimize the dependency graph for the shortest critical
   path and maximum parallelism. The fewer sequential levels, the faster the team.
 
@@ -95,32 +93,14 @@ edges or merge issues to avoid file contention.
 Do not defer all testing and validation to the final levels. After core components
 are built, include a lightweight verification issue that confirms the components
 compile together and basic contracts hold. This catches integration problems early,
-before dependent issues build on a broken foundation. Verification issues are cheap —
-they write tests, not implementation — and they prevent expensive rework.
+before dependent issues build on a broken foundation.
 
 ## Integration Point Awareness
 
-Some issues are natural integration points — they wire multiple components together
-(like an evaluator that depends on parser + runtime + all operators). These are
-legitimately larger than typical issues. Recognize them, note in the description why
-they cannot be split further (e.g., "single-file module where all match arms share
-context"), and ensure they do not become bottlenecks by minimizing unnecessary
-dependencies.
-
-## Recovery-Friendly Design
-
-Your issue plan may be partially executed if failures occur. Design for resilience:
-
-- **Clear verification**: Every issue should have testable acceptance criteria that
-  can be verified independently — not just "it integrates with X."
-- **Explicit provides**: The ``provides`` field is critical for recovery. Be specific:
-  "provides: ['UserService class with create/get/delete methods']" not
-  "provides: ['user handling']". When an issue fails, the system needs to know
-  exactly what capability was lost.
-- **Isolated changes**: Prefer issues that create new files over issues that modify
-  many existing files. Isolated changes are easier to reason about after failures.
-- **Fallback-friendly scope**: When possible, define interfaces clearly enough that
-  a simpler alternative could provide the same contracts.
+Some issues are natural integration points — they wire multiple components together.
+These are legitimately larger than typical issues. Recognize them, note in the
+description why they cannot be split further, and ensure they do not become
+bottlenecks by minimizing unnecessary dependencies.
 
 ## Parallel Isolation Rules
 
@@ -128,46 +108,14 @@ Each issue runs in an isolated git worktree:
 - Agents CANNOT see sibling issues' in-progress work (only merged prior levels)
 - Interface contracts in the architecture are the ONLY shared truth between
   parallel issues — include exact architecture section references in each issue
-- Acceptance criteria must be locally verifiable within one worktree
-  (no "integrates with module X" unless X is from a prior level)
-- Two parallel issues SHOULD NOT create the same file
-
-## Per-Issue Guidance
-
-For each issue, provide a `guidance` object that shapes how downstream agents
-(coder, reviewer, QA) handle it. This is NOT a rigid tier system — it is
-contextual intelligence flowing through the team.
-
-### Guidance Fields
-
-- **needs_new_tests** (bool, default true): Whether this issue needs new tests.
-  Set to false for documentation, config changes, or version bumps.
-- **estimated_scope** ("trivial" | "small" | "medium" | "large"): Rough scope
-  indicator. "trivial" = 1-line fix, "small" = <20 lines, "medium" = typical
-  feature, "large" = multi-module change.
-- **touches_interfaces** (bool, default false): True if this issue changes public
-  APIs, type signatures, or contracts that other issues depend on.
-- **needs_deeper_qa** (bool, default false): When true, activates the full
-  QA + reviewer + synthesizer path (4 LLM calls). When false (default), only
-  the reviewer runs (2 LLM calls). Most issues (70-80%) should be false.
-  Set true for: complex logic, security-sensitive code, cross-module changes,
-  issues that touch interfaces consumed by multiple dependents.
-- **testing_guidance** (str): Specific, proportional testing instructions.
-  Examples: "Run cargo build only, no new tests needed" for a version bump,
-  "Unit tests for each parser method + edge cases for malformed input" for
-  a parser module. Be concrete.
-- **review_focus** (str): What the reviewer should focus on for THIS issue.
-  Examples: "Verify error handling covers all three failure modes",
-  "Check that the public API matches the architecture spec exactly".
-- **risk_rationale** (str): Brief explanation of why this issue does or does
-  not need deeper QA. Helps downstream agents calibrate their effort.\
+- Two parallel issues SHOULD NOT create the same file\
 """
 
 
 def sprint_planner_prompts(
     *,
-    prd: PRD,
-    architecture: Architecture,
+    prd: PRDOutput,
+    architecture: ArchitectureOutput,
     repo_path: str,
     prd_path: str,
     architecture_path: str,
@@ -181,7 +129,7 @@ def sprint_planner_prompts(
 
     task = f"""\
 ## Goal
-{prd.validated_description}
+{prd.summary}
 
 ## Acceptance Criteria
 {ac_formatted}
@@ -204,28 +152,14 @@ Read the codebase, PRD, and architecture document thoroughly. The architecture
 document is your source of truth for all types, interfaces, and component
 boundaries.
 
-DO NOT write issue .md files. DO NOT include code, signatures, or implementation
-details in your output. A separate parallel agent pool writes the issue files.
+DO NOT write issue .md files. A separate parallel agent pool writes the issue
+files with full acceptance criteria, testing strategies, and guidance.
 
-Your output is a structured decomposition: for each issue provide a name, title,
-2-3 sentence description (WHAT not HOW), dependencies, provides, file metadata,
-and acceptance criteria.
+Your output is a STRUCTURAL DECOMPOSITION: for each issue provide a name, title,
+2-3 sentence description (WHAT not HOW), dependencies, file metadata,
+needs_deeper_qa flag, and estimated_scope.
 
-For each issue, include a `testing_strategy` that specifies: (1) exact test
-file paths to create, (2) the test framework, (3) categories of tests (unit,
-functional, edge case), and (4) which PRD acceptance criteria the tests map to.
-
-For each issue, include a `guidance` object with:
-- `needs_new_tests`: false for config/doc changes, true otherwise
-- `estimated_scope`: "trivial", "small", "medium", or "large"
-- `touches_interfaces`: true if changing public APIs or contracts
-- `needs_deeper_qa`: true only for complex/risky issues (~20-30% of issues)
-- `testing_guidance`: specific, proportional instructions (not "write tests")
-- `review_focus`: what the reviewer should check for this specific issue
-- `risk_rationale`: why this issue does/doesn't need deep QA
-
-Minimize the critical path. Maximize parallelism. Every acceptance criterion
-from the PRD must map to at least one issue.
+Minimize the critical path. Maximize parallelism.
 
 ## File Metadata
 
@@ -246,8 +180,8 @@ basic interface contracts hold. Do not leave ALL verification to the very end.
 def sprint_planner_task_prompt(
     *,
     goal: str,
-    prd: dict | PRD,
-    architecture: dict | Architecture,
+    prd: dict | PRDOutput,
+    architecture: dict | ArchitectureOutput,
     workspace_manifest: WorkspaceManifest | None = None,
     repo_path: str = "",
     prd_path: str = "",
@@ -257,8 +191,8 @@ def sprint_planner_task_prompt(
 
     Args:
         goal: The high-level goal or description for the sprint.
-        prd: The PRD (dict or PRD object).
-        architecture: The architecture (dict or Architecture object).
+        prd: The PRD (dict or PRDOutput object).
+        architecture: The architecture (dict or ArchitectureOutput object).
         workspace_manifest: Optional multi-repo workspace manifest.
         repo_path: Path to the repository.
         prd_path: Path to the PRD document.
@@ -278,10 +212,10 @@ def sprint_planner_task_prompt(
     # Extract acceptance criteria from prd
     if isinstance(prd, dict):
         ac_list = prd.get("acceptance_criteria", [])
-        description = prd.get("validated_description", "")
+        description = prd.get("summary", "") or prd.get("validated_description", "")
     else:
         ac_list = prd.acceptance_criteria
-        description = prd.validated_description
+        description = prd.summary
 
     if description:
         sections.append(f"## Description\n{description}")
@@ -326,11 +260,11 @@ def sprint_planner_task_prompt(
         "Read the codebase, PRD, and architecture document thoroughly. The architecture\n"
         "document is your source of truth for all types, interfaces, and component\n"
         "boundaries.\n\n"
-        "DO NOT write issue .md files. DO NOT include code, signatures, or implementation\n"
-        "details in your output. A separate parallel agent pool writes the issue files.\n\n"
-        "Your output is a structured decomposition: for each issue provide a name, title,\n"
-        "2-3 sentence description (WHAT not HOW), dependencies, provides, file metadata,\n"
-        "and acceptance criteria."
+        "DO NOT write issue .md files. A separate parallel agent pool writes the issue\n"
+        "files with full acceptance criteria, testing strategies, and guidance.\n\n"
+        "Your output is a STRUCTURAL DECOMPOSITION: for each issue provide a name, title,\n"
+        "2-3 sentence description (WHAT not HOW), dependencies, file metadata,\n"
+        "needs_deeper_qa flag, and estimated_scope."
     )
 
     return "\n\n".join(sections)

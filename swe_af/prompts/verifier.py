@@ -127,7 +127,7 @@ def verifier_task_prompt(
 
     # --- PRD ---
     sections.append("## Product Requirements Document")
-    sections.append(f"**Description**: {prd.get('validated_description', '(not available)')}")
+    sections.append(f"**Description**: {prd.get('summary', '') or prd.get('validated_description', '(not available)')}")
 
     sections.append("\n### Acceptance Criteria (ALL must pass for overall PASS)")
     ac = prd.get("acceptance_criteria", [])

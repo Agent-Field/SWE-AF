@@ -429,9 +429,9 @@ class TestPlannerBuildVerifierPrdContract:
             "build() must check plan_result.get('prd') to handle missing prd from planner; "
             "if missing this check, verifier receives None prd_dict"
         )
-        # Fallback must include 'validated_description'
-        assert "validated_description" in src, (
-            "build() fallback prd_dict must have 'validated_description' field"
+        # Fallback must include 'summary' (or legacy 'validated_description')
+        assert "summary" in src, (
+            "build() fallback prd_dict must have 'summary' field"
         )
 
     def test_fallback_prd_dict_forwarded_to_fast_verify_unchanged(self) -> None:
@@ -439,11 +439,8 @@ class TestPlannerBuildVerifierPrdContract:
         # The fallback from build():
         goal = "Add a health check endpoint"
         fallback_prd = {
-            "validated_description": goal,
+            "summary": goal,
             "acceptance_criteria": [],
-            "must_have": [],
-            "nice_to_have": [],
-            "out_of_scope": [],
         }
 
         called_prd: list = []
@@ -481,8 +478,8 @@ class TestPlannerBuildVerifierPrdContract:
         assert isinstance(received_prd, dict), (
             f"prd forwarded to run_verifier must be a dict, got {type(received_prd)}"
         )
-        assert received_prd.get("validated_description") == goal, (
-            "fallback prd's validated_description must be preserved through fast_verify"
+        assert received_prd.get("summary") == goal or received_prd.get("validated_description") == goal, (
+            "fallback prd's summary (or validated_description) must be preserved through fast_verify"
         )
 
     def test_fast_verify_prd_param_is_keyword_only(self) -> None:

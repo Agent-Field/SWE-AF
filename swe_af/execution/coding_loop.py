@@ -554,8 +554,9 @@ async def run_coding_loop(
             )
 
     # Extract guidance — determines execution path
+    # Flat field (new schema) with fallback to nested guidance (legacy compat)
     guidance = issue.get("guidance") or {}
-    needs_deeper_qa = guidance.get("needs_deeper_qa", False)
+    needs_deeper_qa = issue.get("needs_deeper_qa", guidance.get("needs_deeper_qa", False))
 
     # Slim project context — paths only, agents read files if needed
     project_context = {

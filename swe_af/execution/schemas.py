@@ -160,11 +160,9 @@ class IssueAdaptation(BaseModel):
     original_acceptance_criteria: list[str] = []
     modified_acceptance_criteria: list[str] = []
     dropped_criteria: list[str] = []
-    failure_diagnosis: str = ""
-    rationale: str = ""
+    rationale: str = ""  # Includes failure diagnosis
     new_approach: str = ""
     missing_functionality: list[str] = []
-    downstream_impact: str = ""
     severity: str = "medium"
 
 
@@ -176,39 +174,30 @@ class SplitIssueSpec(BaseModel):
     description: str
     acceptance_criteria: list[str]
     depends_on: list[str] = []
-    provides: list[str] = []
     files_to_create: list[str] = []
     files_to_modify: list[str] = []
-    parent_issue_name: str = ""
 
 
 class IssueAdvisorDecision(BaseModel):
     """Structured output from the Issue Advisor agent."""
 
     action: AdvisorAction
-    failure_diagnosis: str
-    failure_category: str = ""  # environment|logic|dependency|approach|scope
-    rationale: str
+    rationale: str  # Includes failure diagnosis, justification, split rationale
     confidence: float = 0.5
+    failure_category: str = ""  # environment|logic|dependency|approach|scope
     # RETRY_MODIFIED
     modified_acceptance_criteria: list[str] = []
     dropped_criteria: list[str] = []
-    modification_justification: str = ""
     # RETRY_APPROACH
-    new_approach: str = ""
-    approach_changes: list[str] = []
+    new_approach: str = ""  # Includes approach changes
     # SPLIT
     sub_issues: list[SplitIssueSpec] = []
-    split_rationale: str = ""
     # ACCEPT_WITH_DEBT
     missing_functionality: list[str] = []
     debt_severity: str = "medium"
     # ESCALATE_TO_REPLAN
-    escalation_reason: str = ""
-    dag_impact: str = ""
-    suggested_restructuring: str = ""
+    escalation_reason: str = ""  # Includes dag_impact, suggested_restructuring
     # Always
-    downstream_impact: str = ""
     summary: str = ""
 
 
@@ -408,11 +397,7 @@ class CoderResult(BaseModel):
     files_changed: list[str] = []
     summary: str = ""
     complete: bool = True
-    iteration_id: str = ""
     tests_passed: bool | None = None  # Self-reported: did tests pass?
-    test_summary: str = ""  # Brief test run output
-    codebase_learnings: list[str] = []  # Conventions discovered (for shared memory)
-    agent_retro: dict = {}  # What worked, what didn't (for shared memory)
     repo_name: str = ""  # Repo where coder ran (multi-repo)
 
 
@@ -831,12 +816,13 @@ class ExecutionConfig(BaseModel):
     def _validate_v2_keys(cls, data: Any) -> Any:
         return _reject_legacy_config_keys(data)
 
-    @model_validator(mode="after")
-    def _normalize_provider_field(self) -> "ExecutionConfig":
-        # Normalize legacy provider names at config boundary for defense-in-depth
-        # (inline mappings in execution_agents.py/pipeline.py provide first layer)
-        self.runtime = "claude_code" if self.runtime == "claude" else self.runtime
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_runtime_field(cls, data: Any) -> Any:
+        """Normalize legacy runtime names at config boundary for defense-in-depth."""
+        if isinstance(data, dict) and data.get("runtime") == "claude":
+            data = {**data, "runtime": "claude_code"}
+        return data
 
     def model_post_init(self, __context: Any) -> None:
         """Resolve runtime model selection once at construction time."""

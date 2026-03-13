@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+from swe_af.execution.schemas import _normalize_provider
 from swe_af.fast import fast_router
 from swe_af.fast.prompts import FAST_PLANNER_SYSTEM_PROMPT, fast_planner_task_prompt
 from swe_af.fast.schemas import FastPlanResult, FastTask
@@ -74,7 +75,7 @@ async def fast_plan_tasks(
         repo_path: Absolute path to the target repository on disk.
         max_tasks: Maximum number of tasks to produce (default 10).
         pm_model: Model string to use for the planning LLM call.
-        permission_mode: Optional permission mode forwarded to AgentAI.
+        permission_mode: Optional permission mode forwarded to router.harness().
         ai_provider: AI provider string (e.g. ``"claude"``).
         additional_context: Optional extra constraints or background info.
         artifacts_dir: Optional path for writing plan artefacts (unused by
@@ -96,8 +97,7 @@ async def fast_plan_tasks(
         additional_context=additional_context,
     )
 
-    # Map 'claude' to 'claude-code' for AgentField router compatibility
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = _normalize_provider(ai_provider)
     try:
         res = await fast_router.harness(
             prompt=task_prompt,

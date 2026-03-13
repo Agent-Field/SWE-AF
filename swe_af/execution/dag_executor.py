@@ -719,9 +719,9 @@ def _init_dag_state(
     architecture_path = os.path.join(artifacts_dir, "plan", "architecture.md") if artifacts_dir else ""
     issues_dir = os.path.join(artifacts_dir, "plan", "issues") if artifacts_dir else ""
 
-    # PRD summary: validated_description + acceptance criteria
+    # PRD summary: summary (or legacy validated_description) + acceptance criteria
     prd = plan_result.get("prd", {})
-    prd_summary_parts = [prd.get("validated_description", "")]
+    prd_summary_parts = [prd.get("summary", "") or prd.get("validated_description", "")]
     ac = prd.get("acceptance_criteria", [])
     if ac:
         prd_summary_parts.append("\nAcceptance Criteria:")
@@ -891,9 +891,7 @@ async def _execute_single_issue(
                 original_acceptance_criteria=current_issue.get("acceptance_criteria", []),
                 modified_acceptance_criteria=advisor_decision.get("modified_acceptance_criteria", []),
                 dropped_criteria=advisor_decision.get("dropped_criteria", []),
-                failure_diagnosis=advisor_decision.get("failure_diagnosis", ""),
                 rationale=advisor_decision.get("rationale", ""),
-                downstream_impact=advisor_decision.get("downstream_impact", ""),
             )
             adaptations.append(adaptation)
 
@@ -903,7 +901,7 @@ async def _execute_single_issue(
                     "type": "dropped_acceptance_criterion",
                     "criterion": dropped,
                     "issue_name": issue_name,
-                    "justification": advisor_decision.get("modification_justification", ""),
+                    "justification": advisor_decision.get("rationale", ""),
                     "severity": "medium",
                 })
 
@@ -917,10 +915,8 @@ async def _execute_single_issue(
             # Keep ACs, different strategy
             adaptation = IssueAdaptation(
                 adaptation_type=AdvisorAction.RETRY_APPROACH,
-                failure_diagnosis=advisor_decision.get("failure_diagnosis", ""),
                 rationale=advisor_decision.get("rationale", ""),
                 new_approach=advisor_decision.get("new_approach", ""),
-                downstream_impact=advisor_decision.get("downstream_impact", ""),
             )
             adaptations.append(adaptation)
 
@@ -928,9 +924,8 @@ async def _execute_single_issue(
             current_issue = {
                 **current_issue,
                 "retry_context": advisor_decision.get("new_approach", ""),
-                "approach_changes": advisor_decision.get("approach_changes", []),
                 "previous_error": result.error_message,
-                "retry_diagnosis": advisor_decision.get("failure_diagnosis", ""),
+                "retry_diagnosis": advisor_decision.get("rationale", ""),
             }
             continue  # re-enter coding loop
 
@@ -938,11 +933,9 @@ async def _execute_single_issue(
             # Close enough — record gaps
             adaptation = IssueAdaptation(
                 adaptation_type=AdvisorAction.ACCEPT_WITH_DEBT,
-                failure_diagnosis=advisor_decision.get("failure_diagnosis", ""),
                 rationale=advisor_decision.get("rationale", ""),
                 missing_functionality=advisor_decision.get("missing_functionality", []),
                 severity=advisor_decision.get("debt_severity", "medium"),
-                downstream_impact=advisor_decision.get("downstream_impact", ""),
             )
             adaptations.append(adaptation)
 
@@ -977,7 +970,7 @@ async def _execute_single_issue(
             return IssueResult(
                 issue_name=issue_name,
                 outcome=IssueOutcome.FAILED_NEEDS_SPLIT,
-                result_summary=advisor_decision.get("split_rationale", ""),
+                result_summary=advisor_decision.get("rationale", ""),
                 error_message=f"Issue advisor recommended splitting into {len(sub_issues)} sub-issues",
                 files_changed=result.files_changed,
                 branch_name=result.branch_name,
@@ -1003,7 +996,7 @@ async def _execute_single_issue(
                 advisor_invocations=advisor_round + 1,
                 adaptations=adaptations,
                 debt_items=debt_items,
-                escalation_context=advisor_decision.get("suggested_restructuring", ""),
+                escalation_context=advisor_decision.get("escalation_reason", ""),
                 iteration_history=result.iteration_history,
             )
 

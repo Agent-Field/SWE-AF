@@ -191,14 +191,14 @@ async def test_plan_happy_path(mock_agent_ai, tmp_path):
 
 @pytest.mark.asyncio
 async def test_plan_pm_parsed_none(mock_agent_ai, tmp_path):
-    """When PM returns a dict that lacks required PRD fields, plan() should raise.
+    """When PM returns a dict that lacks required PRD fields, plan() still runs.
 
-    The plan() function passes the PM result directly to the Architect via
-    prd=prd (a plain dict), so downstream callers see the malformed dict.
-    However, the final PlanResult(prd=prd) call will raise a Pydantic
-    ValidationError because 'validated_description' is missing.
+    PlanResult.prd is now ``dict`` (not a Pydantic model), so malformed PRD
+    dicts pass through at the PlanResult level. Validation happens at the
+    harness/schema level (PRDOutput), which the mock bypasses.
 
-    We verify that calling plan() with a broken PM response raises an exception.
+    The pipeline should still complete — downstream consumers use ``.get()``
+    with defaults, so a malformed PRD dict degrades gracefully.
     (AC-7)
     """
     # Return a dict that is missing required PRD fields
@@ -211,8 +211,11 @@ async def test_plan_pm_parsed_none(mock_agent_ai, tmp_path):
 
     mock_agent_ai.side_effect = [bad_prd, arch, review, sprint, issue_writer]
 
-    with pytest.raises(Exception):
-        await _call_plan(str(tmp_path))
+    # With PlanResult.prd as dict, this should NOT raise — the pipeline
+    # gracefully handles missing fields via .get() defaults
+    result = await _call_plan(str(tmp_path))
+    assert isinstance(result, dict)
+    assert result["prd"] == bad_prd
 
 
 @pytest.mark.asyncio
@@ -257,8 +260,8 @@ async def test_plan_tech_lead_rejects_with_max_iterations_one(mock_agent_ai, tmp
 
     assert isinstance(result, dict)
     assert result["review"]["approved"] is True, "Auto-approval must set approved=True"
-    assert "auto-approved" in result["review"]["summary"].lower(), (
-        "Auto-approved review summary must mention 'auto-approved'"
+    assert "auto-approved" in result["review"]["feedback"].lower(), (
+        "Auto-approved review feedback must mention 'auto-approved'"
     )
 
 

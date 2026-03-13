@@ -23,6 +23,7 @@ services:
       - "8003:8003"
     volumes:
       - workspaces:/workspaces
+      - ./staged_repos:/workspaces/staged
     depends_on:
       - control-plane
     deploy:

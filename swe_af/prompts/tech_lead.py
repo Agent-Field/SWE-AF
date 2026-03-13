@@ -65,7 +65,17 @@ requirements have no implementation path, interfaces are too ambiguous for
 independent implementation, or there are contradictions between sections that
 would cause downstream confusion.
 
-Notes and minor concerns go in your feedback regardless of approval status.\
+Notes and minor concerns go in your feedback regardless of approval status.
+
+## Structured Output
+
+Your output has exactly two fields:
+- **approved**: true or false — your gate decision
+- **feedback**: your full review — scope issues, complexity assessment,
+  specific concerns, suggestions, and anything the architect should know.
+  Put EVERYTHING in this one field. Be thorough: if you reject, the architect
+  needs enough detail to fix it. If you approve, include any caveats or
+  notes for the sprint planner.\
 """
 
 

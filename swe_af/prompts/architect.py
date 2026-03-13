@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from swe_af.execution.schemas import WorkspaceManifest
 from swe_af.prompts._utils import workspace_context_block
-from swe_af.reasoners.schemas import PRD
+from swe_af.reasoners.schemas import PRDOutput
 
 SYSTEM_PROMPT = """\
 You are a senior Software Architect whose designs ship on time because they are
@@ -71,13 +71,25 @@ parallel git worktrees:
   YOUR document and implement to the interfaces you define. Be exact with
   signatures, types, and error variants — or agents will produce incompatible code.
 - **Explicit module dependency graph**: For each component, list which other
-  components it imports from. This maps directly to the execution DAG.\
+  components it imports from. This maps directly to the execution DAG.
+
+## Structured Output
+
+Your structured output is MINIMAL — only one field:
+- **summary**: A concise summary of the architecture (2-3 sentences)
+
+Everything else (components, interfaces, decisions, file changes overview,
+data flow, error handling, performance budgets) goes ONLY in the written
+architecture.md file. The written document is the authoritative reference
+that all downstream agents (sprint planner, coder, reviewer) will read
+directly via file tools. Do NOT try to squeeze your full architecture into
+the structured output.\
 """
 
 
 def architect_prompts(
     *,
-    prd: PRD,
+    prd: PRDOutput,
     repo_path: str,
     prd_path: str,
     architecture_path: str,
@@ -89,8 +101,6 @@ def architect_prompts(
         Tuple of (system_prompt, task_prompt)
     """
     ac_formatted = "\n".join(f"- {c}" for c in prd.acceptance_criteria)
-    must_have = "\n".join(f"- {m}" for m in prd.must_have)
-    out_of_scope = "\n".join(f"- {o}" for o in prd.out_of_scope)
 
     feedback_block = ""
     if feedback:
@@ -103,26 +113,22 @@ Address these concerns directly.
 
     task = f"""\
 ## Product Requirements
-{prd.validated_description}
+{prd.summary}
 
 ## Acceptance Criteria
 {ac_formatted}
 
-## Scope
-- Must have:
-{must_have}
-- Out of scope:
-{out_of_scope}
-
 ## Repository
 {repo_path}
 
-The full PRD is at: {prd_path}
+The full PRD (including must-have, nice-to-have, out-of-scope, assumptions,
+and risks) is at: {prd_path}
+Read it thoroughly before designing.
 {feedback_block}
 ## Your Mission
 
-Design the technical architecture. Read the codebase deeply first — your design
-should feel like a natural extension of what already exists.
+Design the technical architecture. Read the codebase and the full PRD deeply
+first — your design should feel like a natural extension of what already exists.
 
 Write your architecture document to: {architecture_path}
 
@@ -136,7 +142,7 @@ this document should produce code that integrates on the first try.
 
 def architect_task_prompt(
     *,
-    prd: PRD,
+    prd: PRDOutput,
     repo_path: str,
     prd_path: str,
     architecture_path: str,

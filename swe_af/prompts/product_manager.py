@@ -104,6 +104,21 @@ Produce a PRD for this goal. Read the codebase first — understand the current
 state deeply before defining what needs to change.
 
 Write your full PRD to: {prd_path}
+Include ALL sections: description, must-have, nice-to-have, out-of-scope,
+assumptions, risks, and acceptance criteria. The written PRD is the authoritative
+document — downstream agents (architect, sprint planner, coder) will read it
+directly via file tools.
+
+## Structured Output
+
+Your structured output is MINIMAL — only two fields:
+- **summary**: A one-line validated description of what needs to change
+- **acceptance_criteria**: List of binary pass/fail test assertions
+
+Everything else (must-have, nice-to-have, out-of-scope, assumptions, risks,
+detailed rationale) goes ONLY in the written prd.md file. Do NOT try to
+squeeze all your analysis into the structured output — that's what the
+written document is for.
 
 The bar: an engineering team of autonomous agents can execute this PRD without
 asking a single clarifying question. Every acceptance criterion is a test they

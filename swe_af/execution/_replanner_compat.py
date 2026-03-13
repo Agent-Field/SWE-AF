@@ -12,6 +12,7 @@ from swe_af.execution.schemas import (
     IssueResult,
     ReplanAction,
     ReplanDecision,
+    _normalize_provider,
 )
 from swe_af.prompts.replanner import SYSTEM_PROMPT, replanner_task_prompt
 from swe_af.reasoners import router
@@ -39,7 +40,7 @@ async def invoke_replanner(
         if dag_state.artifacts_dir
         else None
     )
-    provider = "claude-code" if config.ai_provider == "claude" else config.ai_provider
+    provider = _normalize_provider(config.ai_provider)
 
     try:
         result = await router.harness(
@@ -54,14 +55,17 @@ async def invoke_replanner(
             cwd=dag_state.repo_path or ".",
         )
 
-        # Log raw response for debugging
+        # Log raw response for debugging (non-fatal)
         if log_dir:
-            raw_log = os.path.join(
-                log_dir, f"replanner_{dag_state.replan_count}_raw.txt"
-            )
-            os.makedirs(log_dir, exist_ok=True)
-            with open(raw_log, "w") as f:
-                f.write(getattr(result, "text", "") or "(empty)")
+            try:
+                raw_log = os.path.join(
+                    log_dir, f"replanner_{dag_state.replan_count}_raw.txt"
+                )
+                os.makedirs(log_dir, exist_ok=True)
+                with open(raw_log, "w") as f:
+                    f.write(getattr(result, "text", "") or "(empty)")
+            except OSError:
+                pass
 
         if result.parsed is not None:
             if note_fn:
@@ -78,15 +82,23 @@ async def invoke_replanner(
                 tags=["execution", "replan", "error"],
             )
 
-    # Fallback: if the replanner fails, abort
+    # Fallback: if the replanner fails, CONTINUE (not ABORT) — aligned with
+    # execution_agents.run_replanner Pitfall 5 fix: a replanner crash should
+    # not kill the pipeline.
+    failed_names = [f.issue_name for f in failed_issues]
     fallback = ReplanDecision(
-        action=ReplanAction.ABORT,
-        rationale="Replanner agent failed to produce a valid decision. Aborting.",
-        summary="Replanner failure — automatic abort.",
+        action=ReplanAction.CONTINUE,
+        rationale=(
+            "Replanner agent failed to produce a valid decision. "
+            "Falling back to CONTINUE — downstream of failed issues will be "
+            "notified of the gap but the pipeline will proceed."
+        ),
+        skipped_issue_names=[],
+        summary=f"Replanner failure — continuing with gap notification for: {failed_names}",
     )
     if note_fn:
         note_fn(
-            "Replanner failed to produce valid output — falling back to ABORT",
+            "Replanner failed to produce valid output — falling back to CONTINUE (not ABORT)",
             tags=["execution", "replan", "fallback"],
         )
     return fallback

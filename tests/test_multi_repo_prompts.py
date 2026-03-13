@@ -121,11 +121,8 @@ class TestArchitectTaskPromptSignature:
         from swe_af.reasoners.schemas import PRD
 
         prd = PRD(
-            validated_description="Test PRD",
+            summary="Test PRD",
             acceptance_criteria=["AC-1: test passes"],
-            must_have=["feature A"],
-            nice_to_have=[],
-            out_of_scope=["feature B"],
         )
         result = architect_task_prompt(
             prd=prd, repo_path="/r", prd_path="/p", architecture_path="/a"

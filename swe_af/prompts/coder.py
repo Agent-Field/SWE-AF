@@ -81,10 +81,7 @@ After implementation, report:
 - Which files you changed (list of paths)
 - A brief summary of what you did
 - Whether the implementation is complete
-- `tests_passed` and `test_summary` from your self-validation
-- `codebase_learnings`: conventions you discovered (test framework, naming,
-  build commands, import patterns) — these help future coders on this project
-- `agent_retro`: briefly note what worked well and any tips for similar issues
+- `tests_passed` from your self-validation
 
 ## Tools Available
 
@@ -255,9 +252,8 @@ def coder_task_prompt(
             "1. Explore the codebase to understand patterns and context.\n"
             "2. Implement the solution per the acceptance criteria.\n"
             "3. Write or update tests per the Testing Strategy/guidance.\n"
-            "4. Run tests and report results (tests_passed, test_summary).\n"
-            "5. Commit your changes.\n"
-            "6. Report codebase_learnings and agent_retro in your output."
+            "4. Run tests and report results (tests_passed).\n"
+            "5. Commit your changes."
         )
 
     return "\n".join(sections)
