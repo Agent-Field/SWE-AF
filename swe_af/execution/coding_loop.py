@@ -1,15 +1,13 @@
-"""Per-issue coding loop: coder → reviewer (or QA/reviewer/synthesizer).
+"""Per-issue coding loop: coder → QA + reviewer (parallel) → synthesizer.
 
 This is the INNER loop in the three-nested-loop architecture:
-  - INNER (this): coder → review → approve/fix/block
+  - INNER (this): coder → QA + reviewer (parallel) → synthesizer → approve/fix/block
   - MIDDLE: issue advisor diagnoses failures → adapt ACs/approach/scope
   - OUTER: replanner restructures DAG after unrecoverable failures
 
-Two execution paths:
-  - DEFAULT (most issues): coder → reviewer (2 LLM calls)
-  - FLAGGED (complex/risky): coder → QA + reviewer → synthesizer (4 LLM calls)
-
-The sprint planner sets `guidance.needs_deeper_qa = true` to select the flagged path.
+Every iteration runs QA and reviewer in parallel, then the synthesizer
+reconciles their results into a single action. This catches test failures
+one iteration earlier compared to the previous reviewer-only default path.
 """
 
 from __future__ import annotations
@@ -517,16 +515,10 @@ async def run_coding_loop(
 ) -> IssueResult:
     """Run the coding loop for a single issue.
 
-    Execution path is determined by the sprint planner's guidance:
-      - Default (guidance.needs_deeper_qa == false or no guidance):
-        coder → reviewer (2 LLM calls). Reviewer is sole gatekeeper.
-      - Flagged (guidance.needs_deeper_qa == true):
-        coder → QA + reviewer → synthesizer (4 LLM calls).
-
-    Each iteration:
+    Every iteration runs:
       1. Read shared memory context
       2. Coder writes code, runs tests, commits
-      3. Path branch: default (reviewer only) or flagged (QA+reviewer+synthesizer)
+      3. QA + reviewer in parallel → synthesizer reconciles
       4. Write to shared memory: conventions, failure patterns, bug patterns
       5. Branch on action: approve/fix/block
 
@@ -553,9 +545,9 @@ async def run_coding_loop(
                 tags=["coding_loop", "warning", "multi_repo_fallback"],
             )
 
-    # Extract guidance — determines execution path
+    # Extract guidance (needs_deeper_qa kept in schema for backward compat,
+    # but no longer used for path selection — QA always runs)
     guidance = issue.get("guidance") or {}
-    needs_deeper_qa = guidance.get("needs_deeper_qa", False)
 
     # Runtime complexity classification (replaces static needs_deeper_qa)
     try:
@@ -594,9 +586,8 @@ async def run_coding_loop(
     }
 
     if note_fn:
-        path_label = "FLAGGED (QA+reviewer+synth)" if needs_deeper_qa else "DEFAULT (reviewer only)"
         note_fn(
-            f"Coding loop starting: {issue_name} [{path_label}] (max {max_iterations} iterations)",
+            f"Coding loop starting: {issue_name} [QA + reviewer parallel] (max {max_iterations} iterations)",
             tags=["coding_loop", "start", issue_name],
         )
 
@@ -676,56 +667,31 @@ async def run_coding_loop(
 
         _save_artifact(dag_state.artifacts_dir, iteration_id, "coder", coder_result)
 
-        # --- 2. PATH BRANCH ---
-        if needs_deeper_qa:
-            # FLAGGED PATH: QA + reviewer parallel → synthesizer
-            action, summary, review_result, qa_result, synthesis_result = await _run_flagged_path(
-                call_fn=call_fn,
-                node_id=node_id,
-                worktree_path=worktree_path,
-                coder_result=coder_result,
-                issue=issue,
-                iteration=iteration,
-                iteration_id=iteration_id,
-                iteration_history=iteration_history,
-                project_context=project_context,
-                memory_context=memory_context,
-                config=config,
-                timeout=timeout,
-                issue_name=issue_name,
-                note_fn=note_fn,
-                workspace_manifest=ws_manifest_dict,
-                target_repo=target_repo,
-            )
-            _save_artifact(dag_state.artifacts_dir, iteration_id, "qa", qa_result)
-            _save_artifact(dag_state.artifacts_dir, iteration_id, "review", review_result)
-            _save_artifact(dag_state.artifacts_dir, iteration_id, "synthesis", synthesis_result)
+        # --- 2. QA + REVIEWER (PARALLEL) → SYNTHESIZER ---
+        action, summary, review_result, qa_result, synthesis_result = await _run_flagged_path(
+            call_fn=call_fn,
+            node_id=node_id,
+            worktree_path=worktree_path,
+            coder_result=coder_result,
+            issue=issue,
+            iteration=iteration,
+            iteration_id=iteration_id,
+            iteration_history=iteration_history,
+            project_context=project_context,
+            memory_context=memory_context,
+            config=config,
+            timeout=timeout,
+            issue_name=issue_name,
+            note_fn=note_fn,
+            workspace_manifest=ws_manifest_dict,
+            target_repo=target_repo,
+        )
+        _save_artifact(dag_state.artifacts_dir, iteration_id, "qa", qa_result)
+        _save_artifact(dag_state.artifacts_dir, iteration_id, "review", review_result)
+        _save_artifact(dag_state.artifacts_dir, iteration_id, "synthesis", synthesis_result)
 
-            # Stuck detection from synthesizer
-            stuck = synthesis_result.get("stuck", False) if synthesis_result else False
-        else:
-            # DEFAULT PATH: reviewer only
-            action, summary, review_result = await _run_default_path(
-                call_fn=call_fn,
-                node_id=node_id,
-                worktree_path=worktree_path,
-                coder_result=coder_result,
-                issue=issue,
-                iteration_id=iteration_id,
-                project_context=project_context,
-                memory_context=memory_context,
-                config=config,
-                timeout=timeout,
-                issue_name=issue_name,
-                note_fn=note_fn,
-                workspace_manifest=ws_manifest_dict,
-                target_repo=target_repo,
-            )
-            qa_result = None
-            synthesis_result = None
-            _save_artifact(dag_state.artifacts_dir, iteration_id, "review", review_result)
-
-            stuck = False
+        # Stuck detection from synthesizer (fall back to history-based if synthesizer failed)
+        stuck = synthesis_result.get("stuck", False) if synthesis_result else _detect_stuck_loop(iteration_history)
 
         # Record iteration for history
         iteration_history.append({
@@ -735,7 +701,7 @@ async def run_coding_loop(
             "qa_passed": qa_result.get("passed", None) if qa_result else None,
             "review_approved": review_result.get("approved", False) if review_result else False,
             "review_blocking": review_result.get("blocking", False) if review_result else False,
-            "path": "flagged" if needs_deeper_qa else "default",
+            "path": "parallel",
         })
 
         if note_fn:
@@ -820,11 +786,6 @@ async def run_coding_loop(
             feedback = "\n".join(feedback_parts)
         else:
             feedback = summary
-
-        # Stuck detection — default path uses history-based detection since it
-        # has no synthesizer to set the stuck flag.
-        if not stuck and not needs_deeper_qa:
-            stuck = _detect_stuck_loop(iteration_history)
 
         if stuck:
             last_blocking = review_result.get("blocking", False) if review_result else False
