@@ -537,7 +537,36 @@ ALL_MODEL_FIELDS: list[str] = list(ROLE_TO_MODEL_FIELD.values())
 _MODEL_FIELD_TO_ROLE: dict[str, str] = {
     model_field: role for role, model_field in ROLE_TO_MODEL_FIELD.items()
 }
-_ALLOWED_MODEL_KEYS: set[str] = set(MODEL_ROLE_KEYS) | {"default"}
+_ALLOWED_MODEL_KEYS: set[str] = set(MODEL_ROLE_KEYS) | {"default", "strong", "medium", "fast"}
+
+# Role-to-tier mapping: which tier each role belongs to.
+# Resolution order: per-role override > tier > default > runtime base
+_ROLE_TO_TIER: dict[str, str] = {
+    # STRONG: produces or judges code — quality determines PR quality
+    "coder": "strong",
+    "code_reviewer": "strong",
+    "batch_reviewer": "strong",
+    "verifier": "strong",
+    "architect": "strong",
+    # MEDIUM: reasoning/planning that shapes execution
+    "pm": "medium",
+    "tech_lead": "medium",
+    "sprint_planner": "medium",
+    "issue_advisor": "medium",
+    "replan": "medium",
+    "merger": "medium",
+    "qa": "medium",
+    "integration_tester": "medium",
+    "retry_advisor": "medium",
+    # FAST: classification, gates, mechanical tasks
+    "qa_synthesizer": "fast",
+    "issue_complexity_gate": "fast",
+    "replanner_triage_gate": "fast",
+    "merge_conflict_gate": "fast",
+    "review_sanity_gate": "fast",
+    "issue_writer": "fast",
+    "git": "fast",
+}
 
 _LEGACY_GROUP_EQUIVALENTS: dict[str, str] = {
     "planning": "models.pm, models.architect, models.tech_lead, models.sprint_planner",
@@ -646,8 +675,13 @@ def resolve_runtime_models(
 ) -> dict[str, str]:
     """Resolve internal ``*_model`` fields from runtime + flat role overrides.
 
-    Resolution order:
-        runtime defaults < models.default < models.<role>
+    Resolution order (highest priority wins):
+        runtime defaults < models.default < tier (strong/medium/fast) < models.<role>
+
+    Tier keys:
+        models.strong — used for roles that produce/judge code (coder, reviewer, etc.)
+        models.medium — used for planning/reasoning roles (pm, planner, advisor, etc.)
+        models.fast   — used for gates, classification, mechanical tasks
     """
     if field_names is None:
         field_names = ALL_MODEL_FIELDS
@@ -659,16 +693,30 @@ def resolve_runtime_models(
 
     flat_models = _validate_flat_models(models)
 
+    # 1. Start with runtime defaults
     base = _RUNTIME_BASE_MODELS[runtime]
     resolved: dict[str, str] = {field: base[field] for field in field_names}
 
+    # 2. Apply models.default (overrides all)
     default_model = flat_models.get("default")
     if default_model:
         for field in field_names:
             resolved[field] = default_model
 
+    # 3. Apply tier-level overrides (strong/medium/fast)
+    tier_models = {
+        t: flat_models[t] for t in ("strong", "medium", "fast") if t in flat_models
+    }
+    if tier_models:
+        for role, tier in _ROLE_TO_TIER.items():
+            if tier in tier_models:
+                field = ROLE_TO_MODEL_FIELD.get(role)
+                if field and field in resolved:
+                    resolved[field] = tier_models[tier]
+
+    # 4. Apply per-role overrides (highest priority)
     for role, model_name in flat_models.items():
-        if role == "default":
+        if role in ("default", "strong", "medium", "fast"):
             continue
         field = ROLE_TO_MODEL_FIELD[role]
         if field in resolved:
