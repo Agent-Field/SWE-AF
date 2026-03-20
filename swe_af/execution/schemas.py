@@ -712,6 +712,7 @@ class BuildConfig(BaseModel):
     level_failure_abort_threshold: float = (
         0.8  # abort DAG when >= this fraction of a level fails
     )
+    enable_single_issue_fast_path: bool = True  # Skip worktrees/merge for 1-issue builds
 
     @model_validator(mode="before")
     @classmethod
@@ -812,6 +813,7 @@ class BuildConfig(BaseModel):
             "enable_learning": self.enable_learning,
             "max_concurrent_issues": self.max_concurrent_issues,
             "level_failure_abort_threshold": self.level_failure_abort_threshold,
+            "enable_single_issue_fast_path": self.enable_single_issue_fast_path,
         }
 
 
@@ -883,6 +885,7 @@ class ExecutionConfig(BaseModel):
     level_failure_abort_threshold: float = (
         0.8  # abort DAG when >= this fraction of a level fails
     )
+    enable_single_issue_fast_path: bool = True  # Skip worktrees/merge for 1-issue builds
 
     @model_validator(mode="before")
     @classmethod

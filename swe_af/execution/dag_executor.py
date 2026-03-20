@@ -2168,6 +2168,61 @@ async def run_dag(
     issue_by_name = {i["name"]: i for i in dag_state.all_issues}
     file_conflicts = plan_result.get("file_conflicts", [])
 
+    # --- SINGLE-ISSUE FAST PATH ---
+    # When there's exactly 1 issue, skip worktrees/merge/cleanup entirely.
+    # The coder commits directly to the integration branch (or repo_path).
+    if (
+        len(dag_state.all_issues) == 1
+        and call_fn is not None
+        and config.enable_single_issue_fast_path
+    ):
+        single_issue = dag_state.all_issues[0]
+        if note_fn:
+            note_fn(
+                f"Single-issue fast path: {single_issue['name']} — skipping worktrees/merge",
+                tags=["execution", "single_issue_fast_path"],
+            )
+
+        # Execute the issue directly (no worktree setup)
+        # The coder works in the repo_path directly on the integration branch
+        single_issue_enriched = {
+            **single_issue,
+            "worktree_path": dag_state.repo_path,
+            "branch_name": dag_state.git_integration_branch,
+        }
+
+        result = await _execute_single_issue(
+            single_issue_enriched,
+            dag_state,
+            None,
+            config,
+            call_fn=call_fn,
+            node_id=node_id,
+            note_fn=note_fn,
+            memory_fn=memory_fn,
+        )
+
+        if result.outcome in (IssueOutcome.COMPLETED, IssueOutcome.COMPLETED_WITH_DEBT):
+            dag_state.completed_issues.append(result)
+        else:
+            dag_state.failed_issues.append(result)
+
+        # No merge needed — coder committed directly to integration branch
+        # No worktree cleanup needed — no worktrees were created
+        # No batch review needed — only 1 issue
+
+        # Still run verifier (handled by build() after run_dag returns)
+        _save_checkpoint(dag_state, note_fn)
+
+        if note_fn:
+            outcome = result.outcome.value
+            note_fn(
+                f"Single-issue fast path complete: {outcome}",
+                tags=["execution", "single_issue_fast_path", "complete"],
+            )
+
+        return dag_state
+
     # --- True dependency-based execution state ---
     completed_names: set[str] = {r.issue_name for r in dag_state.completed_issues}
     failed_names: set[str] = {r.issue_name for r in dag_state.failed_issues}
