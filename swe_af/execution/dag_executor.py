@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import traceback
 from typing import Callable
 
@@ -771,6 +772,64 @@ async def _run_integration_tests(
             )
 
     return test_result
+
+
+async def _fast_cleanup_worktrees(
+    repo_path: str,
+    worktrees_dir: str,
+    branches_to_clean: list[str],
+    note_fn: Callable | None = None,
+) -> None:
+    """Clean up worktrees and branches using direct shell commands.
+
+    No LLM needed — just git worktree remove + git branch -D.
+    Fire-and-forget: errors are logged but don't block the pipeline.
+    """
+    if not branches_to_clean:
+        return
+
+    if note_fn:
+        note_fn(
+            f"Fast cleanup: removing {len(branches_to_clean)} worktrees",
+            tags=["execution", "fast_cleanup", "start"],
+        )
+
+    cleaned = []
+    for branch in branches_to_clean:
+        # Derive worktree path from branch name
+        # Branch format: "issue/XX-name" or "issue/buildid-XX-name"
+        wt_name = branch.replace("issue/", "")
+        wt_path = os.path.join(worktrees_dir, wt_name) if worktrees_dir else ""
+
+        # Remove worktree
+        if wt_path and os.path.exists(wt_path):
+            try:
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", wt_path],
+                    cwd=repo_path,
+                    capture_output=True,
+                    timeout=10,
+                )
+                cleaned.append(wt_path)
+            except Exception:
+                pass  # Fire and forget
+
+        # Delete branch
+        try:
+            subprocess.run(
+                ["git", "branch", "-D", branch],
+                cwd=repo_path,
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            pass  # Fire and forget
+
+    if note_fn:
+        note_fn(
+            f"Fast cleanup complete: {len(cleaned)}/{len(branches_to_clean)} worktrees removed",
+            tags=["execution", "fast_cleanup", "complete"],
+        )
 
 
 async def _cleanup_worktrees(
@@ -2015,12 +2074,11 @@ async def _run_merge_wave(
         for i in issues_to_clean
     ]
     if branches_to_clean:
-        await _cleanup_worktrees(
-            dag_state, branches_to_clean, call_fn, node_id, note_fn,
-            level=wave_index,
-            model=config.git_model,
-            ai_provider=config.ai_provider,
-            completed_results=list(pending_merge),
+        await _fast_cleanup_worktrees(
+            repo_path=dag_state.repo_path,
+            worktrees_dir=dag_state.worktrees_dir,
+            branches_to_clean=branches_to_clean,
+            note_fn=note_fn,
         )
 
     dag_state.merge_wave_count += 1
@@ -2469,11 +2527,11 @@ async def run_dag(
                     "Final cleanup sweep for any residual worktrees",
                     tags=["execution", "worktree_cleanup", "final_sweep"],
                 )
-            await _cleanup_worktrees(
-                dag_state, all_branches, call_fn, node_id, note_fn,
-                level=dag_state.merge_wave_count,
-                model=config.git_model,
-                ai_provider=config.ai_provider,
+            await _fast_cleanup_worktrees(
+                repo_path=dag_state.repo_path,
+                worktrees_dir=dag_state.worktrees_dir,
+                branches_to_clean=all_branches,
+                note_fn=note_fn,
             )
 
     if note_fn:
