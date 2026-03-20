@@ -19,6 +19,7 @@ from swe_af.execution.schemas import (
     GitInitResult,
     IntegrationTestResult,
     IssueAdvisorDecision,
+    MergeConflictGate,
     MergeResult,
     QAResult,
     QASynthesisResult,
@@ -665,6 +666,71 @@ async def run_workspace_setup(
         )
 
     return {"workspaces": [], "success": False}
+
+
+@router.reasoner()
+async def run_merge_conflict_gate(
+    overlapping_files: list[str],
+    branches_to_merge: list[dict],
+    model: str = "haiku",
+    ai_provider: str = "claude",
+) -> dict:
+    """Fast .ai() assessment of whether overlapping files will actually conflict.
+
+    Uses a lightweight classification call to determine if file overlaps
+    will produce real merge conflicts or if the changes are compatible.
+
+    Returns a MergeConflictGate dict.
+    """
+    router.note(
+        f"Merge conflict gate: assessing {len(overlapping_files)} overlapping files",
+        tags=["merge_conflict_gate", "start"],
+    )
+
+    branch_summaries = []
+    for b in branches_to_merge:
+        branch_summaries.append(
+            f"- {b.get('branch_name', '?')} ({b.get('issue_name', '?')}): "
+            f"files={b.get('files_changed', [])}, "
+            f"summary={b.get('result_summary', 'N/A')}"
+        )
+
+    task_prompt = (
+        "Assess whether the following file overlaps between branches will cause "
+        "actual git merge conflicts, or if the changes are likely compatible "
+        "(e.g., additions to different parts of the same file, non-overlapping edits).\n\n"
+        f"Overlapping files: {overlapping_files}\n\n"
+        f"Branches:\n" + "\n".join(branch_summaries) + "\n\n"
+        "Set will_conflict=true ONLY if changes to the same lines/regions are likely. "
+        "Set confident=false if you lack enough context to judge."
+    )
+
+    try:
+        result = await router.ai(
+            task_prompt,
+            system="You are a merge conflict predictor. Assess file overlaps briefly.",
+            schema=MergeConflictGate,
+            model=model,
+        )
+        if result.parsed is not None:
+            router.note(
+                f"Merge conflict gate: will_conflict={result.parsed.will_conflict}, "
+                f"confident={result.parsed.confident}, reason={result.parsed.reason}",
+                tags=["merge_conflict_gate", "complete"],
+            )
+            return result.parsed.model_dump()
+    except Exception as e:
+        router.note(
+            f"Merge conflict gate failed: {e}",
+            tags=["merge_conflict_gate", "error"],
+        )
+
+    # Fallback: assume conflict when gate fails (safe default)
+    return MergeConflictGate(
+        will_conflict=True,
+        reason="Gate assessment failed — assuming conflict for safety.",
+        confident=False,
+    ).model_dump()
 
 
 @router.reasoner()
