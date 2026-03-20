@@ -82,6 +82,26 @@ and a way to verify completion? If an engineer would describe the issue as "a fe
 hours of focused work," it is the right size. If they would say "that is a day-long
 project with multiple concerns," it should be split.
 
+## Issue Coalescing: Fewer Issues Is Better
+
+More issues means more overhead: each issue requires workspace setup, a coding loop,
+QA, review, merge, and cleanup. For simple goals, this overhead dominates.
+
+**Default to ONE issue** unless there is a clear, defensible reason to split:
+- If the entire goal can be implemented and tested in a single coder session
+  (< ~200 lines of new code, 1-3 files touched), it MUST be a single issue.
+- "Implement X" and "Write tests for X" is ONE issue, not two. Tests are part
+  of every issue (vertical slices).
+- Only split when issues have genuinely different dependency chains or when
+  a single coder session cannot hold the full context.
+
+**Ask yourself:** "Would an experienced developer do this in one PR or multiple?"
+If one PR, it should be one issue.
+
+The cost of under-splitting (one large issue that fails) is LOW — the issue advisor
+will split it. The cost of over-splitting (3 issues that could be 1) is HIGH — 3x
+the merge/review/cleanup overhead with zero benefit.
+
 ## File Metadata
 
 Track which files each issue touches via ``files_to_create`` and ``files_to_modify``.
@@ -239,6 +259,13 @@ merger agent handles conflict resolution via branch merging.
 Include at least one lightweight verification / smoke-test issue that runs BEFORE the
 final integration level. It should confirm that core components compile together and
 basic interface contracts hold. Do not leave ALL verification to the very end.
+
+IMPORTANT: Default to the MINIMUM number of issues. If the entire goal can be
+implemented and tested in one focused coding session (< ~200 lines, 1-3 files),
+use ONE issue. Do not split "implementation" from "tests" — every issue includes
+its own tests (vertical slices). Over-decomposition wastes significant pipeline
+resources. Only split when there are genuine dependency chains or the scope
+exceeds what one coder session can handle.
 """
     return SYSTEM_PROMPT, task
 
@@ -330,7 +357,13 @@ def sprint_planner_task_prompt(
         "details in your output. A separate parallel agent pool writes the issue files.\n\n"
         "Your output is a structured decomposition: for each issue provide a name, title,\n"
         "2-3 sentence description (WHAT not HOW), dependencies, provides, file metadata,\n"
-        "and acceptance criteria."
+        "and acceptance criteria.\n\n"
+        "IMPORTANT: Default to the MINIMUM number of issues. If the entire goal can be\n"
+        "implemented and tested in one focused coding session (< ~200 lines, 1-3 files),\n"
+        "use ONE issue. Do not split \"implementation\" from \"tests\" — every issue includes\n"
+        "its own tests (vertical slices). Over-decomposition wastes significant pipeline\n"
+        "resources. Only split when there are genuine dependency chains or the scope\n"
+        "exceeds what one coder session can handle."
     )
 
     return "\n\n".join(sections)
