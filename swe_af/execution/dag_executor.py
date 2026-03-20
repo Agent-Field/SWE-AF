@@ -1109,7 +1109,7 @@ async def _run_execute_fn(
     )
 
 
-async def _execute_level(
+async def _execute_level_compat(
     active_issues: list[dict],
     execute_fn: Callable | None,
     dag_state: DAGState,
@@ -1120,13 +1120,16 @@ async def _execute_level(
     note_fn: Callable | None = None,
     memory_fn: Callable | None = None,
 ) -> LevelResult:
-    """Execute all issues in a level with bounded concurrency.
+    """Execute all issues in a level with bounded concurrency (legacy barrier mode).
 
     Uses ``config.max_concurrent_issues`` to cap parallel execution.
     A value of 0 means unlimited (original behavior).
 
     Returns a LevelResult with issues classified into completed, failed, and
     skipped buckets.
+
+    NOTE: This is the legacy level-barrier implementation retained for backward
+    compatibility. The primary execution path now uses _run_dep_based_loop().
     """
     max_concurrent = config.max_concurrent_issues
 
@@ -1195,6 +1198,108 @@ async def _execute_level(
             ))
 
     return level_result
+
+
+# ---------------------------------------------------------------------------
+# True dependency-based execution helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_dependency_graph(all_issues: list[dict]) -> dict:
+    """Build adjacency maps for true dependency tracking.
+
+    Returns dict with:
+      - dependents: {issue_name: [issues that depend on it]}
+      - dependencies: {issue_name: set of issues it depends on}
+      - in_degree: {issue_name: number of unresolved deps}
+    """
+    name_set = {i["name"] for i in all_issues}
+    dependents: dict[str, list[str]] = {i["name"]: [] for i in all_issues}
+    dependencies: dict[str, set[str]] = {i["name"]: set() for i in all_issues}
+    in_degree: dict[str, int] = {i["name"]: 0 for i in all_issues}
+
+    for issue in all_issues:
+        for dep in issue.get("depends_on", []):
+            if dep in name_set:
+                dependencies[issue["name"]].add(dep)
+                dependents.setdefault(dep, []).append(issue["name"])
+                in_degree[issue["name"]] += 1
+
+    return {
+        "dependents": dependents,
+        "dependencies": dependencies,
+        "in_degree": in_degree,
+    }
+
+
+def _compute_ready_set(
+    all_issues: list[dict],
+    completed: set[str],
+    failed: set[str],
+    skipped: set[str],
+    in_flight: set[str],
+) -> list[dict]:
+    """Return issues whose ALL dependencies are resolved and not already in-flight/done.
+
+    An issue is ready when every entry in its depends_on list is in the completed
+    set (or doesn't exist in all_issues). Failed/skipped deps do NOT satisfy --
+    downstream of failures should be explicitly skipped before calling this.
+    """
+    done = completed | failed | skipped | in_flight
+    name_set = {i["name"] for i in all_issues}
+    ready = []
+    for issue in all_issues:
+        name = issue["name"]
+        if name in done:
+            continue
+        deps = issue.get("depends_on", [])
+        # All deps that are in the issue set must be completed
+        all_deps_met = all(
+            dep in completed or dep not in name_set
+            for dep in deps
+        )
+        if all_deps_met:
+            ready.append(issue)
+    return ready
+
+
+_MERGE_WAVE_BATCH_SIZE = 3  # merge when this many completed issues accumulate
+
+
+def _should_merge_wave(
+    pending: list[IssueResult],
+    ready: list[dict],
+    in_flight: dict,
+    all_issues: list[dict],
+    pending_names: set[str] | None = None,
+) -> bool:
+    """Decide when to trigger a merge wave.
+
+    Merge when:
+      - pending_merge has >= BATCH_SIZE completed issues, OR
+      - No more ready issues AND no in-flight (natural sync point), OR
+      - A ready issue DEPENDS on a pending-merge issue (needs merged code)
+    """
+    if not pending:
+        return False
+
+    # Natural sync point: nothing left to do until merge happens
+    if not ready and not in_flight:
+        return True
+
+    # Batch threshold
+    if len(pending) >= _MERGE_WAVE_BATCH_SIZE:
+        return True
+
+    # Dependency-driven: a ready issue depends on a pending-merge issue
+    if pending_names is None:
+        pending_names = {r.issue_name for r in pending}
+    for issue in ready:
+        for dep in issue.get("depends_on", []):
+            if dep in pending_names:
+                return True
+
+    return False
 
 
 def _skip_downstream(dag_state: DAGState, failed: list[IssueResult]) -> DAGState:
@@ -1340,6 +1445,238 @@ async def _write_issue_files_for_replan(
         )
 
 
+async def _process_debt_gate(
+    dag_state: DAGState,
+    completed_results: list[IssueResult],
+    note_fn: Callable | None = None,
+) -> None:
+    """Process COMPLETED_WITH_DEBT results: accumulate debt, enrich downstream."""
+    debt_results = [
+        r for r in completed_results
+        if r.outcome == IssueOutcome.COMPLETED_WITH_DEBT
+    ]
+    if not debt_results:
+        return
+    for r in debt_results:
+        for debt in r.debt_items:
+            dag_state.accumulated_debt.append(debt)
+        for adapt in r.adaptations:
+            dag_state.adaptation_history.append(adapt.model_dump())
+        downstream = find_downstream(r.issue_name, dag_state.all_issues)
+        for i, iss in enumerate(dag_state.all_issues):
+            if iss["name"] in downstream:
+                notes = list(iss.get("debt_notes", []))
+                debt_desc = "; ".join(
+                    d.get("description", d.get("criterion", ""))
+                    for d in r.debt_items
+                )
+                notes.append(
+                    f"NOTE: Upstream '{r.issue_name}' completed with debt: {debt_desc}"
+                )
+                dag_state.all_issues[i] = {**iss, "debt_notes": notes}
+    if note_fn:
+        note_fn(
+            f"Debt gate: {len(debt_results)} issues accepted with debt, "
+            f"total debt items: {len(dag_state.accumulated_debt)}",
+            tags=["execution", "debt_gate"],
+        )
+
+
+async def _process_split_gate(
+    dag_state: DAGState,
+    failed_results: list[IssueResult],
+    config: ExecutionConfig,
+    call_fn: Callable,
+    node_id: str,
+    note_fn: Callable | None = None,
+) -> tuple[DAGState, list[IssueResult]]:
+    """Handle FAILED_NEEDS_SPLIT results. Returns updated dag_state and remaining failures."""
+    split_results = [
+        f for f in failed_results
+        if f.outcome == IssueOutcome.FAILED_NEEDS_SPLIT and f.split_request
+    ]
+    if not split_results:
+        return dag_state, failed_results
+
+    for sr in split_results:
+        new_issues = []
+        for sub in sr.split_request:
+            sub_dict = sub.model_dump()
+            sub_dict["parent_issue_name"] = sr.issue_name
+            new_issues.append(sub_dict)
+
+        split_decision = ReplanDecision(
+            action=ReplanAction.MODIFY_DAG,
+            rationale=f"Issue '{sr.issue_name}' split into {len(new_issues)} sub-issues by Issue Advisor",
+            new_issues=new_issues,
+            removed_issue_names=[sr.issue_name],
+            summary=f"Split {sr.issue_name}",
+        )
+        try:
+            dag_state = apply_replan(dag_state, split_decision)
+            await _write_issue_files_for_replan(
+                split_decision, dag_state, config, call_fn, node_id, note_fn,
+            )
+            if note_fn:
+                note_fn(
+                    f"Split gate: {sr.issue_name} -> {[s.name for s in sr.split_request]}",
+                    tags=["execution", "split_gate"],
+                )
+        except ValueError as e:
+            if note_fn:
+                note_fn(
+                    f"Split produced invalid DAG (cycle): {e}",
+                    tags=["execution", "split_gate", "error"],
+                )
+
+    remaining_failed = [
+        f for f in failed_results
+        if f.outcome != IssueOutcome.FAILED_NEEDS_SPLIT
+    ]
+    _save_checkpoint(dag_state, note_fn)
+    return dag_state, remaining_failed
+
+
+async def _process_replan_gate(
+    dag_state: DAGState,
+    failed_results: list[IssueResult],
+    config: ExecutionConfig,
+    call_fn: Callable | None,
+    node_id: str,
+    note_fn: Callable | None = None,
+) -> tuple[DAGState, bool]:
+    """Handle unrecoverable/escalated failures via replanner.
+
+    Returns (updated dag_state, should_abort).
+    """
+    unrecoverable = [
+        f for f in failed_results
+        if f.outcome in (IssueOutcome.FAILED_UNRECOVERABLE, IssueOutcome.FAILED_ESCALATED)
+    ]
+    if not unrecoverable:
+        return dag_state, False
+
+    if config.enable_replanning and dag_state.replan_count < config.max_replans:
+        if call_fn:
+            decision = await _invoke_replanner_via_call(
+                dag_state, unrecoverable, config, call_fn, node_id, note_fn
+            )
+        else:
+            decision = await _invoke_replanner_direct(
+                dag_state, unrecoverable, config, note_fn
+            )
+
+        if decision.action == ReplanAction.ABORT:
+            dag_state.replan_count += 1
+            dag_state.replan_history.append(decision)
+            if note_fn:
+                note_fn(
+                    f"Replanner decided to ABORT: {decision.rationale}",
+                    tags=["execution", "abort"],
+                )
+            return dag_state, True
+
+        elif decision.action == ReplanAction.CONTINUE:
+            dag_state = _enrich_downstream_with_failure_notes(dag_state, unrecoverable)
+            dag_state.replan_count += 1
+            dag_state.replan_history.append(decision)
+            dag_state = _skip_downstream(dag_state, unrecoverable)
+
+        else:
+            # MODIFY_DAG or REDUCE_SCOPE
+            try:
+                dag_state = apply_replan(dag_state, decision)
+                if call_fn and (decision.new_issues or decision.updated_issues):
+                    await _write_issue_files_for_replan(
+                        decision, dag_state, config, call_fn, node_id, note_fn
+                    )
+                _save_checkpoint(dag_state, note_fn)
+            except ValueError as e:
+                if note_fn:
+                    note_fn(
+                        f"Replan produced invalid DAG (cycle): {e}",
+                        tags=["execution", "replan", "error"],
+                    )
+                dag_state = _skip_downstream(dag_state, unrecoverable)
+    else:
+        dag_state = _skip_downstream(dag_state, unrecoverable)
+        if note_fn:
+            note_fn(
+                f"No replanning available — skipping downstream: {dag_state.skipped_issues}",
+                tags=["execution", "skip"],
+            )
+
+    return dag_state, False
+
+
+async def _run_merge_wave(
+    dag_state: DAGState,
+    pending_merge: list[IssueResult],
+    call_fn: Callable | None,
+    node_id: str,
+    config: ExecutionConfig,
+    issue_by_name: dict,
+    file_conflicts: list[dict],
+    note_fn: Callable | None = None,
+    pending_issues_for_cleanup: list[dict] | None = None,
+) -> None:
+    """Execute a merge wave: merge branches, run integration tests, cleanup worktrees.
+
+    Modifies dag_state in place (merge_results, integration_test_results, etc.).
+    """
+    if not pending_merge or not call_fn or not dag_state.git_integration_branch:
+        return
+
+    wave_index = dag_state.merge_wave_count
+
+    if note_fn:
+        names = [r.issue_name for r in pending_merge]
+        note_fn(
+            f"Merge wave {wave_index}: merging {names}",
+            tags=["execution", "merge_wave", "start"],
+        )
+
+    # Build a synthetic LevelResult for the merge helpers
+    level_result = LevelResult(
+        level_index=wave_index,
+        completed=list(pending_merge),
+    )
+
+    merge_result = await _merge_level_branches(
+        dag_state, level_result, call_fn, node_id, config,
+        issue_by_name, file_conflicts, note_fn,
+    )
+
+    if merge_result:
+        await _run_integration_tests(
+            dag_state, merge_result, level_result, call_fn,
+            node_id, config, issue_by_name, note_fn,
+        )
+
+    # Cleanup worktrees for merged issues
+    _bid = dag_state.build_id
+    issues_to_clean = pending_issues_for_cleanup or []
+    branches_to_clean = [
+        i["branch_name"] if i.get("branch_name") else (
+            f"issue/{_bid}-{str(i.get('sequence_number') or 0).zfill(2)}-{i['name']}"
+            if _bid else
+            f"issue/{str(i.get('sequence_number') or 0).zfill(2)}-{i['name']}"
+        )
+        for i in issues_to_clean
+    ]
+    if branches_to_clean:
+        await _cleanup_worktrees(
+            dag_state, branches_to_clean, call_fn, node_id, note_fn,
+            level=wave_index,
+            model=config.git_model,
+            ai_provider=config.ai_provider,
+            completed_results=list(pending_merge),
+        )
+
+    dag_state.merge_wave_count += 1
+    dag_state.current_level = dag_state.merge_wave_count  # backward compat
+
+
 async def run_dag(
     plan_result: dict,
     repo_path: str,
@@ -1353,33 +1690,39 @@ async def run_dag(
     build_id: str = "",
     workspace_manifest: dict | None = None,
 ) -> DAGState:
-    """Execute a planned DAG with self-healing replanning.
+    """Execute a planned DAG with true dependency-based scheduling.
 
-    This is the main entry point for the execution engine. It:
-    1. Initializes DAG state from the plan result
-    2. Executes issues level by level (all issues in a level run in parallel)
-    3. After each level, runs the merge gate (worktree setup → execute → merge → test → cleanup)
-    4. At each level barrier, checks for unrecoverable failures
-    5. If failures exist and replanning is enabled, invokes the replanner
-    6. Applies the replan decision (restructure, reduce scope, or abort)
-    7. Writes issue files for any new issues from the replanner
-    8. Enriches downstream issues with failure notes when CONTINUE
-    9. Continues with the next level
+    Instead of level barriers (where ALL issues in a level must complete before
+    the next level starts), this uses an event-driven loop driven by the
+    dependency graph:
+
+    1. Compute ready set: issues with all dependencies resolved
+    2. Launch ready issues (bounded by semaphore)
+    3. Wait for ANY task to complete (FIRST_COMPLETED)
+    4. On completion: mark done, check if merge wave should fire
+    5. On failure: skip downstream, optionally trigger replanner
+    6. Repeat until all issues are done/skipped/failed
+
+    Merge waves fire when:
+      - A batch of completions accumulates (default 3), OR
+      - A natural sync point is reached (nothing in-flight, nothing ready), OR
+      - A ready issue depends on a pending-merge issue (needs merged code)
+
+    Levels are still computed for planning/visualization/checkpoint but no
+    longer used as execution barriers.
 
     Args:
         plan_result: Output of the planning pipeline (PlanResult dict).
         repo_path: Path to the target repository.
         execute_fn: Optional async callable ``(issue: dict, dag_state: DAGState) -> IssueResult``.
-            This is the actual coding function — could be ClaudeAI, app.call(), etc.
-            When None and ``call_fn`` is provided, uses the built-in coding loop.
-        config: Execution configuration. Uses defaults if not provided.
-        note_fn: Optional callback for observability (e.g., ``app.note``).
-        call_fn: Optional ``app.call`` for invoking reasoners (retry advisor,
-            replanner, issue writer). If None, falls back to direct invocation.
-        node_id: Agent node_id for constructing call targets (e.g. "swe-planner").
-        git_config: Optional git configuration from ``run_git_init``. When provided,
-            enables branch-per-issue workflow with worktrees, merge, and integration testing.
-        resume: If True, attempt to load a checkpoint and skip completed levels.
+        config: Execution configuration.
+        note_fn: Optional callback for observability.
+        call_fn: Optional ``app.call`` for invoking reasoners.
+        node_id: Agent node_id for constructing call targets.
+        git_config: Optional git configuration from ``run_git_init``.
+        resume: If True, attempt to load a checkpoint and skip completed work.
+        build_id: Unique per build() call; namespaces git branches/worktrees.
+        workspace_manifest: Multi-repo workspace manifest dict.
 
     Returns:
         Final DAGState with execution results, replan history, etc.
@@ -1387,8 +1730,7 @@ async def run_dag(
     if config is None:
         config = ExecutionConfig()
 
-    # Wrap call_fn to automatically unwrap execution envelopes returned by
-    # the SDK's sync fallback path.
+    # Wrap call_fn to automatically unwrap execution envelopes
     if call_fn is not None:
         _raw_call_fn = call_fn
 
@@ -1409,7 +1751,7 @@ async def run_dag(
                 dag_state = loaded
                 if note_fn:
                     note_fn(
-                        f"Resumed from checkpoint: level={dag_state.current_level}, "
+                        f"Resumed from checkpoint: wave={dag_state.merge_wave_count}, "
                         f"completed={len(dag_state.completed_issues)}, "
                         f"failed={len(dag_state.failed_issues)}",
                         tags=["execution", "resume"],
@@ -1417,13 +1759,13 @@ async def run_dag(
 
     if note_fn:
         note_fn(
-            f"DAG execution {'resuming' if resume else 'starting'}: "
+            f"DAG execution {'resuming' if resume else 'starting'} "
+            f"(dependency-based): "
             f"{len(dag_state.all_issues)} issues, "
-            f"{len(dag_state.levels)} levels",
+            f"{len(dag_state.levels)} levels (visualization only)",
             tags=["execution", "start"],
         )
 
-    # Save initial checkpoint
     _save_checkpoint(dag_state, note_fn)
 
     # Per-repo git init for multi-repo builds
@@ -1438,8 +1780,7 @@ async def run_dag(
             note_fn=note_fn,
         )
 
-    # Shared memory store for cross-issue learning within this run.
-    # All issues share the same store via the memory_fn closure.
+    # Shared memory store for cross-issue learning
     _shared_memory: dict = {}
 
     async def _memory_fn(action: str, key: str, value=None):
@@ -1451,309 +1792,265 @@ async def run_dag(
     memory_fn = _memory_fn if (call_fn is not None and config.enable_learning) else None
 
     issue_by_name = {i["name"]: i for i in dag_state.all_issues}
+    file_conflicts = plan_result.get("file_conflicts", [])
 
-    while dag_state.current_level < len(dag_state.levels):
-        level_names = dag_state.levels[dag_state.current_level]
+    # --- True dependency-based execution state ---
+    completed_names: set[str] = {r.issue_name for r in dag_state.completed_issues}
+    failed_names: set[str] = {r.issue_name for r in dag_state.failed_issues}
+    skipped_names: set[str] = set(dag_state.skipped_issues)
+    in_flight: dict[str, asyncio.Task] = {}  # issue_name -> Task
+    in_flight_issues: dict[str, dict] = {}  # issue_name -> issue dict (for cleanup)
+    pending_merge: list[IssueResult] = []  # completed issues awaiting merge
+    pending_merge_issue_dicts: list[dict] = []  # matching issue dicts for cleanup
 
-        # Filter to active issues (not skipped, not already completed/failed)
-        completed_names = {r.issue_name for r in dag_state.completed_issues}
-        failed_names = {r.issue_name for r in dag_state.failed_issues}
-        done_names = completed_names | failed_names | set(dag_state.skipped_issues)
+    # Semaphore for bounded concurrency
+    max_concurrent = config.max_concurrent_issues
+    semaphore = asyncio.Semaphore(max_concurrent) if max_concurrent > 0 else None
 
-        active_issues = [
-            issue_by_name[name]
-            for name in level_names
-            if name in issue_by_name and name not in done_names
-        ]
+    abort = False
+    consecutive_failure_count = 0
+    _FAILURE_ABORT_THRESHOLD = 5  # abort after N consecutive failures without completions
 
-        if not active_issues:
-            dag_state.current_level += 1
-            continue
+    while True:
+        # Refresh issue_by_name after potential replans
+        issue_by_name = {i["name"]: i for i in dag_state.all_issues}
 
-        if note_fn:
-            active_names = [i["name"] for i in active_issues]
-            note_fn(
-                f"Executing level {dag_state.current_level}: {active_names}",
-                tags=["execution", "level", "start"],
+        # 1. Compute ready set
+        ready = _compute_ready_set(
+            dag_state.all_issues,
+            completed_names,
+            failed_names,
+            skipped_names,
+            set(in_flight.keys()),
+        )
+
+        # 2. Check if we're done or stuck
+        if not ready and not in_flight:
+            # Trigger final merge wave if anything pending
+            if pending_merge:
+                await _run_merge_wave(
+                    dag_state, pending_merge, call_fn, node_id, config,
+                    issue_by_name, file_conflicts, note_fn,
+                    pending_issues_for_cleanup=pending_merge_issue_dicts,
+                )
+                pending_merge.clear()
+                pending_merge_issue_dicts.clear()
+            break
+
+        # 3. Check for merge wave trigger BEFORE launching new issues
+        #    (a ready issue might depend on a pending-merge issue)
+        if pending_merge and _should_merge_wave(
+            pending_merge, ready, in_flight, dag_state.all_issues,
+        ):
+            await _run_merge_wave(
+                dag_state, pending_merge, call_fn, node_id, config,
+                issue_by_name, file_conflicts, note_fn,
+                pending_issues_for_cleanup=pending_merge_issue_dicts,
+            )
+            pending_merge.clear()
+            pending_merge_issue_dicts.clear()
+            _save_checkpoint(dag_state, note_fn)
+
+            # Recompute ready set after merge (some issues may now be unblocked)
+            ready = _compute_ready_set(
+                dag_state.all_issues,
+                completed_names,
+                failed_names,
+                skipped_names,
+                set(in_flight.keys()),
             )
 
-        # --- WORKTREE SETUP (git workflow) ---
-        if call_fn and dag_state.git_integration_branch:
-            active_issues = await _setup_worktrees(
-                dag_state, active_issues, call_fn, node_id, config, note_fn,
+        # 4. Setup worktrees for newly-ready issues (if git workflow active)
+        if ready and call_fn and dag_state.git_integration_branch:
+            ready = await _setup_worktrees(
+                dag_state, ready, call_fn, node_id, config, note_fn,
                 build_id=dag_state.build_id,
             )
-            # Persist worktree_path/branch_name back to dag_state.all_issues
-            # so checkpoints contain the enriched data (resume-safe).
-            enriched_by_name = {i["name"]: i for i in active_issues}
+            # Persist enriched data back to dag_state.all_issues
+            enriched_by_name = {i["name"]: i for i in ready}
             for i, issue in enumerate(dag_state.all_issues):
                 enriched = enriched_by_name.get(issue["name"])
                 if enriched and "worktree_path" in enriched:
                     dag_state.all_issues[i] = enriched
 
-        # Track in-flight issues and checkpoint before execution (Bug 4 fix)
-        dag_state.in_flight_issues = [i["name"] for i in active_issues]
+        # 5. Launch newly-ready issues
+        for issue in ready:
+            issue_name = issue["name"]
+
+            if note_fn:
+                deps = issue.get("depends_on", [])
+                note_fn(
+                    f"Launching {issue_name} (deps satisfied: {deps})",
+                    tags=["execution", "launch", issue_name],
+                )
+
+            async def _guarded_execute(
+                iss: dict = issue,
+            ) -> IssueResult:
+                if semaphore:
+                    async with semaphore:
+                        return await _execute_single_issue(
+                            iss, dag_state, execute_fn, config,
+                            call_fn=call_fn, node_id=node_id,
+                            note_fn=note_fn, memory_fn=memory_fn,
+                        )
+                return await _execute_single_issue(
+                    iss, dag_state, execute_fn, config,
+                    call_fn=call_fn, node_id=node_id,
+                    note_fn=note_fn, memory_fn=memory_fn,
+                )
+
+            task = asyncio.create_task(_guarded_execute())
+            in_flight[issue_name] = task
+            in_flight_issues[issue_name] = issue
+
+        # Update in-flight tracking on dag_state for checkpoint
+        dag_state.in_flight_issues = list(in_flight.keys())
         _save_checkpoint(dag_state, note_fn)
 
-        # Execute all issues in this level concurrently
-        level_result = await _execute_level(
-            active_issues, execute_fn, dag_state, config, dag_state.current_level,
-            call_fn=call_fn, node_id=node_id, note_fn=note_fn,
-            memory_fn=memory_fn,
-        )
-
-        dag_state.in_flight_issues = []  # level barrier reached
-
-        # Checkpoint after level barrier
-        _save_checkpoint(dag_state, note_fn)
-
-        # Record results
-        dag_state.completed_issues.extend(level_result.completed)
-        dag_state.failed_issues.extend(level_result.failed)
-        for skipped in level_result.skipped:
-            if skipped.issue_name not in dag_state.skipped_issues:
-                dag_state.skipped_issues.append(skipped.issue_name)
-
-        if note_fn:
-            completed_names_level = [r.issue_name for r in level_result.completed]
-            failed_names_level = [r.issue_name for r in level_result.failed]
-            note_fn(
-                f"Level {dag_state.current_level} complete: "
-                f"completed={completed_names_level}, failed={failed_names_level}",
-                tags=["execution", "level", "complete"],
+        # 6. Wait for ANY one task to complete
+        if in_flight:
+            done_tasks, _ = await asyncio.wait(
+                in_flight.values(),
+                return_when=asyncio.FIRST_COMPLETED,
             )
 
-        # --- LEVEL FAILURE ABORT CHECK ---
-        # When most issues in a level fail (e.g. resource exhaustion, network
-        # down), continuing to subsequent levels is wasteful — the same root
-        # cause will cascade. Abort early instead.
-        total_in_level = len(level_result.completed) + len(level_result.failed) + len(level_result.skipped)
-        if total_in_level > 0 and config.level_failure_abort_threshold > 0:
-            failure_ratio = len(level_result.failed) / total_in_level
-            if failure_ratio >= config.level_failure_abort_threshold and len(level_result.failed) > 1:
+            # Process completed tasks
+            wave_completed: list[IssueResult] = []
+            wave_failed: list[IssueResult] = []
+
+            for task in done_tasks:
+                # Find which issue this task belongs to
+                finished_name = None
+                for name, t in in_flight.items():
+                    if t is task:
+                        finished_name = name
+                        break
+
+                if finished_name is None:
+                    continue
+
+                # Remove from in-flight
+                del in_flight[finished_name]
+                finished_issue = in_flight_issues.pop(finished_name, {})
+
+                # Get result
+                try:
+                    result = task.result()
+                except Exception as exc:
+                    result = IssueResult(
+                        issue_name=finished_name,
+                        outcome=IssueOutcome.FAILED_UNRECOVERABLE,
+                        error_message=str(exc),
+                        error_context="".join(
+                            traceback.format_exception(type(exc), exc, exc.__traceback__)
+                        ) if hasattr(exc, "__traceback__") else str(exc),
+                    )
+
+                if not isinstance(result, IssueResult):
+                    result = IssueResult(
+                        issue_name=finished_name,
+                        outcome=IssueOutcome.COMPLETED,
+                    )
+
+                # Backfill repo_name
+                if not result.repo_name:
+                    result.repo_name = finished_issue.get("target_repo", "")
+
                 if note_fn:
                     note_fn(
-                        f"Level {dag_state.current_level} failure ratio "
-                        f"{failure_ratio:.0%} >= threshold "
-                        f"{config.level_failure_abort_threshold:.0%} — "
-                        f"aborting DAG to prevent cascading failures",
-                        tags=["execution", "abort", "level_failure_threshold"],
+                        f"Issue {finished_name} finished: {result.outcome.value}",
+                        tags=["execution", "complete", finished_name],
                     )
-                # Skip all remaining issues
-                for future_level in dag_state.levels[dag_state.current_level + 1:]:
-                    for name in future_level:
-                        if name not in dag_state.skipped_issues:
-                            dag_state.skipped_issues.append(name)
-                dag_state.current_level = len(dag_state.levels)
-                _save_checkpoint(dag_state, note_fn)
-                break
 
-        # --- MERGE GATE (git workflow) ---
-        file_conflicts = plan_result.get("file_conflicts", [])
-        if call_fn and dag_state.git_integration_branch:
-            # Merge completed branches into integration branch
-            merge_result = await _merge_level_branches(
-                dag_state, level_result, call_fn, node_id, config,
-                issue_by_name, file_conflicts, note_fn,
-            )
+                # Classify result
+                if result.outcome in (IssueOutcome.COMPLETED, IssueOutcome.COMPLETED_WITH_DEBT):
+                    completed_names.add(finished_name)
+                    dag_state.completed_issues.append(result)
+                    pending_merge.append(result)
+                    pending_merge_issue_dicts.append(finished_issue)
+                    wave_completed.append(result)
+                    consecutive_failure_count = 0
+                elif result.outcome == IssueOutcome.SKIPPED:
+                    skipped_names.add(finished_name)
+                    if finished_name not in dag_state.skipped_issues:
+                        dag_state.skipped_issues.append(finished_name)
+                else:
+                    failed_names.add(finished_name)
+                    dag_state.failed_issues.append(result)
+                    wave_failed.append(result)
+                    consecutive_failure_count += 1
 
-            # Run integration tests if merger says so
-            if merge_result:
-                await _run_integration_tests(
-                    dag_state, merge_result, level_result, call_fn,
-                    node_id, config, issue_by_name, note_fn,
-                )
-
-            # Start cleanup in background (doesn't affect replan decisions)
-            # Use branch_name if injected by _setup_worktrees (includes build_id prefix),
-            # otherwise derive from build_id + sequence + name.
-            _bid = dag_state.build_id
-            branches_to_clean = [
-                i["branch_name"] if i.get("branch_name") else (
-                    f"issue/{_bid}-{str(i.get('sequence_number') or 0).zfill(2)}-{i['name']}"
-                    if _bid else
-                    f"issue/{str(i.get('sequence_number') or 0).zfill(2)}-{i['name']}"
-                )
-                for i in active_issues
-            ]
-            cleanup_task = asyncio.create_task(
-                _cleanup_worktrees(
-                    dag_state, branches_to_clean, call_fn, node_id, note_fn,
-                    level=dag_state.current_level,
-                    model=config.git_model,
-                    ai_provider=config.ai_provider,
-                    completed_results=level_result.completed,
-                )
-            )
-        else:
-            cleanup_task = None
-
-        # --- DEBT GATE: process COMPLETED_WITH_DEBT results ---
-        debt_results = [
-            r for r in level_result.completed
-            if r.outcome == IssueOutcome.COMPLETED_WITH_DEBT
-        ]
-        if debt_results:
-            for r in debt_results:
-                for debt in r.debt_items:
-                    dag_state.accumulated_debt.append(debt)
-                for adapt in r.adaptations:
-                    dag_state.adaptation_history.append(adapt.model_dump())
-                # Enrich downstream issues with debt notes
-                downstream = find_downstream(r.issue_name, dag_state.all_issues)
-                for i, iss in enumerate(dag_state.all_issues):
-                    if iss["name"] in downstream:
-                        notes = list(iss.get("debt_notes", []))
-                        debt_desc = "; ".join(
-                            d.get("description", d.get("criterion", ""))
-                            for d in r.debt_items
-                        )
-                        notes.append(
-                            f"NOTE: Upstream '{r.issue_name}' completed with debt: {debt_desc}"
-                        )
-                        dag_state.all_issues[i] = {**iss, "debt_notes": notes}
-            if note_fn:
-                note_fn(
-                    f"Debt gate: {len(debt_results)} issues accepted with debt, "
-                    f"total debt items: {len(dag_state.accumulated_debt)}",
-                    tags=["execution", "debt_gate"],
-                )
-
-        # --- SPLIT GATE: handle FAILED_NEEDS_SPLIT results ---
-        split_results = [
-            f for f in level_result.failed
-            if f.outcome == IssueOutcome.FAILED_NEEDS_SPLIT and f.split_request
-        ]
-        if split_results and call_fn:
-            for sr in split_results:
-                # Build a synthetic replan from the split specs
-                new_issues = []
-                for sub in sr.split_request:
-                    sub_dict = sub.model_dump()
-                    sub_dict["parent_issue_name"] = sr.issue_name
-                    new_issues.append(sub_dict)
-
-                split_decision = ReplanDecision(
-                    action=ReplanAction.MODIFY_DAG,
-                    rationale=f"Issue '{sr.issue_name}' split into {len(new_issues)} sub-issues by Issue Advisor",
-                    new_issues=new_issues,
-                    removed_issue_names=[sr.issue_name],
-                    summary=f"Split {sr.issue_name}",
-                )
-                try:
-                    dag_state = apply_replan(dag_state, split_decision)
-                    issue_by_name = {i["name"]: i for i in dag_state.all_issues}
-
-                    await _write_issue_files_for_replan(
-                        split_decision, dag_state, config, call_fn, node_id, note_fn,
-                    )
-                    if note_fn:
-                        note_fn(
-                            f"Split gate: {sr.issue_name} → {[s.name for s in sr.split_request]}",
-                            tags=["execution", "split_gate"],
-                        )
-                except ValueError as e:
-                    if note_fn:
-                        note_fn(
-                            f"Split produced invalid DAG (cycle): {e}",
-                            tags=["execution", "split_gate", "error"],
-                        )
-
-            # Remove split results from the failed list (they've been handled)
-            level_result.failed = [
-                f for f in level_result.failed
-                if f.outcome != IssueOutcome.FAILED_NEEDS_SPLIT
-            ]
+            # Update in-flight on dag_state
+            dag_state.in_flight_issues = list(in_flight.keys())
             _save_checkpoint(dag_state, note_fn)
 
-        # --- REPLAN GATE: check for unrecoverable and escalated failures ---
-        unrecoverable = [
-            f for f in level_result.failed
-            if f.outcome in (IssueOutcome.FAILED_UNRECOVERABLE, IssueOutcome.FAILED_ESCALATED)
-        ]
+            # --- DEBT GATE ---
+            await _process_debt_gate(dag_state, wave_completed, note_fn)
 
-        if unrecoverable:
-            if config.enable_replanning and dag_state.replan_count < config.max_replans:
-                # Invoke replanner (via call_fn if available, else direct)
+            # --- Process failures ---
+            if wave_failed:
+                # Skip downstream of failed issues
+                dag_state = _skip_downstream(dag_state, wave_failed)
+                skipped_names = set(dag_state.skipped_issues)
+
+                # Cancel in-flight tasks for newly-skipped issues
+                for skip_name in list(in_flight.keys()):
+                    if skip_name in skipped_names:
+                        in_flight[skip_name].cancel()
+                        del in_flight[skip_name]
+                        in_flight_issues.pop(skip_name, None)
+
+                # SPLIT GATE
                 if call_fn:
-                    decision = await _invoke_replanner_via_call(
-                        dag_state, unrecoverable, config, call_fn, node_id, note_fn
+                    dag_state, wave_failed = await _process_split_gate(
+                        dag_state, wave_failed, config, call_fn, node_id, note_fn,
                     )
-                else:
-                    decision = await _invoke_replanner_direct(
-                        dag_state, unrecoverable, config, note_fn
-                    )
+                    issue_by_name = {i["name"]: i for i in dag_state.all_issues}
 
-                if decision.action == ReplanAction.ABORT:
-                    dag_state.replan_count += 1
-                    dag_state.replan_history.append(decision)
-                    if note_fn:
-                        note_fn(
-                            f"Replanner decided to ABORT: {decision.rationale}",
-                            tags=["execution", "abort"],
-                        )
-                    if cleanup_task:
-                        await cleanup_task
+                # REPLAN GATE
+                dag_state, should_abort = await _process_replan_gate(
+                    dag_state, wave_failed, config, call_fn, node_id, note_fn,
+                )
+                if should_abort:
+                    abort = True
                     break
 
-                elif decision.action == ReplanAction.CONTINUE:
-                    # Pitfall 6: enrich downstream with failure notes
-                    dag_state = _enrich_downstream_with_failure_notes(
-                        dag_state, unrecoverable
-                    )
-                    dag_state.replan_count += 1
-                    dag_state.replan_history.append(decision)
-                    # Skip downstream of failed issues
-                    dag_state = _skip_downstream(dag_state, unrecoverable)
+                # Refresh skipped set after replan
+                skipped_names = set(dag_state.skipped_issues)
 
-                else:
-                    # MODIFY_DAG or REDUCE_SCOPE — apply the replan
-                    try:
-                        if cleanup_task:
-                            await cleanup_task
-                        dag_state = apply_replan(dag_state, decision)
-                        # Rebuild issue lookup after replan
-                        issue_by_name = {i["name"]: i for i in dag_state.all_issues}
-
-                        # Pitfall 3: Write issue files for new/updated issues
-                        if call_fn and (decision.new_issues or decision.updated_issues):
-                            await _write_issue_files_for_replan(
-                                decision, dag_state, config, call_fn, node_id, note_fn
-                            )
-
-                        # Checkpoint after replan applied
-                        _save_checkpoint(dag_state, note_fn)
-
-                        # current_level was reset to 0 by apply_replan
-                        continue  # re-enter loop at new level 0
-                    except ValueError as e:
-                        if note_fn:
-                            note_fn(
-                                f"Replan produced invalid DAG (cycle): {e}",
-                                tags=["execution", "replan", "error"],
-                            )
-                        dag_state = _skip_downstream(dag_state, unrecoverable)
-            else:
-                # Replanning exhausted or disabled — skip downstream
-                dag_state = _skip_downstream(dag_state, unrecoverable)
+            # Abort on excessive consecutive failures
+            if consecutive_failure_count >= _FAILURE_ABORT_THRESHOLD:
                 if note_fn:
-                    skipped = dag_state.skipped_issues
                     note_fn(
-                        f"No replanning available — skipping downstream: {skipped}",
-                        tags=["execution", "skip"],
+                        f"{consecutive_failure_count} consecutive failures — "
+                        f"aborting DAG to prevent cascading failures",
+                        tags=["execution", "abort", "consecutive_failures"],
                     )
+                # Skip all remaining issues
+                remaining = _compute_ready_set(
+                    dag_state.all_issues, completed_names, failed_names,
+                    skipped_names, set(),
+                )
+                for issue in remaining:
+                    name = issue["name"]
+                    if name not in dag_state.skipped_issues:
+                        dag_state.skipped_issues.append(name)
+                skipped_names = set(dag_state.skipped_issues)
+                abort = True
+                break
 
-        # Ensure cleanup is done before advancing to next level's worktree setup
-        if cleanup_task:
-            await cleanup_task
+    # --- Cleanup: wait for any remaining in-flight tasks on abort ---
+    if abort and in_flight:
+        for name, task in in_flight.items():
+            task.cancel()
+        # Give tasks a moment to cancel
+        if in_flight:
+            await asyncio.wait(in_flight.values(), timeout=5.0)
+        dag_state.in_flight_issues = []
 
-        # Advance to next level
-        dag_state.current_level += 1
-
-    # Final worktree sweep — catch anything the per-level cleanup missed
+    # Final worktree sweep
     if call_fn and dag_state.worktrees_dir and dag_state.git_integration_branch:
-        # Collect all issue branches that should have been cleaned.
-        # Must use the same build_id-prefixed format that workspace setup created.
         _bid = dag_state.build_id
         all_branches = [
             f"issue/{_bid}-{str(i.get('sequence_number') or 0).zfill(2)}-{i['name']}"
@@ -1769,7 +2066,7 @@ async def run_dag(
                 )
             await _cleanup_worktrees(
                 dag_state, all_branches, call_fn, node_id, note_fn,
-                level=dag_state.current_level,
+                level=dag_state.merge_wave_count,
                 model=config.git_model,
                 ai_provider=config.ai_provider,
             )
@@ -1777,12 +2074,13 @@ async def run_dag(
     if note_fn:
         total = len(dag_state.all_issues)
         done = len(dag_state.completed_issues)
-        failed = len(dag_state.failed_issues)
-        skipped = len(dag_state.skipped_issues)
+        failed_count = len(dag_state.failed_issues)
+        skipped_count = len(dag_state.skipped_issues)
         note_fn(
             f"DAG execution complete: {done}/{total} completed, "
-            f"{failed} failed, {skipped} skipped, "
-            f"{dag_state.replan_count} replans",
+            f"{failed_count} failed, {skipped_count} skipped, "
+            f"{dag_state.replan_count} replans, "
+            f"{dag_state.merge_wave_count} merge waves",
             tags=["execution", "complete"],
         )
 

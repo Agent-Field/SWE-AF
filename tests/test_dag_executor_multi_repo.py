@@ -513,7 +513,7 @@ class TestMergeLevelBranchesMultiRepo:
 class TestRepoNameBackfill:
     def test_repo_name_backfilled_from_target_repo(self):
         """AC: IssueResult.repo_name is backfilled from issue['target_repo'] when empty."""
-        from swe_af.execution.dag_executor import _execute_level
+        from swe_af.execution.dag_executor import _execute_level_compat as _execute_level
 
         async def mock_execute_single(issue, dag_state, execute_fn, config, **kwargs):
             # Return IssueResult with empty repo_name (simulates coding-loop-repo-name absent)
@@ -549,7 +549,7 @@ class TestRepoNameBackfill:
 
     def test_repo_name_not_overwritten_when_already_set(self):
         """If IssueResult.repo_name is already set, it is NOT overwritten."""
-        from swe_af.execution.dag_executor import _execute_level
+        from swe_af.execution.dag_executor import _execute_level_compat as _execute_level
 
         async def mock_execute_single(issue, dag_state, execute_fn, config, **kwargs):
             return IssueResult(
@@ -583,7 +583,7 @@ class TestRepoNameBackfill:
 
     def test_repo_name_empty_when_no_target_repo(self):
         """If issue has no target_repo and IssueResult.repo_name is empty, stays empty."""
-        from swe_af.execution.dag_executor import _execute_level
+        from swe_af.execution.dag_executor import _execute_level_compat as _execute_level
 
         async def mock_execute_single(issue, dag_state, execute_fn, config, **kwargs):
             return IssueResult(

@@ -288,7 +288,8 @@ class DAGState(BaseModel):
     failed_issues: list[IssueResult] = []
     skipped_issues: list[str] = []
     in_flight_issues: list[str] = []  # names of issues currently executing
-    current_level: int = 0
+    current_level: int = 0  # tracks merge waves in dep-based mode
+    merge_wave_count: int = 0  # number of merge waves completed
 
     # --- Replan tracking ---
     replan_count: int = 0
