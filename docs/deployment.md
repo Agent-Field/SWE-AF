@@ -48,7 +48,7 @@ cp .env.example .env
 
 | Package | Minimum Version | Notes |
 |---|---|---|
-| `agentfield` | 0.1.41+ | Python SDK |
+| `agentfield` | 0.1.67+ | Python SDK (includes opencode v1.4+ fix) |
 | `claude-agent-sdk` | 0.1.20+ | Claude runtime |
 | opencode CLI | 1.4+ | Only if using `open_code` runtime (see Known Issues) |
 
