@@ -11,6 +11,7 @@ from typing import Callable
 
 from swe_af.execution.dag_utils import apply_replan, find_downstream
 from swe_af.execution.envelope import unwrap_call_result
+from swe_af.execution.fatal_error import FatalHarnessError
 from swe_af.execution.schemas import (
     AdvisorAction,
     DAGState,
@@ -576,6 +577,8 @@ async def _cleanup_single_repo(
                     f"cleaned={result.get('cleaned', [])}",
                     tags=["execution", "worktree_cleanup", "warning"],
                 )
+        except FatalHarnessError:
+            raise
         except Exception as e:
             if note_fn:
                 note_fn(
@@ -868,6 +871,8 @@ async def _execute_single_issue(
                 timeout=config.agent_timeout_seconds,
                 label=f"issue_advisor:{issue_name}:{advisor_round + 1}",
             )
+        except FatalHarnessError:
+            raise
         except Exception as e:
             if note_fn:
                 note_fn(
@@ -1064,6 +1069,8 @@ async def _run_execute_fn(
                 attempts=attempt,
             )
 
+        except FatalHarnessError:
+            raise
         except Exception as e:
             last_error = str(e)
             last_context = traceback.format_exc()
@@ -1095,6 +1102,8 @@ async def _run_execute_fn(
                         "retry_diagnosis": advice.get("diagnosis", ""),
                     }
                     continue
+                except FatalHarnessError:
+                    raise
                 except Exception:
                     continue
             elif attempt <= config.max_retries_per_issue:

@@ -22,6 +22,7 @@ import uuid
 from typing import Callable
 
 
+from swe_af.execution.fatal_error import FatalHarnessError
 from swe_af.execution.schemas import (
     DAGState,
     ExecutionConfig,
@@ -325,6 +326,8 @@ async def _run_default_path(
             timeout=timeout,
             label=f"review:{issue_name}:default",
         )
+    except FatalHarnessError:
+        raise
     except Exception as e:
         if note_fn:
             note_fn(
@@ -437,6 +440,8 @@ async def _run_flagged_path(
                     tags=["coding_loop", "review_error", issue_name],
                 )
             review_result = {"approved": True, "blocking": False, "summary": f"Review unavailable: {review_result}"}
+    except FatalHarnessError:
+        raise
     except Exception as e:
         if note_fn:
             note_fn(
@@ -479,6 +484,8 @@ async def _run_flagged_path(
             timeout=timeout,
             label=f"synthesizer:{issue_name}:iter{iteration}",
         )
+    except FatalHarnessError:
+        raise
     except Exception as e:
         if note_fn:
             note_fn(
@@ -625,6 +632,8 @@ async def run_coding_loop(
                 timeout=timeout,
                 label=f"coder:{issue_name}:iter{iteration}",
             )
+        except FatalHarnessError:
+            raise
         except Exception as e:
             if note_fn:
                 note_fn(

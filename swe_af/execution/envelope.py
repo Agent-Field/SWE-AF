@@ -12,6 +12,8 @@ both cases so pipeline code can always expect the raw reasoner output.
 
 from __future__ import annotations
 
+from swe_af.execution.fatal_error import FatalHarnessError, is_fatal_error
+
 # Keys present in the execution envelope returned by _build_execute_response.
 _ENVELOPE_KEYS = frozenset({
     "execution_id", "run_id", "node_id", "type", "target",
@@ -51,6 +53,8 @@ def unwrap_call_result(result, label: str = "call"):
     status = str(result.get("status", "")).lower()
     if status in ("failed", "error", "cancelled", "timeout"):
         err = result.get("error_message") or result.get("error") or "unknown"
+        if is_fatal_error(str(err)):
+            raise FatalHarnessError(str(err))
         raise RuntimeError(f"{label} failed (status={status}): {err}")
 
     inner = result.get("result")

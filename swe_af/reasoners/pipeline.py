@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from swe_af.execution.fatal_error import check_fatal_harness_error
 from swe_af.execution.schemas import DEFAULT_AGENT_MAX_TURNS
 from swe_af.reasoners.schemas import (
     Architecture,
@@ -202,6 +203,7 @@ async def run_product_manager(
         system_prompt=system_prompt,
         cwd=repo_path,
     )
+    check_fatal_harness_error(result)
     if result.parsed is None:
         raise RuntimeError("Product manager failed to produce a valid PRD")
 
@@ -261,6 +263,7 @@ async def run_architect(
         system_prompt=system_prompt,
         cwd=repo_path,
     )
+    check_fatal_harness_error(result)
     if result.parsed is None:
         raise RuntimeError("Architect failed to produce a valid architecture")
 
@@ -315,6 +318,7 @@ async def run_tech_lead(
         system_prompt=system_prompt,
         cwd=repo_path,
     )
+    check_fatal_harness_error(result)
     if result.parsed is None:
         raise RuntimeError("Tech lead failed to produce a valid review")
 
@@ -391,6 +395,7 @@ async def run_sprint_planner(
         system_prompt=system_prompt,
         cwd=repo_path,
     )
+    check_fatal_harness_error(result)
     if result.parsed is None:
         raise RuntimeError("Sprint planner failed to produce valid issues")
 

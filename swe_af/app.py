@@ -195,17 +195,29 @@ async def build(
     if repo_url:
         cfg.repo_url = repo_url
 
-    # Auto-derive repo_path from repo_url when not specified
+    # Generate build_id BEFORE workspace setup so each concurrent build
+    # gets a fully isolated workspace (repo clone, artifacts, worktrees).
+    # Fixes cross-contamination when parallel builds target the same repo.
+    # Ref: https://github.com/Agent-Field/SWE-AF/issues/43
+    build_id = uuid.uuid4().hex[:8]
+
+    # Auto-derive repo_path from repo_url when not specified.
+    # Each build gets its own clone directory scoped by build_id to prevent
+    # concurrent builds from sharing git state, artifacts, or worktrees.
     if cfg.repo_url and not repo_path:
-        repo_path = f"/workspaces/{_repo_name_from_url(cfg.repo_url)}"
+        repo_name = _repo_name_from_url(cfg.repo_url)
+        repo_path = f"/workspaces/{repo_name}-{build_id}"
 
     # Multi-repo: derive repo_path from primary repo; _clone_repos handles cloning later
     if not repo_path and len(cfg.repos) > 1:
         primary = next((r for r in cfg.repos if r.role == "primary"), cfg.repos[0])
-        repo_path = f"/workspaces/{_repo_name_from_url(primary.repo_url)}"
+        repo_name = _repo_name_from_url(primary.repo_url)
+        repo_path = f"/workspaces/{repo_name}-{build_id}"
 
     if not repo_path:
         raise ValueError("Either repo_path or repo_url must be provided")
+
+    app.note(f"Build starting (build_id={build_id})", tags=["build", "start"])
 
     # Clone if repo_url is set and target doesn't exist yet
     git_dir = os.path.join(repo_path, ".git")
@@ -222,8 +234,8 @@ async def build(
             app.note(f"Clone failed (exit {clone_result.returncode}): {err}", tags=["build", "clone", "error"])
             raise RuntimeError(f"git clone failed (exit {clone_result.returncode}): {err}")
     elif cfg.repo_url and os.path.exists(git_dir):
-        # Repo already cloned by a prior build — reset to remote default branch
-        # so git_init creates the integration branch from a clean baseline.
+        # Repo already exists at this build-scoped path (unlikely but handle gracefully).
+        # Reset to remote default branch for a clean baseline.
         default_branch = cfg.github_pr_base or "main"
         app.note(
             f"Repo already exists at {repo_path} — resetting to origin/{default_branch}",
@@ -289,12 +301,6 @@ async def build(
 
     # Resolve runtime + flat model config once for this build.
     resolved = cfg.resolved_models()
-
-    # Unique ID for this build — namespaces git branches/worktrees to prevent
-    # collisions when multiple builds run concurrently on the same repository.
-    build_id = uuid.uuid4().hex[:8]
-
-    app.note(f"Build starting (build_id={build_id})", tags=["build", "start"])
 
     # Compute absolute artifacts directory path for logging
     abs_artifacts_dir = os.path.join(os.path.abspath(repo_path), artifacts_dir)

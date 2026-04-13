@@ -10,6 +10,7 @@ import os
 
 from pydantic import BaseModel
 
+from swe_af.execution.fatal_error import FatalHarnessError, check_fatal_harness_error
 from swe_af.execution.schemas import (
     DEFAULT_AGENT_MAX_TURNS,
     AdvisorAction,
@@ -163,6 +164,7 @@ async def run_retry_advisor(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Retry advisor: should_retry={result.parsed.should_retry}, "
@@ -170,6 +172,8 @@ async def run_retry_advisor(
                 tags=["retry_advisor", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Retry advisor agent failed: {e}",
@@ -243,12 +247,15 @@ async def run_issue_advisor(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Issue advisor decision: {result.parsed.action.value} — {result.parsed.summary}",
                 tags=["issue_advisor", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Issue advisor agent failed: {e}",
@@ -322,6 +329,7 @@ async def run_replanner(
                 max_turns=DEFAULT_AGENT_MAX_TURNS,
                 permission_mode=permission_mode or None,
             )
+            check_fatal_harness_error(result)
             # Log raw response for debugging (even on parse failure)
             if log_dir:
                 raw_log = os.path.join(
@@ -349,6 +357,8 @@ async def run_replanner(
                 "Output ONLY valid JSON conforming to the ReplanDecision schema.\n\n"
                 + task_prompt
             )
+        except FatalHarnessError:
+            raise  # Non-retryable — propagate immediately
         except Exception as e:
             router.note(
                 f"Replanner agent failed (attempt {attempt + 1}): {e}",
@@ -433,12 +443,15 @@ async def run_issue_writer(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Issue writer complete for {issue_name}: {result.parsed.issue_file_path}",
                 tags=["issue_writer", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Issue writer failed for {issue_name}: {e}",
@@ -497,12 +510,15 @@ async def run_verifier(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Verifier complete: passed={result.parsed.passed}, summary={result.parsed.summary}",
                 tags=["verifier", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Verifier agent failed: {e}",
@@ -579,6 +595,7 @@ async def run_git_init(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Git init complete: mode={result.parsed.mode}, "
@@ -586,6 +603,8 @@ async def run_git_init(
                 tags=["git_init", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Git init agent failed: {e}",
@@ -652,12 +671,15 @@ async def run_workspace_setup(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Workspace setup complete: {len(result.parsed.workspaces)} worktrees created",
                 tags=["workspace_setup", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Workspace setup agent failed: {e}",
@@ -714,6 +736,7 @@ async def run_merger(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Merger complete: merged={result.parsed.merged_branches}, "
@@ -722,6 +745,8 @@ async def run_merger(
                 tags=["merger", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Merger agent failed: {e}",
@@ -787,6 +812,7 @@ async def run_integration_tester(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Integration tester complete: passed={result.parsed.passed}, "
@@ -794,6 +820,8 @@ async def run_integration_tester(
                 tags=["integration_tester", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Integration tester agent failed: {e}",
@@ -853,12 +881,15 @@ async def run_workspace_cleanup(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Workspace cleanup complete: {len(result.parsed.cleaned)} cleaned",
                 tags=["workspace_cleanup", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Workspace cleanup agent failed: {e}",
@@ -927,6 +958,7 @@ async def run_coder(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Coder complete: {issue_name}, "
@@ -937,6 +969,8 @@ async def run_coder(
             out = result.parsed.model_dump()
             out["iteration_id"] = iteration_id
             return out
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Coder agent failed: {issue_name}: {e}",
@@ -1001,6 +1035,7 @@ async def run_qa(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"QA complete: {issue_name}, passed={result.parsed.passed}",
@@ -1009,6 +1044,8 @@ async def run_qa(
             out = result.parsed.model_dump()
             out["iteration_id"] = iteration_id
             return out
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"QA agent failed: {issue_name}: {e}",
@@ -1078,6 +1115,7 @@ async def run_code_reviewer(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Code reviewer complete: {issue_name}, "
@@ -1088,6 +1126,8 @@ async def run_code_reviewer(
             out = result.parsed.model_dump()
             out["iteration_id"] = iteration_id
             return out
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Code reviewer agent failed: {issue_name}: {e}",
@@ -1155,6 +1195,8 @@ async def run_qa_synthesizer(
             out = result.parsed.model_dump()
             out["iteration_id"] = iteration_id
             return out
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"QA synthesizer agent failed: {e}",
@@ -1256,6 +1298,7 @@ async def generate_fix_issues(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Fix generator complete: {len(result.parsed.fix_issues)} fix issues, "
@@ -1263,6 +1306,8 @@ async def generate_fix_issues(
                 tags=["fix_generator", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Fix generator agent failed: {e}",
@@ -1320,6 +1365,7 @@ async def run_repo_finalize(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"Repo finalize complete: {len(result.parsed.files_removed)} files removed, "
@@ -1327,6 +1373,8 @@ async def run_repo_finalize(
                 tags=["repo_finalize", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"Repo finalize agent failed: {e}",
@@ -1391,12 +1439,15 @@ async def run_github_pr(
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"GitHub PR complete: {result.parsed.pr_url}",
                 tags=["github_pr", "complete"],
             )
             return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise  # Non-retryable — propagate immediately
     except Exception as e:
         router.note(
             f"GitHub PR agent failed: {e}",

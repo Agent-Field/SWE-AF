@@ -45,6 +45,10 @@ RUN uv pip install --system -r /app/requirements.txt
 # Copy application code
 COPY . /app/
 
+# Pre-create /workspaces so named-volume mounts inherit correct permissions
+# (without this, Docker creates it as root read-only on fresh deployments)
+RUN mkdir -p /workspaces && chmod 777 /workspaces
+
 EXPOSE 8003
 
 ENV PORT=8003 \
