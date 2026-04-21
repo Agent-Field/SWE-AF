@@ -11,8 +11,10 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import subprocess
 
 from agentfield import Agent
+from agentfield.types import AgentStatus
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.fast import fast_router
 from swe_af.fast.schemas import FastBuildConfig, FastBuildResult, fast_resolve_models
@@ -28,6 +30,14 @@ app = Agent(
 )
 
 app.include_router(fast_router)
+
+
+@app.on_event("startup")
+async def _mark_ready():
+    """Promote lifecycle_status to READY after the SDK's own startup completes."""
+    await asyncio.sleep(3)
+    app._current_status = AgentStatus.READY
+
 
 # Include the planner's execution router so that router.note() calls inside
 # the original execution_agents functions (run_coder, run_verifier, etc.)
@@ -73,7 +83,43 @@ async def build(
     if not repo_path:
         raise ValueError("Either repo_path or repo_url must be provided")
 
-    os.makedirs(repo_path, exist_ok=True)
+    git_dir = os.path.join(repo_path, ".git")
+    if effective_repo_url and not os.path.exists(git_dir):
+        app.note(f"Cloning {effective_repo_url} → {repo_path}", tags=["fast_build", "clone"])
+        os.makedirs(repo_path, exist_ok=True)
+        clone_result = subprocess.run(
+            ["git", "clone", effective_repo_url, repo_path],
+            capture_output=True,
+            text=True,
+        )
+        if clone_result.returncode != 0:
+            err = clone_result.stderr.strip()
+            app.note(f"Clone failed: {err}", tags=["fast_build", "clone", "error"])
+            raise RuntimeError(f"git clone failed: {err}")
+    elif effective_repo_url and os.path.exists(git_dir):
+        default_branch = cfg.github_pr_base or "main"
+        app.note(
+            f"Repo exists at {repo_path} — resetting to origin/{default_branch}",
+            tags=["fast_build", "clone", "reset"],
+        )
+        subprocess.run(["git", "fetch", "origin"], cwd=repo_path, capture_output=True, text=True)
+        subprocess.run(["git", "checkout", "-f", default_branch], cwd=repo_path, capture_output=True, text=True)
+        reset = subprocess.run(
+            ["git", "reset", "--hard", f"origin/{default_branch}"],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        if reset.returncode != 0:
+            import shutil
+            shutil.rmtree(repo_path, ignore_errors=True)
+            os.makedirs(repo_path, exist_ok=True)
+            clone_result = subprocess.run(
+                ["git", "clone", effective_repo_url, repo_path],
+                capture_output=True, text=True,
+            )
+            if clone_result.returncode != 0:
+                raise RuntimeError(f"git re-clone failed: {clone_result.stderr.strip()}")
+    else:
+        os.makedirs(repo_path, exist_ok=True)
 
     resolved = fast_resolve_models(cfg)
     ai_provider = _runtime_to_provider(cfg.runtime)
