@@ -136,6 +136,101 @@ class TestDefaultRuntimeFromEnv(unittest.TestCase):
             self.assertEqual(BuildConfig().runtime, "claude_code")
 
 
+class TestDefaultModelFromEnv(unittest.TestCase):
+    """`SWE_DEFAULT_MODEL` lets the deployer pin a single model id without
+    code changes or threading config through every caller. Caller-supplied
+    models still win at higher precedence layers."""
+
+    def test_env_overrides_runtime_base_default(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"SWE_DEFAULT_MODEL": "openrouter/minimax/minimax-m2.6"},
+        ):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(
+                    resolved[field], "openrouter/minimax/minimax-m2.6"
+                )
+
+    def test_env_overrides_claude_code_runtime_too(self) -> None:
+        with mock.patch.dict(os.environ, {"SWE_DEFAULT_MODEL": "opus"}):
+            resolved = resolve_runtime_models(runtime="claude_code", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(resolved[field], "opus")
+
+    def test_caller_models_default_beats_env(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"SWE_DEFAULT_MODEL": "openrouter/minimax/minimax-m2.6"},
+        ):
+            resolved = resolve_runtime_models(
+                runtime="open_code",
+                models={"default": "openrouter/qwen/qwen-3-coder"},
+            )
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(
+                    resolved[field], "openrouter/qwen/qwen-3-coder"
+                )
+
+    def test_caller_per_role_beats_env(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"SWE_DEFAULT_MODEL": "openrouter/minimax/minimax-m2.6"},
+        ):
+            resolved = resolve_runtime_models(
+                runtime="open_code",
+                models={"coder": "openrouter/deepseek/deepseek-v3"},
+            )
+            self.assertEqual(
+                resolved["coder_model"], "openrouter/deepseek/deepseek-v3"
+            )
+            # Other roles still pick up the env default
+            self.assertEqual(
+                resolved["pm_model"], "openrouter/minimax/minimax-m2.6"
+            )
+
+    def test_empty_env_value_treated_as_unset(self) -> None:
+        with mock.patch.dict(os.environ, {"SWE_DEFAULT_MODEL": "   "}):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(
+                    resolved[field], "openrouter/minimax/minimax-m2.5"
+                )
+
+    def test_unset_env_uses_runtime_base(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "SWE_DEFAULT_MODEL"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(
+                    resolved[field], "openrouter/minimax/minimax-m2.5"
+                )
+
+    def test_env_flows_through_build_config(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"SWE_DEFAULT_MODEL": "openrouter/minimax/minimax-m2.6"},
+        ):
+            cfg = BuildConfig(runtime="open_code")
+            resolved = cfg.resolved_models()
+            self.assertEqual(
+                resolved["coder_model"], "openrouter/minimax/minimax-m2.6"
+            )
+
+    def test_env_flows_through_execution_config(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"SWE_DEFAULT_MODEL": "openrouter/minimax/minimax-m2.6"},
+        ):
+            cfg = ExecutionConfig(runtime="open_code")
+            self.assertEqual(
+                cfg.coder_model, "openrouter/minimax/minimax-m2.6"
+            )
+            self.assertEqual(
+                cfg.qa_synthesizer_model, "openrouter/minimax/minimax-m2.6"
+            )
+
+
 class TestExecutionConfig(unittest.TestCase):
     def test_default_resolution(self) -> None:
         cfg = ExecutionConfig()

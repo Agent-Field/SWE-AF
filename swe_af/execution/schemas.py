@@ -543,6 +543,19 @@ def _default_runtime() -> Literal["claude_code", "open_code"]:
     return "claude_code"
 
 
+def _default_model_from_env() -> str | None:
+    """Honor the ``SWE_DEFAULT_MODEL`` env var.
+
+    Lets the deployer pin a single model id that overrides every role
+    default — without editing code or threading a ``config`` through every
+    caller. Caller-supplied ``models={"default": …}`` and per-role overrides
+    still win (see ``resolve_runtime_models`` precedence). Empty or unset
+    returns ``None``, which means "use runtime base defaults".
+    """
+    value = os.getenv("SWE_DEFAULT_MODEL", "").strip()
+    return value or None
+
+
 def _legacy_hint_for_model_key(key: str) -> str:
     if key in _LEGACY_GROUP_EQUIVALENTS:
         return _LEGACY_GROUP_EQUIVALENTS[key]
@@ -611,8 +624,11 @@ def resolve_runtime_models(
 ) -> dict[str, str]:
     """Resolve internal ``*_model`` fields from runtime + flat role overrides.
 
-    Resolution order:
-        runtime defaults < models.default < models.<role>
+    Resolution order (lowest → highest precedence):
+        1. runtime base defaults (``_RUNTIME_BASE_MODELS[runtime]``)
+        2. ``SWE_DEFAULT_MODEL`` env var (applies to all roles)
+        3. caller's ``models["default"]``
+        4. caller's ``models["<role>"]``
     """
     if field_names is None:
         field_names = ALL_MODEL_FIELDS
@@ -626,6 +642,11 @@ def resolve_runtime_models(
 
     base = _RUNTIME_BASE_MODELS[runtime]
     resolved: dict[str, str] = {field: base[field] for field in field_names}
+
+    env_default = _default_model_from_env()
+    if env_default:
+        for field in field_names:
+            resolved[field] = env_default
 
     default_model = flat_models.get("default")
     if default_model:

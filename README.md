@@ -577,7 +577,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
 | `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"` or `"open_code"`. The default also honors the `SWE_DEFAULT_RUNTIME` env var when no `runtime` is passed in `config` — set it on the deployment so callers don't need to plumb a config through. |
-| `models`                  | `null`          | Flat role-model map (`default` + role keys below)     |
+| `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |
 | `max_replans`             | `2`             | Build-level replanning budget                         |
