@@ -626,11 +626,11 @@ Fully customized:
 {
   "runtime": "open_code",
   "models": {
-    "default": "minimax/minimax-m2.5",
+    "default": "openrouter/minimax/minimax-m2.5",
     "pm": "openrouter/qwen/qwen-2.5-72b-instruct",
     "architect": "openrouter/qwen/qwen-2.5-72b-instruct",
-    "coder": "deepseek/deepseek-chat",
-    "qa": "deepseek/deepseek-chat",
+    "coder": "openrouter/deepseek/deepseek-chat",
+    "qa": "openrouter/deepseek/deepseek-chat",
     "verifier": "openrouter/qwen/qwen-2.5-72b-instruct"
   },
   "max_coding_iterations": 6,

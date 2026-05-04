@@ -27,7 +27,7 @@ class TestResolveRuntimeModels(unittest.TestCase):
     def test_open_code_defaults(self) -> None:
         resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(resolved[field], "minimax/minimax-m2.5")
+            self.assertEqual(resolved[field], "openrouter/minimax/minimax-m2.5")
 
     def test_models_default_applies_to_all(self) -> None:
         resolved = resolve_runtime_models(
@@ -64,7 +64,7 @@ class TestBuildConfig(unittest.TestCase):
         cfg = BuildConfig(runtime="open_code")
         self.assertEqual(cfg.ai_provider, "opencode")
         resolved = cfg.resolved_models()
-        self.assertEqual(resolved["coder_model"], "minimax/minimax-m2.5")
+        self.assertEqual(resolved["coder_model"], "openrouter/minimax/minimax-m2.5")
 
     def test_to_execution_config_dict_roundtrips(self) -> None:
         cfg = BuildConfig(runtime="open_code", models={"coder": "deepseek/deepseek-chat"})
@@ -73,7 +73,7 @@ class TestBuildConfig(unittest.TestCase):
         self.assertEqual(d["models"]["coder"], "deepseek/deepseek-chat")
         exec_cfg = ExecutionConfig(**d)
         self.assertEqual(exec_cfg.coder_model, "deepseek/deepseek-chat")
-        self.assertEqual(exec_cfg.qa_model, "minimax/minimax-m2.5")
+        self.assertEqual(exec_cfg.qa_model, "openrouter/minimax/minimax-m2.5")
 
     def test_legacy_top_level_keys_rejected(self) -> None:
         with self.assertRaises(ValueError) as ctx:
@@ -147,8 +147,8 @@ class TestExecutionConfig(unittest.TestCase):
     def test_open_code_resolution(self) -> None:
         cfg = ExecutionConfig(runtime="open_code")
         self.assertEqual(cfg.ai_provider, "opencode")
-        self.assertEqual(cfg.coder_model, "minimax/minimax-m2.5")
-        self.assertEqual(cfg.qa_synthesizer_model, "minimax/minimax-m2.5")
+        self.assertEqual(cfg.coder_model, "openrouter/minimax/minimax-m2.5")
+        self.assertEqual(cfg.qa_synthesizer_model, "openrouter/minimax/minimax-m2.5")
 
     def test_models_override(self) -> None:
         cfg = ExecutionConfig(runtime="claude_code", models={"default": "sonnet", "qa": "opus"})

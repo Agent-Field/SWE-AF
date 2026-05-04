@@ -508,7 +508,7 @@ _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
         "qa_synthesizer_model": "haiku",
     },
     "open_code": {
-        **{field: "minimax/minimax-m2.5" for field in ALL_MODEL_FIELDS},
+        **{field: "openrouter/minimax/minimax-m2.5" for field in ALL_MODEL_FIELDS},
     },
 }
 
