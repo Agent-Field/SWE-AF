@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import unittest
+from unittest import mock
 
 from swe_af.execution.schemas import (
     ALL_MODEL_FIELDS,
@@ -99,6 +101,39 @@ class TestBuildConfig(unittest.TestCase):
             BuildConfig(models={"planning": "opus"})
         self.assertIn("planning", str(ctx.exception))
         self.assertIn("models.pm", str(ctx.exception))
+
+
+class TestDefaultRuntimeFromEnv(unittest.TestCase):
+    """`SWE_DEFAULT_RUNTIME` lets the deployer pick runtime without callers
+    threading a config through. Callers that DO pass `runtime=...` win."""
+
+    def test_env_open_code_overrides_default(self) -> None:
+        with mock.patch.dict(os.environ, {"SWE_DEFAULT_RUNTIME": "open_code"}):
+            self.assertEqual(BuildConfig().runtime, "open_code")
+            self.assertEqual(ExecutionConfig().runtime, "open_code")
+
+    def test_env_claude_code_overrides_default(self) -> None:
+        with mock.patch.dict(os.environ, {"SWE_DEFAULT_RUNTIME": "claude_code"}):
+            self.assertEqual(BuildConfig().runtime, "claude_code")
+            self.assertEqual(ExecutionConfig().runtime, "claude_code")
+
+    def test_explicit_runtime_beats_env(self) -> None:
+        with mock.patch.dict(os.environ, {"SWE_DEFAULT_RUNTIME": "open_code"}):
+            self.assertEqual(BuildConfig(runtime="claude_code").runtime, "claude_code")
+            self.assertEqual(ExecutionConfig(runtime="claude_code").runtime, "claude_code")
+
+    def test_invalid_env_falls_back_to_claude_code(self) -> None:
+        with mock.patch.dict(os.environ, {"SWE_DEFAULT_RUNTIME": "bogus_runtime"}):
+            self.assertEqual(BuildConfig().runtime, "claude_code")
+
+    def test_unset_env_uses_claude_code(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "SWE_DEFAULT_RUNTIME"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(BuildConfig().runtime, "claude_code")
+
+    def test_empty_env_uses_claude_code(self) -> None:
+        with mock.patch.dict(os.environ, {"SWE_DEFAULT_RUNTIME": ""}):
+            self.assertEqual(BuildConfig().runtime, "claude_code")
 
 
 class TestExecutionConfig(unittest.TestCase):

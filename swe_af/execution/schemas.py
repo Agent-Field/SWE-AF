@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 from enum import Enum
 from typing import Any, Literal
@@ -9,6 +11,7 @@ from typing import Any, Literal
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     PrivateAttr,
     field_validator,
     model_validator,
@@ -520,6 +523,26 @@ def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode"]:
     )
 
 
+def _default_runtime() -> Literal["claude_code", "open_code"]:
+    """Default runtime, honoring the ``SWE_DEFAULT_RUNTIME`` env var.
+
+    Lets the deployer pick the runtime without every caller having to pass
+    a config. Falls back to ``claude_code`` when unset; logs and falls back
+    when the env value isn't a valid runtime.
+    """
+    value = os.getenv("SWE_DEFAULT_RUNTIME", "").strip()
+    if not value:
+        return "claude_code"
+    if value in RUNTIME_VALUES:
+        return value  # type: ignore[return-value]
+    logging.getLogger(__name__).warning(
+        "SWE_DEFAULT_RUNTIME=%r is not one of %s; falling back to claude_code",
+        value,
+        RUNTIME_VALUES,
+    )
+    return "claude_code"
+
+
 def _legacy_hint_for_model_key(key: str) -> str:
     if key in _LEGACY_GROUP_EQUIVALENTS:
         return _LEGACY_GROUP_EQUIVALENTS[key]
@@ -624,7 +647,7 @@ class BuildConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code"] = "claude_code"
+    runtime: Literal["claude_code", "open_code"] = Field(default_factory=_default_runtime)
     models: dict[str, str] | None = None
 
     max_review_iterations: int = 2
@@ -805,7 +828,7 @@ class ExecutionConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code"] = "claude_code"
+    runtime: Literal["claude_code", "open_code"] = Field(default_factory=_default_runtime)
     models: dict[str, str] | None = None
     _resolved_models: dict[str, str] = PrivateAttr(default_factory=dict)
 
