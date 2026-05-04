@@ -272,6 +272,56 @@ class TestExecutionConfig(unittest.TestCase):
         self.assertIn("coding", str(ctx.exception))
         self.assertIn("models.coder", str(ctx.exception))
 
+    def test_ci_fixer_role_resolves(self) -> None:
+        """ci_fixer is a real role with its own model field, defaulting to the
+        runtime base. It can be overridden per-role like any other."""
+        cfg = ExecutionConfig(runtime="claude_code")
+        self.assertEqual(cfg.ci_fixer_model, "sonnet")
+
+        cfg = ExecutionConfig(runtime="open_code")
+        self.assertEqual(cfg.ci_fixer_model, "openrouter/minimax/minimax-m2.5")
+
+        cfg = ExecutionConfig(
+            runtime="claude_code", models={"ci_fixer": "opus"}
+        )
+        self.assertEqual(cfg.ci_fixer_model, "opus")
+        # other roles untouched
+        self.assertEqual(cfg.coder_model, "sonnet")
+
+
+class TestCIGateConfig(unittest.TestCase):
+    """check_ci defaults to True and its caps round-trip from BuildConfig
+    into ExecutionConfig so the post-PR gate sees consistent settings."""
+
+    def test_check_ci_defaults_true(self) -> None:
+        self.assertTrue(BuildConfig().check_ci)
+        self.assertTrue(ExecutionConfig().check_ci)
+
+    def test_ci_gate_caps_have_sensible_defaults(self) -> None:
+        cfg = BuildConfig()
+        self.assertEqual(cfg.max_ci_fix_cycles, 2)
+        self.assertEqual(cfg.ci_wait_seconds, 1500)
+        self.assertEqual(cfg.ci_poll_seconds, 30)
+
+    def test_ci_gate_caps_round_trip(self) -> None:
+        cfg = BuildConfig(
+            check_ci=False,
+            max_ci_fix_cycles=5,
+            ci_wait_seconds=600,
+            ci_poll_seconds=15,
+        )
+        d = cfg.to_execution_config_dict()
+        self.assertEqual(d["check_ci"], False)
+        self.assertEqual(d["max_ci_fix_cycles"], 5)
+        self.assertEqual(d["ci_wait_seconds"], 600)
+        self.assertEqual(d["ci_poll_seconds"], 15)
+
+        exec_cfg = ExecutionConfig(**d)
+        self.assertFalse(exec_cfg.check_ci)
+        self.assertEqual(exec_cfg.max_ci_fix_cycles, 5)
+        self.assertEqual(exec_cfg.ci_wait_seconds, 600)
+        self.assertEqual(exec_cfg.ci_poll_seconds, 15)
+
 
 if __name__ == "__main__":
     unittest.main()

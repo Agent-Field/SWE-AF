@@ -479,6 +479,7 @@ ROLE_TO_MODEL_FIELD: dict[str, str] = {
     "git": "git_model",
     "merger": "merger_model",
     "integration_tester": "integration_tester_model",
+    "ci_fixer": "ci_fixer_model",
 }
 
 MODEL_ROLE_KEYS: list[str] = list(ROLE_TO_MODEL_FIELD)
@@ -688,6 +689,15 @@ class BuildConfig(BaseModel):
     repos: list[RepoSpec] = []  # Multi-repo list; normalised by _normalize_repos
     enable_github_pr: bool = True  # Create draft PR after build
     github_pr_base: str = ""  # PR base branch (default: repo's default branch)
+    # Post-PR CI gate. When True, after the draft PR is opened SWE-AF waits for
+    # CI to be conclusive, runs a bounded fix-and-repush loop on failure, and
+    # promotes the PR with `gh pr ready` only when CI is green. When False,
+    # the build returns immediately after creating the draft PR (legacy
+    # behaviour).
+    check_ci: bool = True
+    max_ci_fix_cycles: int = 2  # number of fix → repush → re-watch iterations
+    ci_wait_seconds: int = 1500  # wall-clock cap per watch (25 min)
+    ci_poll_seconds: int = 30  # poll interval for `gh pr checks --json`
     agent_timeout_seconds: int = 2700
     max_advisor_invocations: int = 2
     enable_issue_advisor: bool = True
@@ -798,6 +808,10 @@ class BuildConfig(BaseModel):
             "enable_learning": self.enable_learning,
             "max_concurrent_issues": self.max_concurrent_issues,
             "level_failure_abort_threshold": self.level_failure_abort_threshold,
+            "check_ci": self.check_ci,
+            "max_ci_fix_cycles": self.max_ci_fix_cycles,
+            "ci_wait_seconds": self.ci_wait_seconds,
+            "ci_poll_seconds": self.ci_poll_seconds,
         }
 
 
@@ -810,6 +824,9 @@ class BuildResult(BaseModel):
     success: bool
     summary: str
     pr_results: list[RepoPRResult] = []  # Per-repo PR creation results
+    # Per-repo result of the post-PR CI gate (watch → fix → repush → ready).
+    # Empty when ``BuildConfig.check_ci`` is False or no PR was opened.
+    ci_gate_results: list[dict] = []
 
     @property
     def pr_url(self) -> str:
@@ -844,6 +861,38 @@ class GitHubPRResult(BaseModel):
     error_message: str = ""
 
 
+class CIFailedCheck(BaseModel):
+    """One failing GitHub check on a PR."""
+
+    name: str
+    workflow: str = ""
+    conclusion: str = ""  # FAILURE, CANCELLED, TIMED_OUT, ACTION_REQUIRED, etc.
+    details_url: str = ""
+    logs_excerpt: str = ""  # tail of the failed job's log, truncated
+
+
+class CIWatchResult(BaseModel):
+    """Outcome of waiting for CI checks on a PR."""
+
+    status: Literal["passed", "failed", "timed_out", "no_checks", "error"]
+    pr_number: int
+    elapsed_seconds: int = 0
+    failed_checks: list[CIFailedCheck] = []
+    summary: str = ""
+
+
+class CIFixResult(BaseModel):
+    """Output from one iteration of the CI fixer agent."""
+
+    fixed: bool  # True if the agent believes it has resolved all failures
+    files_changed: list[str] = []
+    commit_sha: str = ""  # SHA of the fix commit, if pushed
+    pushed: bool = False  # True if the agent pushed the fix to origin
+    summary: str = ""
+    rejected_workarounds: list[str] = []  # legitimate-fix self-checks the agent ran
+    error_message: str = ""
+
+
 class ExecutionConfig(BaseModel):
     """Configuration for the DAG executor."""
 
@@ -869,6 +918,12 @@ class ExecutionConfig(BaseModel):
     level_failure_abort_threshold: float = (
         0.8  # abort DAG when >= this fraction of a level fails
     )
+    # Mirrored from BuildConfig so the post-PR CI gate sees the same caps when
+    # invoked from the build pipeline.
+    check_ci: bool = True
+    max_ci_fix_cycles: int = 2
+    ci_wait_seconds: int = 1500
+    ci_poll_seconds: int = 30
 
     @model_validator(mode="before")
     @classmethod
@@ -959,3 +1014,7 @@ class ExecutionConfig(BaseModel):
     @property
     def integration_tester_model(self) -> str:
         return self._model_for("integration_tester_model")
+
+    @property
+    def ci_fixer_model(self) -> str:
+        return self._model_for("ci_fixer_model")
