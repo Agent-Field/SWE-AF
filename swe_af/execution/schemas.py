@@ -894,6 +894,65 @@ class CIFixResult(BaseModel):
     error_message: str = ""
 
 
+class ReviewCommentRef(BaseModel):
+    """One review comment on an existing PR that the resolver should consider.
+
+    Carries enough context for the resolver to find the comment thread, decide
+    whether the change addresses it, and (back in github-buddy) reply +
+    resolveReviewThread via the GraphQL API.
+
+    `thread_id` is the GraphQL node id of the PR review thread (used to call
+    `resolveReviewThread`). `comment_id` is the REST id of the comment (used
+    to post the inline reply via `/repos/{o}/{r}/pulls/{n}/comments/{id}/replies`).
+    Either may be empty when the source comment is a plain issue-comment on
+    the PR conversation (not anchored to a code line) — in that case the
+    resolver still addresses it but no thread can be resolved.
+    """
+
+    comment_id: int = 0  # 0 when not a review comment (e.g. PR conversation comment)
+    thread_id: str = ""  # GraphQL node id of the review thread; empty for non-review
+    path: str = ""  # File path the comment is anchored to ("" for non-review)
+    line: int = 0  # Line number the comment is anchored to (0 for non-review)
+    author: str = ""  # GitHub login of the commenter
+    body: str = ""  # The comment body (markdown)
+    url: str = ""  # html_url for the comment
+
+
+class AddressedComment(BaseModel):
+    """The resolver agent's record of one comment it claims to have addressed.
+
+    Used to drive the post-resolve "reply + resolveReviewThread" pass. The
+    agent decides which comments it actually addressed (it may judge some
+    irrelevant or out-of-scope and explain in `note`); only entries with
+    `addressed=True` get a reply posted and the thread resolved.
+    """
+
+    comment_id: int = 0
+    thread_id: str = ""
+    addressed: bool
+    note: str = ""  # one-line: "fixed by ...", "skipped because ..."
+
+
+class PRResolveResult(BaseModel):
+    """Output from one run of the PR-resolver agent.
+
+    The agent both resolves any in-progress merge from base AND addresses CI
+    failures + review comments in a single harness session, then commits and
+    pushes. Caller (the `resolve` entry reasoner) then runs the existing CI
+    watch+fix loop and posts replies on every `addressed=True` comment.
+    """
+
+    fixed: bool  # True if the agent believes it produced a correct, complete fix
+    merge_resolved: bool = False  # True iff a merge from base was completed (with or without prior conflicts)
+    files_changed: list[str] = []
+    commit_shas: list[str] = []  # All new commits the agent created (merge + fixes)
+    pushed: bool = False  # True if `git push` succeeded
+    addressed_comments: list[AddressedComment] = []
+    summary: str = ""
+    rejected_workarounds: list[str] = []  # legitimate-fix self-checks the agent ran
+    error_message: str = ""
+
+
 class ExecutionConfig(BaseModel):
     """Configuration for the DAG executor."""
 

@@ -25,17 +25,21 @@ from swe_af.execution.schemas import (
     IntegrationTestResult,
     IssueAdvisorDecision,
     MergeResult,
+    PRResolveResult,
     QAResult,
     QASynthesisResult,
     ReplanAction,
     ReplanDecision,
     RepoFinalizeResult,
     RetryAdvice,
+    ReviewCommentRef,
     VerificationResult,
     WorkspaceInfo,
 )
 from swe_af.prompts.ci_fixer import SYSTEM_PROMPT as CI_FIXER_SYSTEM_PROMPT
 from swe_af.prompts.ci_fixer import ci_fixer_task_prompt
+from swe_af.prompts.pr_resolver import SYSTEM_PROMPT as PR_RESOLVER_SYSTEM_PROMPT
+from swe_af.prompts.pr_resolver import pr_resolver_task_prompt
 from swe_af.prompts.fix_generator import SYSTEM_PROMPT as FIX_GENERATOR_SYSTEM_PROMPT
 from swe_af.prompts.fix_generator import fix_generator_task_prompt
 from swe_af.prompts.issue_advisor import SYSTEM_PROMPT as ISSUE_ADVISOR_SYSTEM_PROMPT
@@ -1600,4 +1604,105 @@ async def run_ci_fixer(
         fixed=False,
         summary="CI fixer agent failed to produce a valid result.",
         error_message="CI fixer agent failed to produce a valid result.",
+    ).model_dump()
+
+
+@router.reasoner()
+async def run_pr_resolver(
+    repo_path: str,
+    pr_number: int,
+    pr_url: str,
+    head_branch: str,
+    base_branch: str,
+    merge_state: str = "skipped",
+    conflicted_files: list[str] | None = None,
+    failed_checks: list[dict] | None = None,
+    review_comments: list[dict] | None = None,
+    additional_context: str = "",
+    model: str = "sonnet",
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+) -> dict:
+    """Resolve an open PR: complete an in-progress merge, fix CI, address comments, push.
+
+    The agent is started with the working tree already on the PR's head
+    branch. ``merge_state`` tells it whether a merge from base is in progress
+    ("conflict"), was already completed ("merged"), wasn't needed ("clean"),
+    or was deliberately skipped ("skipped").
+
+    Returns a ``PRResolveResult`` dict. The orchestrator (``app.resolve``)
+    consumes ``addressed_comments`` to drive the post-resolve thread-reply
+    pass and uses ``pushed`` to decide whether to run the CI fix loop.
+    """
+    failed_checks = failed_checks or []
+    review_comments = review_comments or []
+    conflicted_files = conflicted_files or []
+
+    router.note(
+        f"PR resolver: PR #{pr_number}, merge_state={merge_state}, "
+        f"{len(failed_checks)} failing check(s), "
+        f"{len(review_comments)} review comment(s)",
+        tags=["pr_resolver", "start"],
+    )
+
+    typed_failures = [
+        fc if isinstance(fc, CIFailedCheck) else CIFailedCheck(**fc)
+        for fc in failed_checks
+    ]
+    typed_comments = [
+        rc if isinstance(rc, ReviewCommentRef) else ReviewCommentRef(**rc)
+        for rc in review_comments
+    ]
+
+    task_prompt = pr_resolver_task_prompt(
+        repo_path=repo_path,
+        pr_number=pr_number,
+        pr_url=pr_url,
+        head_branch=head_branch,
+        base_branch=base_branch,
+        merge_state=merge_state,
+        conflicted_files=conflicted_files,
+        failed_checks=typed_failures,
+        review_comments=typed_comments,
+        additional_context=additional_context,
+    )
+
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
+
+    try:
+        result = await router.harness(
+            task_prompt,
+            system_prompt=PR_RESOLVER_SYSTEM_PROMPT,
+            schema=PRResolveResult,
+            model=model,
+            provider=provider,
+            tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
+        )
+        check_fatal_harness_error(result)
+        if result.parsed is not None:
+            router.note(
+                f"PR resolver complete: fixed={result.parsed.fixed}, "
+                f"pushed={result.parsed.pushed}, "
+                f"merge_resolved={result.parsed.merge_resolved}, "
+                f"{len(result.parsed.files_changed)} file(s) changed, "
+                f"{sum(1 for c in result.parsed.addressed_comments if c.addressed)}"
+                f"/{len(result.parsed.addressed_comments)} comment(s) addressed",
+                tags=["pr_resolver", "complete"],
+            )
+            return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise
+    except Exception as e:
+        router.note(
+            f"PR resolver agent failed: {e}",
+            tags=["pr_resolver", "error"],
+        )
+
+    return PRResolveResult(
+        fixed=False,
+        summary="PR resolver agent failed to produce a valid result.",
+        error_message="PR resolver agent failed to produce a valid result.",
     ).model_dump()
