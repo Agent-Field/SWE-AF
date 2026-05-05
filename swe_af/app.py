@@ -18,6 +18,7 @@ from swe_af.reasoners.pipeline import _assign_sequence_numbers, _compute_levels,
 from swe_af.reasoners.schemas import PlanResult, ReviewResult
 
 from agentfield import Agent
+from swe_af.execution.ci_gate import mark_pr_ready
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.schemas import (
     BuildConfig,
@@ -167,6 +168,136 @@ async def _clone_repos(
         repos=repos,
         primary_repo_name=primary_repo_name,
     )
+
+
+async def _run_ci_gate(
+    *,
+    repo_path: str,
+    pr_number: int,
+    pr_url: str,
+    integration_branch: str,
+    base_branch: str,
+    cfg: BuildConfig,
+    resolved_models: dict,
+    goal: str,
+    completed_issues: list[dict],
+) -> dict:
+    """Watch CI on the freshly-pushed draft PR; fix-and-repush if it fails;
+    promote to ready-for-review when green.
+
+    Returns a summary dict the build can attach to its response. Bounded by
+    ``cfg.max_ci_fix_cycles`` and ``cfg.ci_wait_seconds`` per watch.
+    """
+    attempts: list[dict] = []
+    last_watch: dict | None = None
+
+    for cycle in range(cfg.max_ci_fix_cycles + 1):
+        app.note(
+            f"CI gate: watch cycle {cycle + 1} for PR #{pr_number}",
+            tags=["ci_gate", "watch"],
+        )
+        watch = _unwrap(await app.call(
+            f"{NODE_ID}.run_ci_watcher",
+            repo_path=repo_path,
+            pr_number=pr_number,
+            wait_seconds=cfg.ci_wait_seconds,
+            poll_seconds=cfg.ci_poll_seconds,
+        ), "run_ci_watcher")
+        last_watch = watch
+        status = watch.get("status", "error")
+
+        if status in ("passed", "no_checks"):
+            ok, msg = mark_pr_ready(repo_path=repo_path, pr_number=pr_number)
+            app.note(
+                f"CI gate: {status} → {msg}",
+                tags=["ci_gate", "ready" if ok else "ready_failed"],
+            )
+            return {
+                "final_status": "passed" if status == "passed" else "no_checks",
+                "promoted_to_ready": ok,
+                "promote_message": msg,
+                "fix_attempts": attempts,
+                "watch": watch,
+            }
+
+        if status in ("timed_out", "error"):
+            app.note(
+                f"CI gate: {status} — leaving PR in draft. {watch.get('summary', '')}",
+                tags=["ci_gate", status],
+            )
+            return {
+                "final_status": status,
+                "promoted_to_ready": False,
+                "promote_message": "",
+                "fix_attempts": attempts,
+                "watch": watch,
+            }
+
+        # status == "failed"
+        if cycle >= cfg.max_ci_fix_cycles:
+            app.note(
+                f"CI gate: exhausted {cfg.max_ci_fix_cycles} fix cycle(s) — "
+                "leaving PR in draft",
+                tags=["ci_gate", "exhausted"],
+            )
+            return {
+                "final_status": "failed_exhausted",
+                "promoted_to_ready": False,
+                "promote_message": "",
+                "fix_attempts": attempts,
+                "watch": watch,
+            }
+
+        failed_checks = watch.get("failed_checks", [])
+        app.note(
+            f"CI gate: fix attempt {cycle + 1}/{cfg.max_ci_fix_cycles} — "
+            f"{len(failed_checks)} failing check(s)",
+            tags=["ci_gate", "fix"],
+        )
+        fix = _unwrap(await app.call(
+            f"{NODE_ID}.run_ci_fixer",
+            repo_path=repo_path,
+            pr_number=pr_number,
+            pr_url=pr_url,
+            integration_branch=integration_branch,
+            base_branch=base_branch,
+            failed_checks=failed_checks,
+            iteration=cycle + 1,
+            max_iterations=cfg.max_ci_fix_cycles,
+            goal=goal,
+            completed_issues=completed_issues,
+            previous_attempts=attempts,
+            model=resolved_models.get("ci_fixer_model", resolved_models.get("coder_model", "")),
+            permission_mode=cfg.permission_mode,
+            ai_provider=cfg.ai_provider,
+        ), "run_ci_fixer")
+        attempts.append(fix)
+
+        if not fix.get("pushed"):
+            app.note(
+                f"CI gate: fixer did not push ({fix.get('summary', 'no summary')}) — "
+                "leaving PR in draft",
+                tags=["ci_gate", "fixer_no_push"],
+            )
+            return {
+                "final_status": "fixer_gave_up",
+                "promoted_to_ready": False,
+                "promote_message": "",
+                "fix_attempts": attempts,
+                "watch": watch,
+            }
+
+        # Pushed — loop back and watch again. GitHub may take a moment to
+        # register the new run; watcher's poll_seconds covers that.
+
+    # Loop fell through (shouldn't happen because the failed branch returns).
+    return {
+        "final_status": "loop_exhausted",
+        "promoted_to_ready": False,
+        "promote_message": "",
+        "fix_attempts": attempts,
+        "watch": last_watch or {},
+    }
 
 
 @app.reasoner()
@@ -622,6 +753,7 @@ async def build(
 
     # 4. PUSH & DRAFT PR (if repo has a remote and PR creation is enabled)
     pr_results: list[RepoPRResult] = []
+    ci_gate_results: list[dict] = []
     build_summary = (
         f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
         + (f", verification: {verification.get('summary', '')}" if verification else "")
@@ -676,6 +808,25 @@ async def build(
                         f"Draft PR created for {ws_repo.repo_name}: {pr_r.get('pr_url')}",
                         tags=["build", "github_pr", "complete"],
                     )
+                    if cfg.check_ci and pr_r.get("pr_number"):
+                        gate = await _run_ci_gate(
+                            repo_path=ws_repo.absolute_path,
+                            pr_number=pr_r.get("pr_number", 0),
+                            pr_url=pr_r.get("pr_url", ""),
+                            integration_branch=repo_integration_branch,
+                            base_branch=repo_base_branch,
+                            cfg=cfg,
+                            resolved_models=resolved,
+                            goal=goal,
+                            completed_issues=[
+                                r for r in dag_result.get("completed_issues", [])
+                                if not r.get("repo_name") or r.get("repo_name") == ws_repo.repo_name
+                            ],
+                        )
+                        ci_gate_results.append({
+                            "repo_name": ws_repo.repo_name,
+                            **gate,
+                        })
             except Exception as e:
                 pr_results.append(RepoPRResult(
                     repo_name=ws_repo.repo_name,
@@ -770,6 +921,25 @@ async def build(
                         pr_url=pr_url,
                         pr_number=pr_result.get("pr_number", 0),
                     ))
+                    if cfg.check_ci and pr_result.get("pr_number"):
+                        gate = await _run_ci_gate(
+                            repo_path=repo_path,
+                            pr_number=pr_result.get("pr_number", 0),
+                            pr_url=pr_url,
+                            integration_branch=git_config["integration_branch"],
+                            base_branch=base_branch,
+                            cfg=cfg,
+                            resolved_models=resolved,
+                            goal=goal,
+                            completed_issues=dag_result.get("completed_issues", []),
+                        )
+                        ci_gate_results.append({
+                            "repo_name": (
+                                _repo_name_from_url(cfg.repo_url)
+                                if cfg.repo_url else "repo"
+                            ),
+                            **gate,
+                        })
             except Exception as e:
                 app.note(f"PR creation failed: {e}", tags=["build", "github_pr", "error"])
 
@@ -793,6 +963,7 @@ async def build(
         summary=f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
                 + (f", verification: {verification.get('summary', '')}" if verification else ""),
         pr_results=pr_results,
+        ci_gate_results=ci_gate_results,
     ).model_dump()
 
 

@@ -133,6 +133,50 @@ async def run_github_pr(
     )
 
 
+@fast_router.reasoner()
+async def run_ci_watcher(
+    repo_path: str,
+    pr_number: int,
+    wait_seconds: int = 1500,
+    poll_seconds: int = 30,
+) -> dict:
+    """Thin wrapper around execution_agents.run_ci_watcher."""
+    import swe_af.reasoners.execution_agents as _ea  # noqa: PLC0415
+    return await _ea.run_ci_watcher(
+        repo_path=repo_path, pr_number=pr_number,
+        wait_seconds=wait_seconds, poll_seconds=poll_seconds,
+    )
+
+
+@fast_router.reasoner()
+async def run_ci_fixer(
+    repo_path: str,
+    pr_number: int,
+    pr_url: str,
+    integration_branch: str,
+    base_branch: str,
+    failed_checks: list[dict],
+    iteration: int = 1,
+    max_iterations: int = 2,
+    goal: str = "",
+    completed_issues: list[dict] | None = None,
+    previous_attempts: list[dict] | None = None,
+    model: str = "sonnet",
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+) -> dict:
+    """Thin wrapper around execution_agents.run_ci_fixer."""
+    import swe_af.reasoners.execution_agents as _ea  # noqa: PLC0415
+    return await _ea.run_ci_fixer(
+        repo_path=repo_path, pr_number=pr_number, pr_url=pr_url,
+        integration_branch=integration_branch, base_branch=base_branch,
+        failed_checks=failed_checks, iteration=iteration,
+        max_iterations=max_iterations, goal=goal,
+        completed_issues=completed_issues, previous_attempts=previous_attempts,
+        model=model, permission_mode=permission_mode, ai_provider=ai_provider,
+    )
+
+
 from . import executor  # noqa: E402, F401 — registers fast_execute_tasks
 from . import planner  # noqa: E402, F401 — registers fast_plan_tasks
 from . import verifier  # noqa: E402, F401 — registers fast_verify
@@ -144,6 +188,8 @@ __all__ = [
     "run_verifier",
     "run_repo_finalize",
     "run_github_pr",
+    "run_ci_watcher",
+    "run_ci_fixer",
     "executor",
     "planner",
     "verifier",

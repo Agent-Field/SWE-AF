@@ -11,9 +11,13 @@ import os
 from pydantic import BaseModel
 
 from swe_af.execution.fatal_error import FatalHarnessError, check_fatal_harness_error
+from swe_af.execution.ci_gate import watch_pr_checks
 from swe_af.execution.schemas import (
     DEFAULT_AGENT_MAX_TURNS,
     AdvisorAction,
+    CIFailedCheck,
+    CIFixResult,
+    CIWatchResult,
     CodeReviewResult,
     CoderResult,
     GitHubPRResult,
@@ -30,6 +34,8 @@ from swe_af.execution.schemas import (
     VerificationResult,
     WorkspaceInfo,
 )
+from swe_af.prompts.ci_fixer import SYSTEM_PROMPT as CI_FIXER_SYSTEM_PROMPT
+from swe_af.prompts.ci_fixer import ci_fixer_task_prompt
 from swe_af.prompts.fix_generator import SYSTEM_PROMPT as FIX_GENERATOR_SYSTEM_PROMPT
 from swe_af.prompts.fix_generator import fix_generator_task_prompt
 from swe_af.prompts.issue_advisor import SYSTEM_PROMPT as ISSUE_ADVISOR_SYSTEM_PROMPT
@@ -1457,4 +1463,141 @@ async def run_github_pr(
     return GitHubPRResult(
         success=False,
         error_message="GitHub PR agent failed to produce a valid result.",
+    ).model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Phase C: Post-PR CI gate (watcher + fixer)
+# ---------------------------------------------------------------------------
+
+
+@router.reasoner()
+async def run_ci_watcher(
+    repo_path: str,
+    pr_number: int,
+    wait_seconds: int = 1500,
+    poll_seconds: int = 30,
+) -> dict:
+    """Poll `gh pr checks` until conclusive, the wait cap is hit, or no checks exist.
+
+    Deterministic — uses the `gh` CLI and does not invoke an LLM. Returns a
+    ``CIWatchResult`` dict; callers decide whether to fix-and-repush or
+    surface the failure.
+    """
+    router.note(
+        f"CI watcher: PR #{pr_number}, wait_cap={wait_seconds}s, poll={poll_seconds}s",
+        tags=["ci_watcher", "start"],
+    )
+
+    try:
+        result = await watch_pr_checks(
+            repo_path=repo_path,
+            pr_number=pr_number,
+            wait_seconds=wait_seconds,
+            poll_seconds=poll_seconds,
+        )
+    except Exception as e:
+        router.note(
+            f"CI watcher errored: {e}",
+            tags=["ci_watcher", "error"],
+        )
+        return CIWatchResult(
+            status="error",
+            pr_number=pr_number,
+            summary=f"CI watcher exception: {e}",
+        ).model_dump()
+
+    router.note(
+        f"CI watcher: status={result.status} ({result.summary})",
+        tags=["ci_watcher", "complete", result.status],
+    )
+    return result.model_dump()
+
+
+@router.reasoner()
+async def run_ci_fixer(
+    repo_path: str,
+    pr_number: int,
+    pr_url: str,
+    integration_branch: str,
+    base_branch: str,
+    failed_checks: list[dict],
+    iteration: int = 1,
+    max_iterations: int = 2,
+    goal: str = "",
+    completed_issues: list[dict] | None = None,
+    previous_attempts: list[dict] | None = None,
+    model: str = "sonnet",
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+) -> dict:
+    """Diagnose the failing CI checks, fix the production code, and push.
+
+    The system prompt emphatically forbids workarounds (skipping tests,
+    weakening assertions, swallowing errors, disabling jobs). The agent must
+    produce a legitimate fix and push it as a new commit on
+    ``integration_branch`` so the PR's checks rerun.
+
+    Returns a ``CIFixResult`` dict.
+    """
+    router.note(
+        f"CI fixer: PR #{pr_number}, attempt {iteration}/{max_iterations}, "
+        f"{len(failed_checks)} failing check(s)",
+        tags=["ci_fixer", "start"],
+    )
+
+    typed_failures = [
+        fc if isinstance(fc, CIFailedCheck) else CIFailedCheck(**fc)
+        for fc in failed_checks
+    ]
+
+    task_prompt = ci_fixer_task_prompt(
+        repo_path=repo_path,
+        pr_number=pr_number,
+        pr_url=pr_url,
+        integration_branch=integration_branch,
+        base_branch=base_branch,
+        failed_checks=typed_failures,
+        iteration=iteration,
+        max_iterations=max_iterations,
+        goal=goal,
+        completed_issues=completed_issues,
+        previous_attempts=previous_attempts,
+    )
+
+    provider = "claude-code" if ai_provider == "claude" else ai_provider
+
+    try:
+        result = await router.harness(
+            task_prompt,
+            system_prompt=CI_FIXER_SYSTEM_PROMPT,
+            schema=CIFixResult,
+            model=model,
+            provider=provider,
+            tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
+            cwd=repo_path,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
+        )
+        check_fatal_harness_error(result)
+        if result.parsed is not None:
+            router.note(
+                f"CI fixer complete: fixed={result.parsed.fixed}, "
+                f"pushed={result.parsed.pushed}, "
+                f"{len(result.parsed.files_changed)} file(s) changed",
+                tags=["ci_fixer", "complete"],
+            )
+            return result.parsed.model_dump()
+    except FatalHarnessError:
+        raise
+    except Exception as e:
+        router.note(
+            f"CI fixer agent failed: {e}",
+            tags=["ci_fixer", "error"],
+        )
+
+    return CIFixResult(
+        fixed=False,
+        summary="CI fixer agent failed to produce a valid result.",
+        error_message="CI fixer agent failed to produce a valid result.",
     ).model_dump()

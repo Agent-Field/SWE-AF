@@ -512,6 +512,25 @@ Requirements:
 - `GH_TOKEN` in `.env` with `repo` scope
 - Repo access for that token
 
+### Post-PR CI gate
+
+After SWE-AF pushes the integration branch and opens a draft PR, it watches
+GitHub Actions on that PR until checks are conclusive. If they fail, a
+bounded fix-and-repush loop runs an agent that is explicitly forbidden from
+silencing tests (no `pytest.skip`, no `xfail`, no commenting tests out, no
+loosening assertions) — it must produce a legitimate fix in the production
+code and push a new commit. When CI is green, the PR is promoted from draft
+to ready-for-review via `gh pr ready`.
+
+Configuration on `BuildConfig`:
+
+| Field | Default | Purpose |
+|---|---|---|
+| `check_ci` | `true` | Run the post-PR CI gate. Set `false` to return immediately after the draft PR is created. |
+| `max_ci_fix_cycles` | `2` | Cap on watch → fix → repush iterations after the initial push. |
+| `ci_wait_seconds` | `1500` | Wall-clock cap per `gh pr checks` watch (25 min). |
+| `ci_poll_seconds` | `30` | Poll interval for `gh pr checks`. |
+
 ## API Reference
 
 <details>

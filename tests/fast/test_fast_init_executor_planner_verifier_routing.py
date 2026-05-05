@@ -837,10 +837,11 @@ class TestBuildTimeoutPath:
 
 
 class TestFastRouterReasonerCount:
-    """After full import of all merged modules, fast_router must have exactly 8 reasoners."""
+    """After full import of all merged modules, fast_router must register all
+    expected reasoners — currently 10 (includes the post-PR CI gate pair)."""
 
-    def test_all_eight_reasoners_registered_via_subprocess(self) -> None:
-        """Subprocess validates full import chain produces 8 reasoners."""
+    def test_all_reasoners_registered_via_subprocess(self) -> None:
+        """Subprocess validates full import chain produces the expected reasoners."""
         code = """
 import os
 os.environ.setdefault("AGENTFIELD_SERVER", "http://localhost:9999")
@@ -853,6 +854,7 @@ names = {r["func"].__name__ for r in swe_af.fast.fast_router.reasoners}
 expected = {
     "run_git_init", "run_coder", "run_verifier",
     "run_repo_finalize", "run_github_pr",
+    "run_ci_watcher", "run_ci_fixer",
     "fast_execute_tasks", "fast_plan_tasks", "fast_verify",
 }
 missing = expected - names
@@ -862,13 +864,13 @@ if missing:
 if extra:
     print(f"EXTRA: {sorted(extra)}")
 assert not missing, f"Missing reasoners: {sorted(missing)}"
-assert len(names) == 8, f"Expected 8 reasoners, got {len(names)}: {sorted(names)}"
+assert names == expected, f"Unexpected reasoner set: {sorted(names)}"
 print("OK")
 """
         result = _run_subprocess(code, unset_keys=["NODE_ID"])
         assert result.returncode == 0, (
-            f"fast_router must have exactly 8 reasoners after full import chain; "
-            f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+            f"fast_router reasoner set must match the expected set after full "
+            f"import chain; stdout={result.stdout!r}, stderr={result.stderr!r}"
         )
         assert "OK" in result.stdout
 
