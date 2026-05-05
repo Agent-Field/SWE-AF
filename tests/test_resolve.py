@@ -222,12 +222,23 @@ class TestResolveOrchestration:
 
         def fake_run(cmd, *args, **kwargs):
             captured_subprocess.append(list(cmd))
+            # `git rev-parse HEAD` must return the new head sha so the gate
+            # can anchor the watcher; everything else returns empty stdout.
+            if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                return _make_completed_process(0, stdout="newsha-abc\n", stderr="")
             return _make_completed_process(0, stdout="", stderr="")
 
         monkeypatch.setattr(app_mod.subprocess, "run", fake_run)
 
-        # 3. Mock os.makedirs so we don't try to create /workspaces/...
+        # 3. Mock os.makedirs + asyncio.sleep so we don't actually wait the
+        #    startup grace period in tests.
         monkeypatch.setattr(app_mod.os, "makedirs", lambda *a, **k: None)
+        slept: list[float] = []
+
+        async def fake_sleep(seconds: float) -> None:
+            slept.append(seconds)
+
+        monkeypatch.setattr(app_mod.asyncio, "sleep", fake_sleep)
 
         # 4. Mock the resolver agent reasoner. The reply pass keys off
         #    addressed_comments — return one addressed and one not.
@@ -342,6 +353,15 @@ class TestResolveOrchestration:
         assert captured_ci_gate_kwargs["pr_number"] == 7
         assert captured_ci_gate_kwargs["integration_branch"] == "feature/x"
         assert captured_ci_gate_kwargs["base_branch"] == "main"
+        # SHA-anchor: must be the post-push HEAD captured from `git rev-parse`.
+        assert captured_ci_gate_kwargs["head_sha"] == "newsha-abc"
+
+        # ---- assert: startup grace fired before the gate ran -------------
+        # The grace sleep is the only asyncio.sleep we call in resolve(),
+        # and it must fire before _run_ci_gate. Default is 30s.
+        assert any(s >= 30 for s in slept), (
+            f"expected a >=30s grace sleep before the CI gate; got {slept}"
+        )
 
         # ---- assert: thread replies posted only for addressed=true -------
         assert len(result["thread_replies"]) == 1
@@ -399,6 +419,11 @@ class TestResolvePushFallback:
 
         monkeypatch.setattr(app_mod.subprocess, "run", fake_run)
         monkeypatch.setattr(app_mod.os, "makedirs", lambda *a, **k: None)
+        # The startup grace period adds an asyncio.sleep before the gate;
+        # mock so the test doesn't wait 30s in real time.
+        async def _no_sleep(_seconds: float) -> None:
+            return None
+        monkeypatch.setattr(app_mod.asyncio, "sleep", _no_sleep)
 
         # Resolver returned commits but pushed=False.
         resolver_payload = PRResolveResult(

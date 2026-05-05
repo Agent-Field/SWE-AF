@@ -180,6 +180,7 @@ async def _run_ci_gate(
     resolved_models: dict,
     goal: str,
     completed_issues: list[dict],
+    head_sha: str = "",
 ) -> dict:
     """Watch CI on the freshly-pushed PR; fix-and-repush if it fails.
 
@@ -189,6 +190,12 @@ async def _run_ci_gate(
 
     Returns a summary dict the build can attach to its response. Bounded by
     ``cfg.max_ci_fix_cycles`` and ``cfg.ci_wait_seconds`` per watch.
+
+    When ``head_sha`` is supplied, the watcher anchors verdicts to that
+    commit so the previous HEAD's lingering check states can't short-circuit
+    the gate. This is set by ``resolve()`` (which pushes onto a pre-existing
+    branch with prior CI history); ``build()`` leaves it empty because a
+    fresh PR has no prior checks to confuse the watcher.
     """
     attempts: list[dict] = []
     last_watch: dict | None = None
@@ -204,6 +211,7 @@ async def _run_ci_gate(
             pr_number=pr_number,
             wait_seconds=cfg.ci_wait_seconds,
             poll_seconds=cfg.ci_poll_seconds,
+            head_sha=head_sha,
         ), "run_ci_watcher")
         last_watch = watch
         status = watch.get("status", "error")
@@ -1368,9 +1376,35 @@ async def resolve(
                 tags=["resolve", "push", "error"],
             )
 
+    # Capture the new HEAD SHA after push so the CI watcher can anchor
+    # verdicts to this specific commit. Without an anchor, the first
+    # `gh pr checks` poll can return the PREVIOUS HEAD's lingering
+    # conclusive check states (passed/failed) and short-circuit the
+    # verdict before GitHub Actions has registered the new run.
+    head_sha = ""
+    sha_proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    if sha_proc.returncode == 0:
+        head_sha = sha_proc.stdout.strip()
+
     # ---- 6. Post-push CI watch + fix loop ----------------------------------
     ci_gate: dict | None = None
     if pushed and cfg.check_ci:
+        # Startup grace: GitHub Actions takes a few seconds to register a
+        # new workflow run after the push lands. Polling immediately races
+        # that registration. Sleeping `ci_startup_grace_seconds` first
+        # significantly reduces the chance the first poll sees the previous
+        # HEAD's stale state and lines up the SHA-anchored watcher with
+        # checks that actually belong to this push.
+        if cfg.ci_startup_grace_seconds > 0:
+            app.note(
+                f"CI gate: waiting {cfg.ci_startup_grace_seconds}s for "
+                f"GitHub Actions to register the new run",
+                tags=["resolve", "ci_gate", "grace"],
+            )
+            await asyncio.sleep(cfg.ci_startup_grace_seconds)
         try:
             ci_gate = await _run_ci_gate(
                 repo_path=repo_path,
@@ -1382,6 +1416,7 @@ async def resolve(
                 resolved_models=resolved_models,
                 goal=f"Resolve PR #{pr_number}",
                 completed_issues=[],
+                head_sha=head_sha,
             )
         except Exception as e:
             app.note(

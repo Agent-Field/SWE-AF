@@ -140,6 +140,7 @@ async def watch_pr_checks(
     pr_number: int,
     wait_seconds: int = 1500,
     poll_seconds: int = 30,
+    head_sha: str = "",
     runner: CommandRunner | None = None,
     sleep: Callable[[float], Any] | None = None,
     now: Callable[[], float] | None = None,
@@ -150,6 +151,15 @@ async def watch_pr_checks(
     truncated log tail fetched via ``gh run view --log-failed`` so downstream
     callers (the CI fixer) get actionable context without re-querying.
 
+    When ``head_sha`` is provided, the watcher refuses to declare a verdict
+    until ``gh pr checks`` reports a HEAD SHA matching ``head_sha`` (it
+    requeries with ``--json bucket,state,name,workflow,link,headSha`` and
+    filters). Without that anchor, immediately after a push the watcher
+    can briefly see the PREVIOUS HEAD's still-cached check states, hit
+    ``_is_conclusive``, and return ``passed`` / ``failed`` verdicts that
+    don't actually reflect the new commit. With it, mismatched checks are
+    treated as "not yet seen for this commit" and polling continues.
+
     Parameters are dependency-injected so the polling loop is unit-testable
     without invoking ``gh`` or sleeping in real wall-clock time.
     """
@@ -158,18 +168,26 @@ async def watch_pr_checks(
     clock = now or time.monotonic
 
     start = clock()
+    expected_sha = (head_sha or "").strip().lower()
 
     def elapsed() -> int:
         return int(clock() - start)
 
     last_checks: list[dict[str, Any]] = []
     saw_any_check = False
+    saw_any_for_sha = False  # only meaningful when expected_sha != ""
+
+    # Field set selected so we can both classify checks AND identify which
+    # commit they belong to. Older `gh` versions don't expose `headSha` for
+    # PR-level checks; the loop falls back to PR-level filtering when the
+    # field is missing on every row.
+    fields = "bucket,state,name,workflow,link,headSha"
 
     while True:
         proc = cmd_runner(
             [
                 "gh", "pr", "checks", str(pr_number),
-                "--json", "bucket,state,name,workflow,link",
+                "--json", fields,
             ],
             repo_path,
         )
@@ -202,29 +220,75 @@ async def watch_pr_checks(
                     summary=f"Could not parse gh pr checks output: {e}",
                 )
 
+        # When a head_sha is supplied, restrict the conclusive-verdict logic
+        # to checks that actually belong to that commit. This prevents the
+        # stale-state race where the previous HEAD's already-conclusive
+        # checks make `_is_conclusive` true and short-circuit the verdict
+        # before the new push's workflow run has registered. Checks that
+        # report a non-empty `headSha` are filtered; checks that report no
+        # headSha at all are kept (treated as "unknown — could be ours").
+        sha_unsupported = False
+        if expected_sha:
+            sha_matched = [
+                c for c in last_checks
+                if not str(c.get("headSha", "") or "").strip()
+                or str(c.get("headSha", "") or "").strip().lower() == expected_sha
+            ]
+            checks_for_verdict = sha_matched
+            if any(
+                str(c.get("headSha", "") or "").strip().lower() == expected_sha
+                for c in last_checks
+            ):
+                saw_any_for_sha = True
+            # Older `gh` versions don't populate `headSha` at all. If we
+            # have checks but none of them carry a headSha, we can't anchor
+            # — fall back to the old PR-level behavior so we don't hang
+            # waiting for a field that will never appear.
+            if last_checks and not any(
+                str(c.get("headSha", "") or "").strip()
+                for c in last_checks
+            ):
+                sha_unsupported = True
+        else:
+            checks_for_verdict = last_checks
+
         if last_checks:
             saw_any_check = True
 
-        if last_checks and _is_conclusive(last_checks):
-            verdict = _classify(last_checks)
+        # When anchored to a SHA, require that we've actually seen at least
+        # one check for that SHA before declaring a verdict. Exception:
+        # when the `gh` CLI clearly doesn't expose `headSha` (no field on
+        # any returned check), degrade to the old behavior — every check
+        # is verdict-eligible. Otherwise the first poll's lingering
+        # previous-HEAD checks could short-circuit `_is_conclusive` and
+        # lock in a stale "passed"/"failed".
+        if expected_sha and sha_unsupported:
+            verdict_eligible = bool(checks_for_verdict)
+        else:
+            verdict_eligible = checks_for_verdict and (
+                saw_any_for_sha if expected_sha else True
+            )
+
+        if verdict_eligible and _is_conclusive(checks_for_verdict):
+            verdict = _classify(checks_for_verdict)
             if verdict == "passed":
                 return CIWatchResult(
                     status="passed",
                     pr_number=pr_number,
                     elapsed_seconds=elapsed(),
-                    summary=f"All {len(last_checks)} check(s) passed",
+                    summary=f"All {len(checks_for_verdict)} check(s) passed",
                 )
-            failures = _build_failed_checks(last_checks, repo_path, cmd_runner)
+            failures = _build_failed_checks(checks_for_verdict, repo_path, cmd_runner)
             return CIWatchResult(
                 status="failed",
                 pr_number=pr_number,
                 elapsed_seconds=elapsed(),
                 failed_checks=failures,
-                summary=f"{len(failures)} of {len(last_checks)} check(s) failing",
+                summary=f"{len(failures)} of {len(checks_for_verdict)} check(s) failing",
             )
 
         if elapsed() >= wait_seconds:
-            if not saw_any_check:
+            if not saw_any_check or (expected_sha and not saw_any_for_sha):
                 return CIWatchResult(
                     status="no_checks",
                     pr_number=pr_number,
@@ -232,6 +296,11 @@ async def watch_pr_checks(
                     summary=(
                         f"No checks reported in {wait_seconds}s — "
                         "PR has no CI configured or checks not yet started"
+                        + (
+                            f" for {expected_sha[:10]}"
+                            if expected_sha and not saw_any_for_sha
+                            else ""
+                        )
                     ),
                 )
             return CIWatchResult(
@@ -240,7 +309,7 @@ async def watch_pr_checks(
                 elapsed_seconds=elapsed(),
                 summary=(
                     f"Checks still pending after {wait_seconds}s "
-                    f"({len(last_checks)} reporting)"
+                    f"({len(checks_for_verdict)} reporting)"
                 ),
             )
 

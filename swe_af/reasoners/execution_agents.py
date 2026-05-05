@@ -1481,15 +1481,23 @@ async def run_ci_watcher(
     pr_number: int,
     wait_seconds: int = 1500,
     poll_seconds: int = 30,
+    head_sha: str = "",
 ) -> dict:
     """Poll `gh pr checks` until conclusive, the wait cap is hit, or no checks exist.
 
     Deterministic — uses the `gh` CLI and does not invoke an LLM. Returns a
     ``CIWatchResult`` dict; callers decide whether to fix-and-repush or
     surface the failure.
+
+    When ``head_sha`` is supplied, the watcher refuses to declare a verdict
+    until it has seen at least one check belonging to that SHA. Used by
+    ``resolve()`` to avoid the stale-state race where the previous HEAD's
+    lingering conclusive checks short-circuit the verdict before the new
+    push's workflow run has registered.
     """
     router.note(
-        f"CI watcher: PR #{pr_number}, wait_cap={wait_seconds}s, poll={poll_seconds}s",
+        f"CI watcher: PR #{pr_number}, wait_cap={wait_seconds}s, poll={poll_seconds}s"
+        + (f", anchored to {head_sha[:10]}" if head_sha else ""),
         tags=["ci_watcher", "start"],
     )
 
@@ -1499,6 +1507,7 @@ async def run_ci_watcher(
             pr_number=pr_number,
             wait_seconds=wait_seconds,
             poll_seconds=poll_seconds,
+            head_sha=head_sha,
         )
     except Exception as e:
         router.note(

@@ -699,6 +699,16 @@ class BuildConfig(BaseModel):
     max_ci_fix_cycles: int = 2  # number of fix → repush → re-watch iterations
     ci_wait_seconds: int = 1500  # wall-clock cap per watch (25 min)
     ci_poll_seconds: int = 30  # poll interval for `gh pr checks --json`
+    # Wall-clock grace period to wait between `git push` and the first CI
+    # poll. GitHub Actions takes a few seconds to register a new workflow
+    # run after a push lands; without this grace, the first poll can race
+    # the registration and either return empty or — worse — return the
+    # PREVIOUS HEAD's lingering conclusive check states, causing the watcher
+    # to short-circuit with the wrong verdict. 30s comfortably covers the
+    # observed registration lag (~5–25s on this stack) without meaningfully
+    # extending overall gate runtime. Used by `resolve()`; `build()` doesn't
+    # need this because it creates a fresh PR with no prior check history.
+    ci_startup_grace_seconds: int = 30
     agent_timeout_seconds: int = 2700
     max_advisor_invocations: int = 2
     enable_issue_advisor: bool = True

@@ -293,6 +293,171 @@ class TestWatchPRChecks(unittest.IsolatedAsyncioTestCase):
         self.assertIn("not authenticated", result.summary)
 
 
+def _mk_check_with_sha(
+    bucket: str,
+    name: str,
+    head_sha: str,
+    workflow: str = "CI",
+):
+    """Helper for SHA-anchored tests — populates the headSha field."""
+    return {
+        "bucket": bucket,
+        "state": bucket.upper(),
+        "name": name,
+        "workflow": workflow,
+        "link": f"https://github.com/o/r/actions/runs/12345/job/{hash(name) & 0xFFFF}",
+        "headSha": head_sha,
+    }
+
+
+class TestWatchPRChecksHeadShaAnchor(unittest.IsolatedAsyncioTestCase):
+    """When ``head_sha`` is supplied, the watcher must not declare a verdict
+    based on checks that belong to a previous commit. This prevents the
+    stale-state race: just after a push, ``gh pr checks`` can briefly
+    return the previous HEAD's already-conclusive checks before the new
+    workflow run is registered, which would short-circuit the verdict.
+    """
+
+    async def test_stale_passed_checks_are_ignored_until_new_sha_appears(self) -> None:
+        """Previous HEAD's passed checks must not let the watcher return
+        ``passed`` before a check for the new SHA has even shown up."""
+        runner = _ScriptedRunner()
+        # Poll 1: only the OLD SHA's check, conclusive (would otherwise
+        # short-circuit to passed).
+        runner.checks_queue.append(_completed(stdout=json.dumps([
+            _mk_check_with_sha("pass", "Old Lint", head_sha="oldsha111"),
+        ])))
+        # Poll 2: still only the old check.
+        runner.checks_queue.append(_completed(stdout=json.dumps([
+            _mk_check_with_sha("pass", "Old Lint", head_sha="oldsha111"),
+        ])))
+        # Poll 3: new SHA's checks now visible AND conclusive (passed).
+        runner.checks_queue.append(_completed(stdout=json.dumps([
+            _mk_check_with_sha("pass", "Old Lint", head_sha="oldsha111"),
+            _mk_check_with_sha("pass", "Tests", head_sha="newsha222"),
+        ])))
+        clock = _FakeClock()
+        original = runner
+
+        def advance(cmd: Any, cwd: str) -> Any:
+            clock.t += 5.0
+            return original(cmd, cwd)
+
+        result = await watch_pr_checks(
+            repo_path="/tmp/repo", pr_number=42,
+            wait_seconds=600, poll_seconds=10,
+            head_sha="newsha222",
+            runner=advance, sleep=_no_sleep, now=clock.now,
+        )
+
+        self.assertEqual(result.status, "passed")
+        # Three polls, not one — the SHA anchor blocked the early return on
+        # poll 1's stale-but-conclusive snapshot.
+        self.assertEqual(len(runner.calls), 3)
+
+    async def test_stale_failed_checks_dont_short_circuit_to_failed(self) -> None:
+        """Critical regression: the previous HEAD's FAILED checks must not
+        be reported as the verdict for the new SHA. This was the observed
+        bug — `_run_ci_gate` saw stale failures from the previous commit and
+        either acted on them or got into an inconsistent state."""
+        runner = _ScriptedRunner()
+        # Poll 1: only the OLD SHA's failed check.
+        runner.checks_queue.append(_completed(stdout=json.dumps([
+            _mk_check_with_sha("fail", "Old Tests", head_sha="oldsha111"),
+        ])))
+        # Poll 2: new SHA's checks settle as passed.
+        runner.checks_queue.append(_completed(stdout=json.dumps([
+            _mk_check_with_sha("fail", "Old Tests", head_sha="oldsha111"),
+            _mk_check_with_sha("pass", "Tests", head_sha="newsha222"),
+        ])))
+        clock = _FakeClock()
+        original = runner
+
+        def advance(cmd: Any, cwd: str) -> Any:
+            clock.t += 5.0
+            return original(cmd, cwd)
+
+        result = await watch_pr_checks(
+            repo_path="/tmp/repo", pr_number=42,
+            wait_seconds=600, poll_seconds=10,
+            head_sha="newsha222",
+            runner=advance, sleep=_no_sleep, now=clock.now,
+        )
+
+        # The verdict is computed ONLY over checks for newsha222; the old
+        # failure must not poison it.
+        self.assertEqual(result.status, "passed")
+
+    async def test_no_checks_emitted_when_only_other_sha_checks_seen(self) -> None:
+        """If the wait cap fires and we never saw a check for the requested
+        SHA (e.g. CI is broken / paths-filter excluded the new commit),
+        return ``no_checks`` with a SHA-specific summary so the caller can
+        diagnose."""
+        runner = _ScriptedRunner()
+        for _ in range(5):
+            runner.checks_queue.append(_completed(stdout=json.dumps([
+                _mk_check_with_sha("pass", "Old", head_sha="oldsha111"),
+            ])))
+        clock = _FakeClock()
+        original = runner
+
+        def advance(cmd: Any, cwd: str) -> Any:
+            clock.t += 100.0
+            return original(cmd, cwd)
+
+        result = await watch_pr_checks(
+            repo_path="/tmp/repo", pr_number=42,
+            wait_seconds=300, poll_seconds=50,
+            head_sha="newsha222",
+            runner=advance, sleep=_no_sleep, now=clock.now,
+        )
+
+        self.assertEqual(result.status, "no_checks")
+        self.assertIn("newsha222"[:10], result.summary)
+
+    async def test_missing_head_sha_field_does_not_block_verdict(self) -> None:
+        """Older `gh` versions may not populate `headSha`. When the field is
+        absent (empty string), the watcher should treat the check as
+        "unknown — could be ours" and let it count toward the verdict, so
+        we degrade gracefully on outdated CLIs rather than hanging."""
+        runner = _ScriptedRunner()
+        # Check has no headSha at all (older gh CLI).
+        runner.checks_queue.append(_completed(stdout=json.dumps([
+            _mk_check("pass", "Tests"),  # no headSha
+        ])))
+        clock = _FakeClock()
+
+        result = await watch_pr_checks(
+            repo_path="/tmp/repo", pr_number=42,
+            wait_seconds=600, poll_seconds=10,
+            head_sha="newsha222",
+            runner=runner, sleep=_no_sleep, now=clock.now,
+        )
+
+        # With no headSha to compare, we accept the check and pass.
+        self.assertEqual(result.status, "passed")
+
+    async def test_no_anchor_preserves_existing_behavior(self) -> None:
+        """Without ``head_sha``, the watcher must behave exactly like before
+        (no filtering). Pin so the build() path's call site stays unaffected."""
+        runner = _ScriptedRunner()
+        # Conclusive on first poll — must short-circuit just like before.
+        runner.checks_queue.append(_completed(stdout=json.dumps([
+            _mk_check_with_sha("pass", "Tests", head_sha="anysha"),
+        ])))
+        clock = _FakeClock()
+
+        result = await watch_pr_checks(
+            repo_path="/tmp/repo", pr_number=42,
+            wait_seconds=600, poll_seconds=10,
+            # head_sha intentionally omitted
+            runner=runner, sleep=_no_sleep, now=clock.now,
+        )
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(len(runner.calls), 1)
+
+
 class TestMarkPRReady(unittest.TestCase):
     def test_promotes_on_success(self) -> None:
         runner = _ScriptedRunner()
