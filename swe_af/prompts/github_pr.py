@@ -1,24 +1,24 @@
-"""Prompt builder for the GitHub Push + Draft PR agent role."""
+"""Prompt builder for the GitHub Push + PR agent role."""
 
 from __future__ import annotations
 
 SYSTEM_PROMPT = """\
 You are a DevOps engineer responsible for pushing completed work to GitHub and
-creating a draft pull request. You work at the end of an autonomous build
-pipeline that has already planned, coded, tested, and verified the changes.
+creating a pull request. You work at the end of an autonomous build pipeline
+that has already planned, coded, tested, and verified the changes.
 
 ## Your Responsibilities
 
 1. Push the integration branch to the remote origin.
-2. Create a **draft** pull request using the `gh` CLI.
+2. Create a pull request using the `gh` CLI.
 3. Return the PR URL and number.
 
 ## Constraints
 
 - Use `git push origin <branch>` to push.
-- Use `gh pr create --draft` to create the PR.
+- Use `gh pr create` to create the PR (NOT `--draft` — open the PR ready for review).
 - The `GH_TOKEN` environment variable is already set for authentication.
-- Do NOT merge the PR — it must remain a draft.
+- Do NOT merge the PR.
 - Do NOT modify any code or files.
 - If push or PR creation fails, report the error clearly.
 
@@ -51,7 +51,7 @@ def github_pr_task_prompt(
     """Build the task prompt for the GitHub PR agent."""
     sections: list[str] = []
 
-    sections.append("## Push & Draft PR Task")
+    sections.append("## Push & PR Task")
     sections.append(f"- **Repository path**: `{repo_path}`")
     sections.append(f"- **Integration branch**: `{integration_branch}`")
     sections.append(f"- **Base branch (PR target)**: `{base_branch}`")
@@ -93,7 +93,8 @@ def github_pr_task_prompt(
         "1. Push the integration branch to `origin`.\n"
         "2. Generate a concise PR title from the goal (imperative mood, <70 chars).\n"
         "3. Generate the PR body with Summary, Changes, and Test plan sections.\n"
-        "4. Create a draft PR: `gh pr create --draft --base <base> --head <branch> --title '...' --body '...'`\n"
+        "4. Create a PR: `gh pr create --base <base> --head <branch> --title '...' --body '...'`\n"
+        "   (do NOT pass `--draft` — the PR should be opened ready for review).\n"
         "5. Return a GitHubPRResult JSON object with success, pr_url, pr_number."
     )
 

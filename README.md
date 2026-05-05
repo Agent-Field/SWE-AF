@@ -213,7 +213,7 @@ This is the core factory-control behavior: control agents supervise worker agent
 One click deploys SWE-AF + AgentField control plane + PostgreSQL. Set two environment variables in Railway:
 
 - `CLAUDE_CODE_OAUTH_TOKEN` — run `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits)
-- `GH_TOKEN` — GitHub personal access token with `repo` scope for draft PR creation
+- `GH_TOKEN` — GitHub personal access token with `repo` scope for PR creation
 
 Once deployed, trigger a build:
 
@@ -419,7 +419,7 @@ Benchmark assets, logs, evaluator, and generated projects live in [`examples/age
 ```bash
 cp .env.example .env
 # Add your API key: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
-# Optionally add GH_TOKEN for draft PR workflow
+# Optionally add GH_TOKEN for PR workflow
 
 docker compose up -d
 ```
@@ -482,9 +482,9 @@ Use a host control plane instead of Docker control-plane service:
 docker compose -f docker-compose.local.yml up -d
 ```
 
-## GitHub Repo Workflow (Clone -> Build -> Draft PR)
+## GitHub Repo Workflow (Clone -> Build -> PR)
 
-Pass `repo_url` instead of `repo_path` to let SWE-AF clone and open a draft PR after execution.
+Pass `repo_url` instead of `repo_path` to let SWE-AF clone and open a PR after execution.
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
@@ -514,19 +514,20 @@ Requirements:
 
 ### Post-PR CI gate
 
-After SWE-AF pushes the integration branch and opens a draft PR, it watches
-GitHub Actions on that PR until checks are conclusive. If they fail, a
-bounded fix-and-repush loop runs an agent that is explicitly forbidden from
-silencing tests (no `pytest.skip`, no `xfail`, no commenting tests out, no
-loosening assertions) — it must produce a legitimate fix in the production
-code and push a new commit. When CI is green, the PR is promoted from draft
-to ready-for-review via `gh pr ready`.
+After SWE-AF pushes the integration branch and opens a PR (ready for review,
+not draft), it watches GitHub Actions on that PR until checks are
+conclusive. If they fail, a bounded fix-and-repush loop runs an agent that
+is explicitly forbidden from silencing tests (no `pytest.skip`, no `xfail`,
+no commenting tests out, no loosening assertions) — it must produce a
+legitimate fix in the production code and push a new commit. When CI is
+green, the gate returns success; when CI fails after fix attempts, the PR
+stays open with visible failing checks so a human reviewer can step in.
 
 Configuration on `BuildConfig`:
 
 | Field | Default | Purpose |
 |---|---|---|
-| `check_ci` | `true` | Run the post-PR CI gate. Set `false` to return immediately after the draft PR is created. |
+| `check_ci` | `true` | Run the post-PR CI gate. Set `false` to return immediately after the PR is created. |
 | `max_ci_fix_cycles` | `2` | Cap on watch → fix → repush iterations after the initial push. |
 | `ci_wait_seconds` | `1500` | Wall-clock cap per `gh pr checks` watch (25 min). |
 | `ci_poll_seconds` | `30` | Poll interval for `gh pr checks`. |
@@ -584,7 +585,7 @@ Every specialist is also callable directly:
 | `run_integration_tester` | merged repo -> integration results                   |
 | `run_verifier`           | repo + PRD -> acceptance pass/fail                   |
 | `generate_fix_issues`    | failed criteria -> targeted fix issues               |
-| `run_github_pr`          | branch -> push + draft PR                            |
+| `run_github_pr`          | branch -> push + PR                            |
 
 </details>
 

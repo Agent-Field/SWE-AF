@@ -1,9 +1,12 @@
 """Deterministic helpers for the post-PR CI gate.
 
-The CI gate watches GitHub Actions checks on a draft PR after SWE-AF pushes
-its work, using the ``gh`` CLI. Polling, log retrieval, and PR-state
-transitions live here so they can be unit-tested without a GitHub remote or
-an LLM in the loop.
+The CI gate watches GitHub Actions checks on a PR after SWE-AF pushes its
+work, using the ``gh`` CLI. Polling and log retrieval live here so they can
+be unit-tested without a GitHub remote or an LLM in the loop.
+
+PRs are opened ready for review (no draft phase). ``mark_pr_ready`` remains
+in this module as a backwards-compatible no-op for callers that still
+invoke it, but the build pipeline no longer calls it.
 """
 
 from __future__ import annotations
@@ -251,6 +254,10 @@ def mark_pr_ready(
     runner: CommandRunner | None = None,
 ) -> tuple[bool, str]:
     """Promote a draft PR to ready-for-review via `gh pr ready <num>`.
+
+    Kept for backwards compatibility and as a manually-callable utility.
+    The build pipeline no longer invokes this — PRs are now opened ready
+    for review from the start (no draft phase) so promotion is unnecessary.
 
     Returns ``(success, message)``. ``message`` carries the gh stderr on
     failure (truncated), or a short confirmation on success.
