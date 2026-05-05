@@ -1197,6 +1197,367 @@ async def execute(
 
 
 @app.reasoner()
+async def resolve(
+    pr_url: str,
+    pr_number: int,
+    repo_url: str,
+    head_branch: str,
+    base_branch: str = "main",
+    ci_failures: list[dict] | None = None,
+    review_comments: list[dict] | None = None,
+    additional_context: str = "",
+    config: dict | None = None,
+) -> dict:
+    """Update an existing PR: merge base, fix CI, address review comments, push.
+
+    Single-repo only (v1) — no multi-repo workspace, no forked-PR support.
+    Caller is expected to pass the PR's own head_branch (within the same
+    repo as ``repo_url``); SWE-AF will check it out, merge ``base_branch``
+    into it (always merge, never rebase), hand the working tree to the
+    PR-resolver agent, push, run the CI fix loop, and post brief replies +
+    resolve threads for every addressed review comment.
+
+    Returns a dict with shape::
+
+        {
+            "pr_url": str,
+            "pr_number": int,
+            "head_branch": str,
+            "base_branch": str,
+            "merge_state": "clean" | "merged" | "conflict" | "skipped",
+            "resolve_result": <PRResolveResult>,
+            "ci_gate": {...} | None,
+            "thread_replies": [{"comment_id", "thread_id", "replied", "resolved"}, ...],
+            "summary": str,
+            "success": bool,
+        }
+    """
+    ci_failures = ci_failures or []
+    review_comments = review_comments or []
+    cfg = BuildConfig(**config) if config else BuildConfig()
+    cfg.enable_github_pr = False  # the PR already exists — never create
+
+    if not pr_number or not head_branch or not repo_url or not pr_url:
+        raise ValueError(
+            "resolve requires non-empty pr_url, pr_number, repo_url, head_branch"
+        )
+
+    build_id = uuid.uuid4().hex[:8]
+    repo_name = _repo_name_from_url(repo_url)
+    repo_path = f"/workspaces/{repo_name}-resolve-{build_id}"
+
+    app.note(
+        f"Resolve starting (build_id={build_id}) — PR #{pr_number}",
+        tags=["resolve", "start"],
+    )
+
+    # ---- 1. Clone -----------------------------------------------------------
+    os.makedirs(repo_path, exist_ok=True)
+    clone = subprocess.run(
+        ["git", "clone", repo_url, repo_path],
+        capture_output=True, text=True,
+    )
+    if clone.returncode != 0:
+        err = clone.stderr.strip()
+        app.note(
+            f"Resolve clone failed: {err}",
+            tags=["resolve", "clone", "error"],
+        )
+        raise RuntimeError(f"git clone failed: {err}")
+
+    # ---- 2. Fetch PR head + checkout ---------------------------------------
+    fetch_pr = subprocess.run(
+        ["git", "fetch", "origin", f"pull/{pr_number}/head:{head_branch}"],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    if fetch_pr.returncode != 0:
+        # Fallback: branch may already be a regular ref on origin (same-repo PR).
+        fetch_branch = subprocess.run(
+            ["git", "fetch", "origin", f"{head_branch}:{head_branch}"],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        if fetch_branch.returncode != 0:
+            err = (fetch_pr.stderr + "\n" + fetch_branch.stderr).strip()
+            app.note(
+                f"Resolve fetch PR head failed: {err}",
+                tags=["resolve", "fetch", "error"],
+            )
+            raise RuntimeError(f"git fetch PR head failed: {err}")
+
+    checkout = subprocess.run(
+        ["git", "checkout", head_branch],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    if checkout.returncode != 0:
+        err = checkout.stderr.strip()
+        app.note(
+            f"Resolve checkout failed: {err}",
+            tags=["resolve", "checkout", "error"],
+        )
+        raise RuntimeError(f"git checkout {head_branch} failed: {err}")
+
+    # Configure committer identity for any merge / commit we make in this
+    # workspace. Without this, `git commit` errors on a fresh clone in the
+    # SWE-AF container. Match the existing run_github_pr / repo_finalize
+    # convention (a bot identity).
+    for key, value in (
+        ("user.email", os.getenv("SWE_AF_GIT_EMAIL", "swe-af@users.noreply.github.com")),
+        ("user.name", os.getenv("SWE_AF_GIT_NAME", "SWE-AF")),
+    ):
+        subprocess.run(
+            ["git", "config", key, value],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+
+    # ---- 3. Merge base into head (always merge, never rebase) --------------
+    merge_state, conflicted_files = _attempt_base_merge(
+        repo_path=repo_path,
+        base_branch=base_branch,
+    )
+    app.note(
+        f"Resolve merge state: {merge_state}"
+        + (f" ({len(conflicted_files)} conflict(s))" if conflicted_files else ""),
+        tags=["resolve", "merge", merge_state],
+    )
+
+    # ---- 4. Run the PR resolver agent --------------------------------------
+    resolved_models = cfg.resolved_models()
+    # Prefer the ci_fixer slot (sized for code-fix tasks); fall back to coder
+    # if not configured.
+    resolver_model = (
+        resolved_models.get("ci_fixer_model")
+        or resolved_models.get("coder_model")
+        or "sonnet"
+    )
+
+    resolve_result = _unwrap(await app.call(
+        f"{NODE_ID}.run_pr_resolver",
+        repo_path=repo_path,
+        pr_number=pr_number,
+        pr_url=pr_url,
+        head_branch=head_branch,
+        base_branch=base_branch,
+        merge_state=merge_state,
+        conflicted_files=conflicted_files,
+        failed_checks=ci_failures,
+        review_comments=review_comments,
+        additional_context=additional_context,
+        model=resolver_model,
+        permission_mode=cfg.permission_mode,
+        ai_provider=cfg.ai_provider,
+    ), "run_pr_resolver")
+
+    # ---- 5. Ensure push happened (agent may have skipped on failure) -------
+    pushed = bool(resolve_result.get("pushed"))
+    if not pushed and resolve_result.get("commit_shas"):
+        # Agent committed but didn't push — push for it.
+        push = subprocess.run(
+            ["git", "push", "origin", head_branch],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        if push.returncode == 0:
+            pushed = True
+            resolve_result["pushed"] = True
+            app.note(
+                f"Resolve: pushed agent's commits to {head_branch}",
+                tags=["resolve", "push"],
+            )
+        else:
+            app.note(
+                f"Resolve push failed: {push.stderr.strip()}",
+                tags=["resolve", "push", "error"],
+            )
+
+    # ---- 6. Post-push CI watch + fix loop ----------------------------------
+    ci_gate: dict | None = None
+    if pushed and cfg.check_ci:
+        try:
+            ci_gate = await _run_ci_gate(
+                repo_path=repo_path,
+                pr_number=pr_number,
+                pr_url=pr_url,
+                integration_branch=head_branch,
+                base_branch=base_branch,
+                cfg=cfg,
+                resolved_models=resolved_models,
+                goal=f"Resolve PR #{pr_number}",
+                completed_issues=[],
+            )
+        except Exception as e:
+            app.note(
+                f"Resolve CI gate errored (non-fatal): {e}",
+                tags=["resolve", "ci_gate", "error"],
+            )
+
+    # ---- 7. Reply + resolveReviewThread for addressed comments -------------
+    addressed = [
+        c for c in resolve_result.get("addressed_comments", [])
+        if c.get("addressed")
+    ]
+    thread_replies: list[dict] = []
+    if addressed:
+        thread_replies = await _post_thread_replies_and_resolve(
+            repo_path=repo_path,
+            pr_number=pr_number,
+            addressed=addressed,
+        )
+
+    # ---- 8. Workspace cleanup (non-blocking) -------------------------------
+    try:
+        import shutil
+        shutil.rmtree(repo_path, ignore_errors=True)
+    except Exception:
+        pass
+
+    success = bool(resolve_result.get("fixed") and pushed)
+    summary = (
+        f"PR #{pr_number}: merge={merge_state}, "
+        f"{len(resolve_result.get('files_changed', []))} file(s) changed, "
+        f"{sum(1 for c in addressed)}/{len(resolve_result.get('addressed_comments', []))} comment(s) addressed"
+        + (f", CI={ci_gate.get('final_status', 'n/a')}" if ci_gate else "")
+    )
+
+    app.note(
+        f"Resolve {'succeeded' if success else 'completed with issues'}: {summary}",
+        tags=["resolve", "complete"],
+    )
+
+    return {
+        "pr_url": pr_url,
+        "pr_number": pr_number,
+        "head_branch": head_branch,
+        "base_branch": base_branch,
+        "merge_state": merge_state,
+        "resolve_result": resolve_result,
+        "ci_gate": ci_gate,
+        "thread_replies": thread_replies,
+        "summary": summary,
+        "success": success,
+    }
+
+
+def _attempt_base_merge(*, repo_path: str, base_branch: str) -> tuple[str, list[str]]:
+    """Fetch ``base_branch`` and merge it into the current branch.
+
+    Returns ``(merge_state, conflicted_files)`` where ``merge_state`` is one of
+    "clean" (already up to date), "merged" (merge succeeded), "conflict" (merge
+    in progress with unresolved conflicts), or "skipped" (couldn't fetch base).
+
+    Always uses ``git merge`` — never rebase — to preserve PR history.
+    """
+    fetch = subprocess.run(
+        ["git", "fetch", "origin", base_branch],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    if fetch.returncode != 0:
+        return "skipped", []
+
+    # Already up to date? — check if base is an ancestor of HEAD.
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", f"origin/{base_branch}", "HEAD"],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    if ancestor.returncode == 0:
+        return "clean", []
+
+    merge = subprocess.run(
+        ["git", "merge", "--no-edit", "--no-ff", f"origin/{base_branch}"],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    if merge.returncode == 0:
+        return "merged", []
+
+    # Merge produced conflicts — list them and leave the merge in progress
+    # for the resolver agent to finish.
+    diff = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=U"],
+        cwd=repo_path, capture_output=True, text=True,
+    )
+    conflicted = [
+        line.strip() for line in diff.stdout.splitlines() if line.strip()
+    ]
+    return "conflict", conflicted
+
+
+async def _post_thread_replies_and_resolve(
+    *,
+    repo_path: str,
+    pr_number: int,
+    addressed: list[dict],
+) -> list[dict]:
+    """Post a brief reply and resolve the thread for each addressed comment.
+
+    Uses the ``gh`` CLI (authenticated via GH_TOKEN in the SWE-AF container)
+    so the GraphQL ``resolveReviewThread`` mutation runs under the same
+    identity as the push. Replies are short — the agent's ``note`` field is
+    used verbatim, capped at 500 chars to keep PR conversations tidy.
+
+    Returns one entry per addressed comment with the outcome of both the
+    reply post and the thread resolution. Failures are non-fatal — the
+    push has already landed, so the PR is in a good state regardless.
+    """
+    results: list[dict] = []
+    for entry in addressed:
+        comment_id = int(entry.get("comment_id") or 0)
+        thread_id = (entry.get("thread_id") or "").strip()
+        note = (entry.get("note") or "Addressed.").strip()[:500] or "Addressed."
+
+        replied = False
+        resolved = False
+        reply_error = ""
+        resolve_error = ""
+
+        # Inline review-thread reply (REST). Skipped for non-review comments
+        # (comment_id == 0), e.g. PR conversation comments — those don't have
+        # a per-line thread to reply on; the orchestrator's status comment
+        # carries the response.
+        if comment_id:
+            reply_path = (
+                f"repos/:owner/:repo/pulls/{pr_number}/comments/{comment_id}/replies"
+            )
+            reply = subprocess.run(
+                [
+                    "gh", "api", "-X", "POST", reply_path,
+                    "-f", f"body={note}",
+                ],
+                cwd=repo_path, capture_output=True, text=True,
+            )
+            if reply.returncode == 0:
+                replied = True
+            else:
+                reply_error = reply.stderr.strip()[:300]
+
+        # Thread resolution (GraphQL). Skipped when no thread id is known.
+        if thread_id:
+            mutation = (
+                "mutation($id:ID!){resolveReviewThread(input:{threadId:$id})"
+                "{thread{isResolved}}}"
+            )
+            res = subprocess.run(
+                [
+                    "gh", "api", "graphql",
+                    "-f", f"query={mutation}",
+                    "-f", f"id={thread_id}",
+                ],
+                cwd=repo_path, capture_output=True, text=True,
+            )
+            if res.returncode == 0:
+                resolved = True
+            else:
+                resolve_error = res.stderr.strip()[:300]
+
+        results.append({
+            "comment_id": comment_id,
+            "thread_id": thread_id,
+            "replied": replied,
+            "resolved": resolved,
+            "reply_error": reply_error,
+            "resolve_error": resolve_error,
+        })
+    return results
+
+
+@app.reasoner()
 async def resume_build(
     repo_path: str,
     artifacts_dir: str = ".artifacts",
