@@ -687,13 +687,14 @@ class BuildConfig(BaseModel):
     permission_mode: str = ""
     repo_url: str = ""  # GitHub URL to clone (single-repo shorthand)
     repos: list[RepoSpec] = []  # Multi-repo list; normalised by _normalize_repos
-    enable_github_pr: bool = True  # Create draft PR after build
+    enable_github_pr: bool = True  # Create PR (ready for review) after build
     github_pr_base: str = ""  # PR base branch (default: repo's default branch)
-    # Post-PR CI gate. When True, after the draft PR is opened SWE-AF waits for
-    # CI to be conclusive, runs a bounded fix-and-repush loop on failure, and
-    # promotes the PR with `gh pr ready` only when CI is green. When False,
-    # the build returns immediately after creating the draft PR (legacy
-    # behaviour).
+    # Post-PR CI gate. When True, after the PR is opened SWE-AF waits for CI
+    # to be conclusive and runs a bounded fix-and-repush loop on failure.
+    # PRs are opened ready for review (no draft phase), so this gate does
+    # NOT toggle a draft → ready promotion — passing CI is success, failing
+    # CI leaves the PR open with visible failing checks. When False, the
+    # build returns immediately after creating the PR.
     check_ci: bool = True
     max_ci_fix_cycles: int = 2  # number of fix → repush → re-watch iterations
     ci_wait_seconds: int = 1500  # wall-clock cap per watch (25 min)
@@ -853,7 +854,7 @@ class RepoFinalizeResult(BaseModel):
 
 
 class GitHubPRResult(BaseModel):
-    """Result of pushing and creating a draft PR on GitHub."""
+    """Result of pushing and creating a PR on GitHub."""
 
     success: bool
     pr_url: str = ""

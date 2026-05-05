@@ -18,7 +18,6 @@ from swe_af.reasoners.pipeline import _assign_sequence_numbers, _compute_levels,
 from swe_af.reasoners.schemas import PlanResult, ReviewResult
 
 from agentfield import Agent
-from swe_af.execution.ci_gate import mark_pr_ready
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.schemas import (
     BuildConfig,
@@ -182,8 +181,11 @@ async def _run_ci_gate(
     goal: str,
     completed_issues: list[dict],
 ) -> dict:
-    """Watch CI on the freshly-pushed draft PR; fix-and-repush if it fails;
-    promote to ready-for-review when green.
+    """Watch CI on the freshly-pushed PR; fix-and-repush if it fails.
+
+    PRs are opened ready for review (no draft phase), so this gate only does
+    the watch + fix-loop work — there's no promotion step. On terminal
+    failure the PR stays open with visible failing checks for human review.
 
     Returns a summary dict the build can attach to its response. Bounded by
     ``cfg.max_ci_fix_cycles`` and ``cfg.ci_wait_seconds`` per watch.
@@ -207,28 +209,24 @@ async def _run_ci_gate(
         status = watch.get("status", "error")
 
         if status in ("passed", "no_checks"):
-            ok, msg = mark_pr_ready(repo_path=repo_path, pr_number=pr_number)
             app.note(
-                f"CI gate: {status} → {msg}",
-                tags=["ci_gate", "ready" if ok else "ready_failed"],
+                f"CI gate: {status} — PR ready for review",
+                tags=["ci_gate", "ready"],
             )
             return {
                 "final_status": "passed" if status == "passed" else "no_checks",
-                "promoted_to_ready": ok,
-                "promote_message": msg,
                 "fix_attempts": attempts,
                 "watch": watch,
             }
 
         if status in ("timed_out", "error"):
             app.note(
-                f"CI gate: {status} — leaving PR in draft. {watch.get('summary', '')}",
+                f"CI gate: {status} — PR stays open with failing checks. "
+                f"{watch.get('summary', '')}",
                 tags=["ci_gate", status],
             )
             return {
                 "final_status": status,
-                "promoted_to_ready": False,
-                "promote_message": "",
                 "fix_attempts": attempts,
                 "watch": watch,
             }
@@ -237,13 +235,11 @@ async def _run_ci_gate(
         if cycle >= cfg.max_ci_fix_cycles:
             app.note(
                 f"CI gate: exhausted {cfg.max_ci_fix_cycles} fix cycle(s) — "
-                "leaving PR in draft",
+                "PR stays open with failing checks",
                 tags=["ci_gate", "exhausted"],
             )
             return {
                 "final_status": "failed_exhausted",
-                "promoted_to_ready": False,
-                "promote_message": "",
                 "fix_attempts": attempts,
                 "watch": watch,
             }
@@ -276,13 +272,11 @@ async def _run_ci_gate(
         if not fix.get("pushed"):
             app.note(
                 f"CI gate: fixer did not push ({fix.get('summary', 'no summary')}) — "
-                "leaving PR in draft",
+                "PR stays open with failing checks",
                 tags=["ci_gate", "fixer_no_push"],
             )
             return {
                 "final_status": "fixer_gave_up",
-                "promoted_to_ready": False,
-                "promote_message": "",
                 "fix_attempts": attempts,
                 "watch": watch,
             }
@@ -293,8 +287,6 @@ async def _run_ci_gate(
     # Loop fell through (shouldn't happen because the failed branch returns).
     return {
         "final_status": "loop_exhausted",
-        "promoted_to_ready": False,
-        "promote_message": "",
         "fix_attempts": attempts,
         "watch": last_watch or {},
     }
@@ -761,7 +753,7 @@ async def build(
 
     if manifest and len(manifest.repos) > 1:
         # Multi-repo: one PR per repo where create_pr=True
-        app.note("Phase 4: Multi-repo Push + Draft PRs", tags=["build", "github_pr", "multi-repo"])
+        app.note("Phase 4: Multi-repo Push + PRs", tags=["build", "github_pr", "multi-repo"])
         for ws_repo in manifest.repos:
             if not ws_repo.create_pr or not cfg.enable_github_pr:
                 continue
@@ -805,7 +797,7 @@ async def build(
                 ))
                 if pr_r.get("pr_url"):
                     app.note(
-                        f"Draft PR created for {ws_repo.repo_name}: {pr_r.get('pr_url')}",
+                        f"PR created for {ws_repo.repo_name}: {pr_r.get('pr_url')}",
                         tags=["build", "github_pr", "complete"],
                     )
                     if cfg.check_ci and pr_r.get("pr_number"):
@@ -842,7 +834,7 @@ async def build(
         # Single-repo: existing PR logic, wrap result in RepoPRResult
         remote_url = git_config.get("remote_url", "") if git_config else ""
         if remote_url and cfg.enable_github_pr:
-            app.note("Phase 4: Push + Draft PR", tags=["build", "github_pr"])
+            app.note("Phase 4: Push + PR", tags=["build", "github_pr"])
             base_branch = (
                 cfg.github_pr_base
                 or (git_config.get("remote_default_branch") if git_config else "")
@@ -866,7 +858,7 @@ async def build(
                 ), "run_github_pr")
                 pr_url = pr_result.get("pr_url", "")
                 if pr_url:
-                    app.note(f"Draft PR created: {pr_url}", tags=["build", "github_pr", "complete"])
+                    app.note(f"PR created: {pr_url}", tags=["build", "github_pr", "complete"])
 
                     # Programmatically append plan docs to PR body
                     if prd_markdown or architecture_markdown:
