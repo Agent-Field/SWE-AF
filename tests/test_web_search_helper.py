@@ -6,6 +6,13 @@ Verifies the helper that splices web_search into a router.harness call:
 - Graceful degradation when agentfield doesn't ship the helper, or when
   claude_agent_sdk isn't installed (each reasoner must keep working in
   that case — web_search is opportunistic, not required).
+
+Why we mock ``get_web_search_server``: this PR ships against the existing
+``agentfield>=0.1.77`` floor (the new ``tools.web_search`` module ships in
+0.1.78). We need the helper-shape tests to verify wiring whether or not
+the installed agentfield happens to expose the function — so we monkeypatch
+it to a known fake. The dedicated graceful-degradation tests below do not
+use this fixture; they exercise the real None / ImportError paths.
 """
 
 from __future__ import annotations
@@ -14,6 +21,26 @@ import importlib
 from unittest.mock import patch
 
 import pytest
+
+
+_FAKE_SERVER = {"type": "sdk", "name": "af_search", "instance": object()}
+_FAKE_TOOL_NAMES = ["mcp__af_search__web_search"]
+
+
+def _fake_get_web_search_server():
+    return _FAKE_SERVER, _FAKE_TOOL_NAMES
+
+
+@pytest.fixture
+def fake_web_search(monkeypatch):
+    """Pretend agentfield's web_search helper is installed and returns a
+    deterministic fake. Use this on tests that verify the wiring shape."""
+    from swe_af.tools import web_search as ws
+
+    monkeypatch.setattr(ws, "get_web_search_server", _fake_get_web_search_server)
+    ws._cached_server.cache_clear()
+    yield
+    ws._cached_server.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +54,7 @@ def _reset_cache():
     ws._cached_server.cache_clear()
 
 
-def test_with_web_search_extends_tools_and_attaches_server():
+def test_with_web_search_extends_tools_and_attaches_server(fake_web_search):
     """When agentfield's web_search is available, the helper must return both
     extended tools AND mcp_servers under the 'af_search' key."""
     from swe_af.tools.web_search import with_web_search
@@ -49,7 +76,7 @@ def test_with_web_search_extends_tools_and_attaches_server():
     assert out["mcp_servers"]["af_search"] is not None
 
 
-def test_with_web_search_returns_a_fresh_list_each_call():
+def test_with_web_search_returns_a_fresh_list_each_call(fake_web_search):
     """Mutating the returned tools list must not bleed into subsequent calls
     (the helper must not return the same list object)."""
     from swe_af.tools.web_search import with_web_search
@@ -61,7 +88,7 @@ def test_with_web_search_returns_a_fresh_list_each_call():
     assert "MUTATED" not in b["tools"]
 
 
-def test_is_web_search_available_returns_true_when_wired():
+def test_is_web_search_available_returns_true_when_wired(fake_web_search):
     from swe_af.tools.web_search import is_web_search_available
 
     assert is_web_search_available() is True
@@ -106,11 +133,10 @@ def test_cached_server_is_called_once_across_invocations(monkeypatch):
     from swe_af.tools import web_search as ws
 
     call_count = {"n": 0}
-    real = ws.get_web_search_server
 
     def _counting():
         call_count["n"] += 1
-        return real()
+        return _fake_get_web_search_server()
 
     monkeypatch.setattr(ws, "get_web_search_server", _counting)
     ws._cached_server.cache_clear()

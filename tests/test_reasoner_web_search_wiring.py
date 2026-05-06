@@ -28,16 +28,35 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
+_FAKE_SERVER = {"type": "sdk", "name": "af_search", "instance": object()}
+_FAKE_TOOL_NAMES = ["mcp__af_search__web_search"]
+
+
 @pytest.fixture
 def captured_harness(monkeypatch):
     """Wire up the singleton router with a stub agent + AsyncMock harness so
     reasoner code (which calls router.note/router.harness) runs end-to-end
     without spinning up the real Agent / FastAPI machinery.
 
+    Also forces ``with_web_search`` into the "available" branch by patching
+    its underlying ``get_web_search_server`` to a deterministic fake. This
+    makes the wiring contract testable independent of which agentfield
+    version (or whether claude_agent_sdk) is installed in the test env —
+    important right now because this PR ships against the existing
+    ``agentfield>=0.1.77`` floor (which doesn't yet include the helper).
+    The dedicated graceful-degradation tests in test_web_search_helper.py
+    cover the no-helper / no-SDK paths separately.
+
     Captures the kwargs each reasoner passes to ``harness`` so tests can
     inspect them.
     """
     from swe_af.reasoners import router
+    from swe_af.tools import web_search as ws
+
+    monkeypatch.setattr(
+        ws, "get_web_search_server", lambda: (_FAKE_SERVER, _FAKE_TOOL_NAMES)
+    )
+    ws._cached_server.cache_clear()
 
     class _FakeResult:
         is_error = False
