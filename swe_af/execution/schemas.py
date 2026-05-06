@@ -544,17 +544,32 @@ def _default_runtime() -> Literal["claude_code", "open_code"]:
     return "claude_code"
 
 
-def _default_model_from_env() -> str | None:
-    """Honor the ``SWE_DEFAULT_MODEL`` env var.
+_DEFAULT_MODEL_ENV_VARS: tuple[str, ...] = (
+    "SWE_DEFAULT_MODEL",
+    "AI_MODEL",
+    "HARNESS_MODEL",
+)
 
-    Lets the deployer pin a single model id that overrides every role
-    default — without editing code or threading a ``config`` through every
-    caller. Caller-supplied ``models={"default": …}`` and per-role overrides
-    still win (see ``resolve_runtime_models`` precedence). Empty or unset
-    returns ``None``, which means "use runtime base defaults".
+
+def _default_model_from_env() -> str | None:
+    """Pick a single model id from deployer env vars.
+
+    Cascades through the well-known env-var names this stack uses for model
+    selection so the same Railway / docker-compose variable that points
+    pr-af and github-buddy at a model also applies here, without needing
+    a SWE-AF-specific name. First non-empty value wins:
+
+        SWE_DEFAULT_MODEL  →  AI_MODEL  →  HARNESS_MODEL
+
+    Caller-supplied ``models={"default": …}`` and per-role overrides still
+    beat the env value (see ``resolve_runtime_models`` precedence). All
+    unset / empty → ``None``, which means "use the runtime base defaults".
     """
-    value = os.getenv("SWE_DEFAULT_MODEL", "").strip()
-    return value or None
+    for var in _DEFAULT_MODEL_ENV_VARS:
+        value = os.getenv(var, "").strip()
+        if value:
+            return value
+    return None
 
 
 def _legacy_hint_for_model_key(key: str) -> str:
@@ -627,7 +642,8 @@ def resolve_runtime_models(
 
     Resolution order (lowest → highest precedence):
         1. runtime base defaults (``_RUNTIME_BASE_MODELS[runtime]``)
-        2. ``SWE_DEFAULT_MODEL`` env var (applies to all roles)
+        2. env-var cascade: ``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` →
+           ``HARNESS_MODEL`` (first non-empty wins, applies to all roles)
         3. caller's ``models["default"]``
         4. caller's ``models["<role>"]``
     """

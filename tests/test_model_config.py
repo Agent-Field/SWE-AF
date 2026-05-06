@@ -190,7 +190,11 @@ class TestDefaultModelFromEnv(unittest.TestCase):
             )
 
     def test_empty_env_value_treated_as_unset(self) -> None:
-        with mock.patch.dict(os.environ, {"SWE_DEFAULT_MODEL": "   "}):
+        # All three cascade vars empty/whitespace → falls through to runtime base
+        with mock.patch.dict(
+            os.environ,
+            {"SWE_DEFAULT_MODEL": "   ", "AI_MODEL": "", "HARNESS_MODEL": "   "},
+        ):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
             for field in ALL_MODEL_FIELDS:
                 self.assertEqual(
@@ -198,12 +202,52 @@ class TestDefaultModelFromEnv(unittest.TestCase):
                 )
 
     def test_unset_env_uses_runtime_base(self) -> None:
-        env = {k: v for k, v in os.environ.items() if k != "SWE_DEFAULT_MODEL"}
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
         with mock.patch.dict(os.environ, env, clear=True):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
             for field in ALL_MODEL_FIELDS:
                 self.assertEqual(
                     resolved[field], "openrouter/minimax/minimax-m2.5"
+                )
+
+    def test_ai_model_env_used_when_swe_default_unset(self) -> None:
+        # AI_MODEL is the env var the rest of the stack (pr-af, github-buddy)
+        # uses — SWE-AF must respect it too without requiring a SWE-specific
+        # var, otherwise the deployer has to set the same model in two places.
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
+        env["AI_MODEL"] = "openrouter/moonshotai/kimi-k2.6"
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(
+                    resolved[field], "openrouter/moonshotai/kimi-k2.6"
+                )
+
+    def test_harness_model_env_used_when_others_unset(self) -> None:
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
+        env["HARNESS_MODEL"] = "openrouter/moonshotai/kimi-k2.6"
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(
+                    resolved[field], "openrouter/moonshotai/kimi-k2.6"
+                )
+
+    def test_swe_default_model_beats_ai_model_in_cascade(self) -> None:
+        # When both are set, the SWE-specific name wins so deployers can
+        # override the global AI_MODEL just for this service.
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
+        env["SWE_DEFAULT_MODEL"] = "openrouter/qwen/qwen-3-coder"
+        env["AI_MODEL"] = "openrouter/moonshotai/kimi-k2.6"
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(
+                    resolved[field], "openrouter/qwen/qwen-3-coder"
                 )
 
     def test_env_flows_through_build_config(self) -> None:
