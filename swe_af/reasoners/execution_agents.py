@@ -1627,6 +1627,7 @@ async def run_pr_resolver(
     conflicted_files: list[str] | None = None,
     failed_checks: list[dict] | None = None,
     review_comments: list[dict] | None = None,
+    goal: str = "",
     additional_context: str = "",
     model: str = "sonnet",
     permission_mode: str = "",
@@ -1673,6 +1674,7 @@ async def run_pr_resolver(
         conflicted_files=conflicted_files,
         failed_checks=typed_failures,
         review_comments=typed_comments,
+        goal=goal,
         additional_context=additional_context,
     )
 

@@ -167,6 +167,7 @@ def pr_resolver_task_prompt(
     conflicted_files: list[str],
     failed_checks: list[CIFailedCheck | dict],
     review_comments: list[ReviewCommentRef | dict],
+    goal: str = "",
     additional_context: str = "",
 ) -> str:
     """Build the task prompt for one PR-resolver run.
@@ -188,6 +189,10 @@ def pr_resolver_task_prompt(
     sections.append(f"- **Head branch (push target)**: `{head_branch}`")
     sections.append(f"- **Base branch**: `{base_branch}`")
     sections.append(f"- **Merge state**: `{merge_state}`")
+
+    if goal:
+        sections.append("\n### User-requested change (primary instruction)")
+        sections.append(goal)
 
     if merge_state == "conflict" and conflicted_files:
         sections.append("\n### Conflicted files (unresolved merge markers)")
@@ -286,17 +291,37 @@ def pr_resolver_task_prompt(
         sections.append("\n### Additional context")
         sections.append(additional_context)
 
-    sections.append(
-        "\n## Your Task\n"
-        "1. Complete any in-progress merge from base.\n"
-        "2. Fix every failing CI check by changing PRODUCTION code (no "
-        "silenced tests).\n"
-        "3. Address every actionable review comment, recording each one in "
-        "`addressed_comments` (true/false + brief note).\n"
-        "4. Re-run failing tests locally to confirm they pass.\n"
-        f"5. Commit + `git push origin {head_branch}` — do NOT create a new "
-        "PR.\n"
-        "6. Return a `PRResolveResult` JSON object."
+    task_lines = ["\n## Your Task"]
+    step = 1
+    if goal:
+        task_lines.append(
+            f"{step}. Apply the user-requested change described above. This "
+            "is the PRIMARY instruction for this run; CI fixes and review "
+            "comments below are secondary work to fold in along the way."
+        )
+        step += 1
+    task_lines.append(f"{step}. Complete any in-progress merge from base.")
+    step += 1
+    task_lines.append(
+        f"{step}. Fix every failing CI check by changing PRODUCTION code "
+        "(no silenced tests)."
     )
+    step += 1
+    task_lines.append(
+        f"{step}. Address every actionable review comment, recording each "
+        "one in `addressed_comments` (true/false + brief note)."
+    )
+    step += 1
+    task_lines.append(
+        f"{step}. Re-run failing tests locally to confirm they pass."
+    )
+    step += 1
+    task_lines.append(
+        f"{step}. Commit + `git push origin {head_branch}` — do NOT create "
+        "a new PR."
+    )
+    step += 1
+    task_lines.append(f"{step}. Return a `PRResolveResult` JSON object.")
+    sections.append("\n".join(task_lines))
 
     return "\n".join(sections)

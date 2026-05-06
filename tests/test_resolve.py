@@ -463,3 +463,90 @@ class TestResolvePushFallback:
             for cmd in push_invocations
         ), push_invocations
         assert result["resolve_result"]["pushed"] is True
+
+
+# ---------------------------------------------------------------------------
+# pr_resolver_task_prompt — goal field rendering
+# ---------------------------------------------------------------------------
+
+
+class TestPrResolverTaskPromptGoal:
+    """The optional `goal` field reframes the resolver's primary task.
+
+    When the caller (e.g. github-buddy's `make_changes` command) passes a
+    free-form instruction, it must appear as the headline task with CI /
+    comments demoted to secondary work. When omitted, output must be
+    unchanged from the prior comments-and-CI-only flow.
+    """
+
+    def _build(self, **overrides):
+        from swe_af.prompts.pr_resolver import pr_resolver_task_prompt
+
+        defaults = dict(
+            repo_path="/workspaces/r",
+            pr_number=7,
+            pr_url="https://github.com/o/r/pull/7",
+            head_branch="feature/x",
+            base_branch="main",
+            merge_state="clean",
+            conflicted_files=[],
+            failed_checks=[],
+            review_comments=[],
+        )
+        defaults.update(overrides)
+        return pr_resolver_task_prompt(**defaults)
+
+    def test_no_goal_omits_user_request_section(self) -> None:
+        prompt = self._build()
+        assert "User-requested change" not in prompt
+        assert "Apply the user-requested change" not in prompt
+        # Without a goal the first numbered task is still merge completion.
+        assert "1. Complete any in-progress merge from base." in prompt
+
+    def test_goal_renders_section_and_promotes_to_step_one(self) -> None:
+        prompt = self._build(goal="Rename foo() to bar() across the package.")
+
+        assert "### User-requested change (primary instruction)" in prompt
+        assert "Rename foo() to bar() across the package." in prompt
+        assert "1. Apply the user-requested change described above." in prompt
+        # CI / comments / merge are demoted to later steps.
+        assert "2. Complete any in-progress merge from base." in prompt
+
+    def test_goal_coexists_with_ci_failures_and_comments(self) -> None:
+        from swe_af.execution.schemas import CIFailedCheck, ReviewCommentRef
+
+        prompt = self._build(
+            goal="Fix the typo on line 42 of README.md.",
+            failed_checks=[
+                CIFailedCheck(
+                    name="unit",
+                    workflow="CI",
+                    conclusion="failure",
+                    details_url="https://example.com/run/1",
+                    logs_excerpt="AssertionError: expected 1 got 2",
+                ),
+            ],
+            review_comments=[
+                ReviewCommentRef(
+                    comment_id=42,
+                    thread_id="T_abc",
+                    path="src/a.py",
+                    line=10,
+                    author="alice",
+                    body="please rename",
+                    url="https://github.com/o/r/pull/7#discussion_r42",
+                ),
+            ],
+        )
+
+        assert "### User-requested change (primary instruction)" in prompt
+        assert "Fix the typo on line 42 of README.md." in prompt
+        assert "### Failing CI checks" in prompt
+        assert "AssertionError" in prompt
+        assert "### Review comments to address" in prompt
+        assert "please rename" in prompt
+        # User-requested change is rendered before CI / comments in document order.
+        goal_at = prompt.index("User-requested change")
+        ci_at = prompt.index("Failing CI checks")
+        comments_at = prompt.index("Review comments to address")
+        assert goal_at < ci_at < comments_at

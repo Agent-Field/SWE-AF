@@ -1213,10 +1213,17 @@ async def resolve(
     base_branch: str = "main",
     ci_failures: list[dict] | None = None,
     review_comments: list[dict] | None = None,
+    goal: str = "",
     additional_context: str = "",
     config: dict | None = None,
 ) -> dict:
     """Update an existing PR: merge base, fix CI, address review comments, push.
+
+    ``goal`` is an optional free-form instruction from the caller (e.g. a
+    user comment on the PR asking for a specific change). When non-empty it
+    is rendered as the primary task in the resolver agent's prompt, with
+    CI failures and review comments treated as secondary work to fold in.
+    When empty the prompt is unchanged from the comments-and-CI-only flow.
 
     Single-repo only (v1) — no multi-repo workspace, no forked-PR support.
     Caller is expected to pass the PR's own head_branch (within the same
@@ -1349,6 +1356,7 @@ async def resolve(
         conflicted_files=conflicted_files,
         failed_checks=ci_failures,
         review_comments=review_comments,
+        goal=goal,
         additional_context=additional_context,
         model=resolver_model,
         permission_mode=cfg.permission_mode,
