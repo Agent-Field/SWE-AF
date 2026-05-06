@@ -22,15 +22,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Add OpenCode to PATH for non-interactive shells
 ENV PATH="/root/.opencode/bin:${PATH}"
 
-# Pin OpenCode's model AND small_model to Kimi K2.6 so OpenCode's auto-pick
-# (used for session titles, summarization, etc. when small_model isn't
-# configured) cannot reach for a different OpenRouter model. Without this
-# config file, OpenCode silently selects a default like deepseek-v3.1 from
-# the available OpenRouter catalog when only OPENROUTER_API_KEY is set.
-# Per-call -m on `opencode run` already pins the main model; this file
-# pins the small_model too.
+# Tell OpenCode to read its model AND small_model from the deployer's
+# HARNESS_MODEL env var via {env:...} interpolation. Without this config,
+# OpenCode auto-selects a small_model from whatever providers it finds
+# keys for — landing on DeepSeek V3.1 in our environment, bypassing every
+# env var the deployer set. Per-call -m on `opencode run` pins the main
+# model regardless; small_model is what falls through to config, so it
+# has to honor the same env var the rest of the stack uses.
+#
+# Default HARNESS_MODEL inside the image so a fresh container with no
+# env override has *some* value to interpolate. Railway / docker-compose
+# overrides win because their env injects after the image's ENV.
+ENV HARNESS_MODEL=openrouter/moonshotai/kimi-k2.6
 RUN mkdir -p /root/.config/opencode && \
-    echo '{"$schema":"https://opencode.ai/config.json","model":"openrouter/moonshotai/kimi-k2.6","small_model":"openrouter/moonshotai/kimi-k2.6","provider":{"openrouter":{"options":{"apiKey":"{env:OPENROUTER_API_KEY}"},"models":{"moonshotai/kimi-k2.6":{}}}}}' \
+    echo '{"$schema":"https://opencode.ai/config.json","model":"{env:HARNESS_MODEL}","small_model":"{env:HARNESS_MODEL}","provider":{"openrouter":{"options":{"apiKey":"{env:OPENROUTER_API_KEY}"}}}}' \
     > /root/.config/opencode/opencode.json
 
 # Git identity — env vars take highest precedence and are inherited by all
