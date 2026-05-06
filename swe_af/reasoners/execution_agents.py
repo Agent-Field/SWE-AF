@@ -82,6 +82,7 @@ from swe_af.prompts.workspace import (
     workspace_cleanup_task_prompt,
     workspace_setup_task_prompt,
 )
+from swe_af.tools.web_search import WEB_SEARCH_CODER_GUARDRAIL, with_web_search
 
 from . import router
 
@@ -169,10 +170,10 @@ async def run_retry_advisor(
             schema=RetryAdvice,
             model=model,
             provider=provider,
-            tools=["Read", "Write", "Glob", "Grep", "Bash"],
             cwd=repo_path,
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
+            **with_web_search(["Read", "Write", "Glob", "Grep", "Bash"]),
         )
         check_fatal_harness_error(result)
         if result.parsed is not None:
@@ -959,14 +960,14 @@ async def run_coder(
     try:
         result = await router.harness(
             task_prompt,
-            system_prompt=CODER_SYSTEM_PROMPT,
+            system_prompt=CODER_SYSTEM_PROMPT + WEB_SEARCH_CODER_GUARDRAIL,
             schema=CoderResult,
             model=model,
             provider=provider,
-            tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
             cwd=worktree_path,
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
+            **with_web_search(["Read", "Write", "Edit", "Bash", "Glob", "Grep"]),
         )
         check_fatal_harness_error(result)
         if result.parsed is not None:
@@ -1587,10 +1588,10 @@ async def run_ci_fixer(
             schema=CIFixResult,
             model=model,
             provider=provider,
-            tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
             cwd=repo_path,
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
+            **with_web_search(["Bash", "Read", "Edit", "Write", "Glob", "Grep"]),
         )
         check_fatal_harness_error(result)
         if result.parsed is not None:
@@ -1687,10 +1688,10 @@ async def run_pr_resolver(
             schema=PRResolveResult,
             model=model,
             provider=provider,
-            tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
             cwd=repo_path,
             max_turns=DEFAULT_AGENT_MAX_TURNS,
             permission_mode=permission_mode or None,
+            **with_web_search(["Bash", "Read", "Edit", "Write", "Glob", "Grep"]),
         )
         check_fatal_harness_error(result)
         if result.parsed is not None:

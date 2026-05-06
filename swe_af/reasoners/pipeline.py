@@ -22,6 +22,7 @@ from swe_af.reasoners.schemas import (
     PRD,
     ReviewResult,
 )
+from swe_af.tools.web_search import with_web_search
 
 from . import router
 
@@ -198,10 +199,10 @@ async def run_product_manager(
         provider=provider,
         model=model,
         max_turns=max_turns,
-        tools=["Read", "Write", "Glob", "Grep", "Bash"],
         permission_mode=permission_mode or None,
         system_prompt=system_prompt,
         cwd=repo_path,
+        **with_web_search(["Read", "Write", "Glob", "Grep", "Bash"]),
     )
     check_fatal_harness_error(result)
     if result.parsed is None:
@@ -258,10 +259,10 @@ async def run_architect(
         provider=provider,
         model=model,
         max_turns=max_turns,
-        tools=["Read", "Write", "Glob", "Grep", "Bash"],
         permission_mode=permission_mode or None,
         system_prompt=system_prompt,
         cwd=repo_path,
+        **with_web_search(["Read", "Write", "Glob", "Grep", "Bash"]),
     )
     check_fatal_harness_error(result)
     if result.parsed is None:
