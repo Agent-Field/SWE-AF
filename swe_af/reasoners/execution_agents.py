@@ -82,6 +82,7 @@ from swe_af.prompts.workspace import (
     workspace_cleanup_task_prompt,
     workspace_setup_task_prompt,
 )
+from swe_af.tools.web_search import maybe_apply_coder_guardrail
 
 from . import router
 
@@ -959,7 +960,7 @@ async def run_coder(
     try:
         result = await router.harness(
             task_prompt,
-            system_prompt=CODER_SYSTEM_PROMPT,
+            system_prompt=maybe_apply_coder_guardrail(CODER_SYSTEM_PROMPT),
             schema=CoderResult,
             model=model,
             provider=provider,

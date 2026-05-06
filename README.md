@@ -303,6 +303,21 @@ JSON
 
 For OpenRouter with `open_code`, use model IDs in `openrouter/<provider>/<model>` format (for example `openrouter/minimax/minimax-m2.5`).
 
+### Optional: web search
+
+Coding and review agents can look up external documentation, library APIs, error messages, and version/deprecation status during a build. This is opt-in via two env vars on the deployment:
+
+```
+OPENCODE_ENABLE_EXA=1
+EXA_API_KEY=...
+```
+
+When set, opencode's built-in `websearch` and `webfetch` tools become available to every reasoner running through the open runtime — the model decides when to use them based on the task. Get a key at [exa.ai](https://exa.ai/).
+
+The coder reasoner additionally gets a brief restraint guideline appended to its system prompt, so a long coding loop doesn't rabbit-hole on searches it could answer by reading the codebase. No setup required beyond the env vars; the wiring inherits parent env naturally through agentfield's CLI harness.
+
+This works on the open runtime (opencode). The Claude runtime uses Anthropic's first-party `WebSearch`/`WebFetch` and is currently not wired here — file an issue if you want it.
+
 ## What Happens In One Build
 
 - Architecture is generated and reviewed before coding starts
