@@ -47,39 +47,8 @@ ENV PATH="/root/.opencode/bin:${PATH}"
 # env override has *some* value to interpolate. Railway / docker-compose
 # overrides win because their env injects after the image's ENV.
 ENV HARNESS_MODEL=openrouter/minimax/minimax-m2.5:nitro
-RUN mkdir -p /root/.config/opencode && \
-    cat <<'EOF' > /root/.config/opencode/opencode.json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "model": "{env:HARNESS_MODEL}",
-  "small_model": "{env:HARNESS_MODEL}",
-  "provider": {
-    "openrouter": {
-      "options": {"apiKey": "{env:OPENROUTER_API_KEY}"},
-      "models": {
-        "minimax/minimax-m2.5:nitro": {
-          "name": "MiniMax M2.5 (nitro routing)",
-          "limit": {"context": 245760, "output": 131072},
-          "tool_call": true,
-          "temperature": true
-        },
-        "minimax/minimax-m2.5": {
-          "name": "MiniMax M2.5",
-          "limit": {"context": 245760, "output": 131072},
-          "tool_call": true,
-          "temperature": true
-        },
-        "moonshotai/kimi-k2.6:nitro": {
-          "name": "Kimi K2.6 (nitro routing)",
-          "limit": {"context": 262144, "output": 16384},
-          "tool_call": true,
-          "temperature": true
-        }
-      }
-    }
-  }
-}
-EOF
+RUN mkdir -p /root/.config/opencode
+COPY docker/opencode.json /root/.config/opencode/opencode.json
 
 # Git identity — env vars take highest precedence and are inherited by all
 # subprocesses including Claude Code agent instances spawned by the SDK
