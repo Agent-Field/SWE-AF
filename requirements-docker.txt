@@ -2,6 +2,8 @@
 #
 # Same runtime dependencies as requirements.txt.
 
-agentfield>=0.1.73
+agentfield>=0.1.77
 pydantic>=2.0
 claude-agent-sdk==0.1.20
+hax-sdk>=0.2.0
+python-dotenv>=1.0
