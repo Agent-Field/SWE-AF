@@ -12,6 +12,10 @@ import asyncio
 import os
 import re
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from agentfield import Agent
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.fast import fast_router
