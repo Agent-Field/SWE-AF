@@ -689,6 +689,7 @@ class BuildConfig(BaseModel):
     models: dict[str, str] | None = None
 
     max_review_iterations: int = 2
+    max_plan_revision_iterations: int = 2  # human reviewer "request changes" loops
     max_retries_per_issue: int = 2
     max_replans: int = 2
     enable_replanning: bool = True
@@ -735,6 +736,10 @@ class BuildConfig(BaseModel):
     level_failure_abort_threshold: float = (
         0.8  # abort DAG when >= this fraction of a level fails
     )
+    # HITL plan-approval gate. Auto-engaged when HAX_API_KEY is set in the
+    # environment; this controls how long the request stays open before the
+    # control plane treats it as expired.
+    approval_expires_in_hours: int = 72
 
     @model_validator(mode="before")
     @classmethod
