@@ -12,15 +12,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file: .env
     environment:
       - AGENTFIELD_SERVER=http://host.docker.internal:8080
       - NODE_ID=swe-planner
       - PORT=8003
       # Callback URL for control plane to reach this agent
       - AGENT_CALLBACK_URL=http://localhost:8003
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
-      - GH_TOKEN=${GH_TOKEN}
     ports:
       - "8003:8003"
     volumes:
