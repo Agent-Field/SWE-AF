@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Autonomous SWE agent node for AgentField"
 requires-python = ">=3.12"
 dependencies = [
-    "agentfield>=0.1.80",
+    "agentfield>=0.1.81",
     "pydantic>=2.0",
     # Compatibility pin: newer SDK builds have surfaced
     # "Unknown message type: rate_limit_event" during streaming.
