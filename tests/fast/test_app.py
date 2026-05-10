@@ -492,6 +492,7 @@ class TestBuildEdgeCases:
         assert _runtime_to_provider("claude_code") == "claude"
         assert _runtime_to_provider("open_code") == "opencode"
         assert _runtime_to_provider("codex") == "codex"
+        assert _runtime_to_provider("other") == "opencode"
 
 
 def test_fast_build_config_accepts_codex_runtime() -> None:
