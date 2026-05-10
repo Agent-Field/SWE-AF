@@ -367,5 +367,30 @@ class TestCIGateConfig(unittest.TestCase):
         self.assertEqual(exec_cfg.ci_poll_seconds, 15)
 
 
+class TestRuntimeProviderMapping(unittest.TestCase):
+    def test_runtime_to_harness_adapter_maps_all_supported_runtimes(self) -> None:
+        from swe_af.runtime.providers import runtime_to_harness_adapter
+
+        self.assertEqual(runtime_to_harness_adapter("claude_code"), "claude-code")
+        self.assertEqual(runtime_to_harness_adapter("claude"), "claude-code")
+        self.assertEqual(runtime_to_harness_adapter("claude-code"), "claude-code")
+        self.assertEqual(runtime_to_harness_adapter("open_code"), "opencode")
+        self.assertEqual(runtime_to_harness_adapter("opencode"), "opencode")
+        self.assertEqual(runtime_to_harness_adapter("codex"), "codex")
+
+    def test_runtime_to_harness_provider_maps_all_supported_runtimes(self) -> None:
+        from swe_af.runtime.providers import runtime_to_harness_provider
+
+        self.assertEqual(runtime_to_harness_provider("claude_code"), "claude")
+        self.assertEqual(runtime_to_harness_provider("open_code"), "opencode")
+        self.assertEqual(runtime_to_harness_provider("codex"), "codex")
+
+    def test_unknown_runtime_provider_raises(self) -> None:
+        from swe_af.runtime.providers import normalize_runtime_provider
+
+        with self.assertRaises(ValueError):
+            normalize_runtime_provider("bad_runtime")
+
+
 if __name__ == "__main__":
     unittest.main()
