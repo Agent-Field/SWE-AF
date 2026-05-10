@@ -68,6 +68,12 @@ def test_swe_fast_agentfield_server_env_var():
     )
 
 
+def test_swe_fast_loads_env_file_like_swe_agent():
+    """swe-fast should receive .env values the same way as swe-agent."""
+    compose = load_docker_compose()
+    assert compose["services"]["swe-fast"].get("env_file") == ".env"
+
+
 def test_swe_agent_service_unchanged():
     """Existing swe-agent service is present and unchanged."""
     compose = load_docker_compose()
