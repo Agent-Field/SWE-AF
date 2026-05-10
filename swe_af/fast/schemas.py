@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+from swe_af.runtime.providers import RUNTIME_VALUES
 
 # ---------------------------------------------------------------------------
 # Runtime default model strings
@@ -12,10 +14,12 @@ from pydantic import BaseModel, ConfigDict
 
 _CLAUDE_CODE_DEFAULT = "haiku"
 _OPEN_CODE_DEFAULT = "qwen/qwen-2.5-coder-32b-instruct"
+_CODEX_DEFAULT = "gpt-5.3-codex"
 
 _RUNTIME_DEFAULTS: dict[str, str] = {
     "claude_code": _CLAUDE_CODE_DEFAULT,
     "open_code": _OPEN_CODE_DEFAULT,
+    "codex": _CODEX_DEFAULT,
 }
 
 # All four roles resolved by fast_resolve_models()
@@ -89,13 +93,17 @@ class FastVerificationResult(BaseModel):
 # Build-level schemas
 # ---------------------------------------------------------------------------
 
+def _default_fast_runtime() -> str:
+    value = os.getenv("SWE_DEFAULT_RUNTIME", "claude_code")
+    return value if value in RUNTIME_VALUES else "claude_code"
+
 
 class FastBuildConfig(BaseModel):
     """Configuration for a fast single-pass build run."""
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code"] = "claude_code"
+    runtime: Literal["claude_code", "open_code", "codex"] = Field(default_factory=_default_fast_runtime)
     models: dict[str, str] | None = None
     max_tasks: int = 10
     task_timeout_seconds: int = 300

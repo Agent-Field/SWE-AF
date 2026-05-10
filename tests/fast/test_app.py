@@ -491,7 +491,18 @@ class TestBuildEdgeCases:
 
         assert _runtime_to_provider("claude_code") == "claude"
         assert _runtime_to_provider("open_code") == "opencode"
-        assert _runtime_to_provider("other") == "opencode"
+        assert _runtime_to_provider("codex") == "codex"
+
+
+def test_fast_build_config_accepts_codex_runtime() -> None:
+    from swe_af.fast.schemas import FastBuildConfig, fast_resolve_models
+
+    cfg = FastBuildConfig(runtime="codex")
+    resolved = fast_resolve_models(cfg)
+    assert resolved["pm_model"] == "gpt-5.3-codex"
+    assert resolved["coder_model"] == "gpt-5.3-codex"
+    assert resolved["verifier_model"] == "gpt-5.3-codex"
+    assert resolved["git_model"] == "gpt-5.3-codex"
 
 
 class TestBuildNonFatalPaths:

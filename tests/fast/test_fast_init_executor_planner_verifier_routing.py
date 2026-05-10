@@ -996,3 +996,9 @@ class TestRuntimeToProviderCrossFeature:
         assert "ai_provider" in sig.parameters, (
             "fast_verify must accept 'ai_provider' parameter"
         )
+
+
+def test_runtime_to_provider_codex_runtime_maps_to_codex() -> None:
+    import swe_af.fast.app as fast_app
+
+    assert fast_app._runtime_to_provider("codex") == "codex"
