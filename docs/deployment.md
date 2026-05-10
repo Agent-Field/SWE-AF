@@ -35,6 +35,13 @@ cp .env.example .env
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GOOGLE_API_KEY` | Google Gemini API key |
 
+**For Codex CLI runtime:**
+
+| Variable | Purpose |
+|---|---|
+| `SWE_CODEX_AUTH_MODE` | `auto`, `chatgpt`, or `api_key`; defaults to `auto` in Docker |
+| `OPENAI_API_KEY` | Required only when `SWE_CODEX_AUTH_MODE=api_key` |
+
 **Optional:**
 
 | Variable | Purpose | Default |
@@ -51,6 +58,7 @@ cp .env.example .env
 | `agentfield` | 0.1.67+ | Python SDK (includes opencode v1.4+ fix) |
 | `claude-agent-sdk` | 0.1.20+ | Claude runtime |
 | opencode CLI | 1.4+ | Only if using `open_code` runtime (see Known Issues) |
+| Codex CLI | latest | Installed in the Docker image; required on host only to run `codex login` for ChatGPT subscription auth |
 
 ## Quick Start
 
@@ -67,6 +75,8 @@ This starts:
 - **control-plane** on `:8080` — AgentField orchestration server
 - **swe-agent** on `:8003` — SWE-AF full pipeline (`swe-planner` node)
 - **swe-fast** on `:8004` — SWE-AF fast mode (`swe-fast` node)
+
+To use Codex with a ChatGPT subscription, run `codex login` on the host before starting Docker and leave `OPENAI_API_KEY` unset for this process. The compose files mount `~/.codex` into both agent containers. To use OpenAI API billing instead, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
 ### Agent Only (connect to existing control plane)
 

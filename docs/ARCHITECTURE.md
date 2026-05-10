@@ -422,7 +422,7 @@ SWE-AF orchestrates 22 specialized agents across four phases. Each agent is a re
 
 Every build now uses a single V2 model contract:
 
-- `runtime`: `claude_code` or `open_code`
+- `runtime`: `claude_code`, `open_code`, or `codex`
 - `models`: flat role map (`default` + explicit role keys)
 
 Supported role keys:
@@ -442,3 +442,4 @@ Runtime defaults:
 |---|---|---|
 | `claude_code` | `sonnet` | `qa_synthesizer=haiku` |
 | `open_code` | `minimax/minimax-m2.5` | none |
+| `codex` | `gpt-5.3-codex` | none |

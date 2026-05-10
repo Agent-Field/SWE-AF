@@ -188,9 +188,10 @@ Most agent frameworks wrap a single coder loop. SWE-AF is a coordinated engineer
 
 </details>
 
-**Claude & open-source models supported**: Run builds with either runtime and tune models per role in one flat config map.
+**Claude, open-source, and Codex models supported**: Run builds with any runtime and tune models per role in one flat config map.
 - `runtime: "claude_code"` maps to Claude backend.
 - `runtime: "open_code"` maps to OpenCode backend (OpenRouter/OpenAI/Google/Anthropic model IDs).
+- `runtime: "codex"` maps to the OpenAI Codex CLI backend.
 
 ## Adaptive Factory Control
 
@@ -279,6 +280,42 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 }
 JSON
 
+# With Codex CLI runtime
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Add JWT auth",
+    "repo_url": "https://github.com/user/my-project",
+    "config": {
+      "runtime": "codex",
+      "models": {
+        "default": "gpt-5.3-codex"
+      }
+    }
+  }
+}
+JSON
+
+# Fast mode with Codex CLI runtime
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-fast.build \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "input": {
+    "goal": "Add a focused bug fix",
+    "repo_url": "https://github.com/user/my-project",
+    "config": {
+      "runtime": "codex",
+      "models": {
+        "default": "gpt-5.3-codex"
+      }
+    }
+  }
+}
+JSON
+
 # Local workspace mode (repo_path) + targeted role override
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
@@ -302,6 +339,8 @@ JSON
 ```
 
 For OpenRouter with `open_code`, use model IDs in `openrouter/<provider>/<model>` format (for example `openrouter/minimax/minimax-m2.5`).
+
+For Codex with ChatGPT subscription auth, install the Codex CLI on the host, run `codex login`, leave `OPENAI_API_KEY` unset for this process, and set `SWE_CODEX_AUTH_MODE=chatgpt` or `auto`. For OpenAI API-platform billing, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
 ### Optional: web search
 
@@ -611,7 +650,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
-| `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"` or `"open_code"`. The default also honors the `SWE_DEFAULT_RUNTIME` env var when no `runtime` is passed in `config` — set it on the deployment so callers don't need to plumb a config through. |
+| `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"`, `"open_code"`, or `"codex"`. The default also honors the `SWE_DEFAULT_RUNTIME` env var when no `runtime` is passed in `config` — set it on the deployment so callers don't need to plumb a config through. |
 | `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |
@@ -652,6 +691,17 @@ Minimal:
 ```json
 {
   "runtime": "claude_code"
+}
+```
+
+Codex:
+
+```json
+{
+  "runtime": "codex",
+  "models": {
+    "default": "gpt-5.3-codex"
+  }
 }
 ```
 

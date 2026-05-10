@@ -75,7 +75,7 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 
 | Key | Values | Description |
 |-----|--------|-------------|
-| `runtime` | `"claude_code"`, `"open_code"` | AI backend to use |
+| `runtime` | `"claude_code"`, `"open_code"`, `"codex"` | AI backend to use |
 | `models.default` | model ID string | Default model for all agents |
 | `models.coder` | model ID string | Override for coder role |
 | `models.qa` | model ID string | Override for QA role |
@@ -147,6 +147,12 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 1. `opencode` CLI installed and in PATH
 2. Model provider credentials configured in OpenCode (e.g., `OPENAI_API_KEY` for z.ai)
 3. Model ID format matches what OpenCode expects
+
+## Requirements for codex Runtime
+
+1. Codex CLI installed and in PATH.
+2. For ChatGPT subscription auth: run `codex login` on the host, set `SWE_CODEX_AUTH_MODE=chatgpt` or `auto`, and leave `OPENAI_API_KEY` unset for the agent process.
+3. For OpenAI API-platform billing: set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
 ## Monitoring
 
