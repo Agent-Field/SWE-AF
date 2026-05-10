@@ -17,6 +17,9 @@ inside each wrapper to honour this contract.
 from __future__ import annotations
 
 from agentfield import AgentRouter
+from swe_af.runtime.codex_harness_patch import apply_codex_harness_patch
+
+apply_codex_harness_patch()
 
 fast_router = AgentRouter(tags=["swe-fast"])
 

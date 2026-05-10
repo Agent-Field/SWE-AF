@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+_PATCHED = False
+
+
+def _codex_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(schema, dict):
+        return schema
+    strict = dict(schema)
+    schema_type = strict.get("type")
+    if schema_type == "object":
+        properties = strict.get("properties")
+        if isinstance(properties, dict):
+            cleaned: dict[str, Any] = {}
+            for key, value in properties.items():
+                if isinstance(value, dict):
+                    child = dict(value)
+                    child.pop("default", None)
+                    cleaned[key] = _codex_strict_json_schema(child)
+                else:
+                    cleaned[key] = value
+            strict["properties"] = cleaned
+            strict["required"] = list(cleaned.keys())
+            strict["additionalProperties"] = False
+    if schema_type == "array":
+        items = strict.get("items")
+        if isinstance(items, dict):
+            strict["items"] = _codex_strict_json_schema(items)
+    for key in ("allOf", "anyOf", "oneOf"):
+        branch = strict.get(key)
+        if isinstance(branch, list):
+            strict[key] = [
+                _codex_strict_json_schema(item) if isinstance(item, dict) else item
+                for item in branch
+            ]
+    return strict
+
+
+def _augment_codex_error_message(message: str, detail: str) -> str:
+    lower = f"{message}\n{detail}".lower()
+    hints = (
+        ".git/index.lock",
+        ".git/refs",
+        "repository metadata is read-only",
+    )
+    if any(token in lower for token in hints):
+        return (
+            f"{message}\n\n"
+            "Codex tried to mutate git metadata under workspace-write; "
+            "git must be host-managed."
+        )
+    return message
+
+
+async def _run_codex_cli_with_stdin(
+    cmd: list[str],
+    prompt_for_codex: str,
+    *,
+    env: dict[str, str] | None,
+    cwd: str | None,
+) -> tuple[str, str, int]:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+        cwd=cwd,
+    )
+    stdout_bytes, stderr_bytes = await proc.communicate(prompt_for_codex.encode("utf-8"))
+    stdout = stdout_bytes.decode("utf-8", errors="replace")
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
+    return stdout, stderr, int(proc.returncode)
+
+
+def apply_codex_harness_patch() -> None:
+    global _PATCHED
+    if _PATCHED:
+        return
+    try:
+        from agentfield.harness import _runner, _schema
+        from agentfield.harness._cli import (
+            estimate_cli_cost,
+            extract_final_text,
+            parse_jsonl,
+            strip_ansi,
+        )
+        from agentfield.harness._result import FailureType, Metrics, RawResult
+        from agentfield.harness.providers.codex import CodexProvider
+    except Exception:
+        return
+
+    original_build_prompt_suffix = _schema.build_prompt_suffix
+
+    def build_prompt_suffix_with_schema_file(schema: Any, cwd: str) -> str:
+        schema_json = json.dumps(
+            _codex_strict_json_schema(_schema.schema_to_json_schema(schema)),
+            indent=2,
+        )
+        _schema.write_schema_file(schema_json, cwd)
+        return original_build_prompt_suffix(schema, cwd)
+
+    async def execute_with_native_structured_output(self: Any, prompt: str, options: dict[str, object]) -> Any:
+        cwd = str(options.get("cwd")) if isinstance(options.get("cwd"), str) else None
+        model = options.get("model")
+        permission_mode = options.get("permission_mode")
+        env_value = options.get("env")
+        merged_env = {**os.environ}
+        if isinstance(env_value, dict):
+            merged_env.update({str(k): str(v) for k, v in env_value.items() if isinstance(k, str)})
+
+        cmd = [self._bin, "exec", "--json", "--skip-git-repo-check"]
+        if cwd:
+            cmd.extend(["-C", cwd])
+        if model:
+            cmd.extend(["-m", str(model)])
+
+        if permission_mode == "auto":
+            cmd.append("--dangerously-bypass-approvals-and-sandbox")
+        elif permission_mode in {"read-only", "workspace-write", "danger-full-access"}:
+            cmd.extend(["--sandbox", str(permission_mode)])
+        else:
+            cmd.extend(["--sandbox", "workspace-write"])
+
+        prompt_for_codex = prompt
+        if cwd:
+            schema_path = _schema.get_schema_path(cwd)
+            output_path = _schema.get_output_path(cwd)
+            if Path(schema_path).exists():
+                cmd.extend(["--output-schema", schema_path])
+                cmd.extend(["--output-last-message", output_path])
+                prompt_for_codex += (
+                    "\n\n---\n"
+                    "CODEX STRUCTURED OUTPUT CONTRACT:\n"
+                    f"The Codex CLI will save your final response to: {output_path}\n"
+                    f"Your final response MUST be a single JSON object conforming to: {schema_path}\n"
+                    "Do not make the missing output file the subject of the task. "
+                    "Complete the user's task, then return the required JSON object as your final response."
+                )
+
+        try:
+            start = asyncio.get_running_loop().time()
+            timeout_seconds = options.get("timeout_seconds")
+            if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
+                stdout, stderr, returncode = await asyncio.wait_for(
+                    _run_codex_cli_with_stdin(cmd, prompt_for_codex, env=merged_env, cwd=cwd),
+                    timeout=float(timeout_seconds),
+                )
+            else:
+                stdout, stderr, returncode = await _run_codex_cli_with_stdin(
+                    cmd, prompt_for_codex, env=merged_env, cwd=cwd
+                )
+            duration_ms = int((asyncio.get_running_loop().time() - start) * 1000)
+        except FileNotFoundError as exc:
+            return RawResult(
+                result="",
+                messages=[],
+                metrics=Metrics(
+                    duration_api_ms=0,
+                    num_turns=1,
+                    total_cost_usd=0.0,
+                    session_id="",
+                ),
+                is_error=True,
+                error_message=str(exc),
+                failure_type=FailureType.CRASH,
+                returncode=-1,
+            )
+        except asyncio.TimeoutError:
+            return RawResult(
+                result="",
+                messages=[],
+                metrics=Metrics(
+                    duration_api_ms=0,
+                    num_turns=1,
+                    total_cost_usd=0.0,
+                    session_id="",
+                ),
+                is_error=True,
+                error_message="Codex CLI timed out",
+                failure_type=FailureType.TIMEOUT,
+                returncode=-1,
+            )
+
+        stderr_clean = strip_ansi(stderr or "")
+        records = parse_jsonl(stdout or "")
+        result_text = extract_final_text(records) or ""
+
+        if not result_text and cwd:
+            output_path = _schema.get_output_path(cwd)
+            output_file = Path(output_path)
+            if output_file.exists():
+                try:
+                    result_text = output_file.read_text(encoding="utf-8")
+                except Exception:
+                    result_text = ""
+
+        is_error = returncode != 0
+        error_message = ""
+        failure_type = FailureType.NONE
+        if is_error:
+            base_error = stderr_clean or "Codex CLI failed"
+            error_message = _augment_codex_error_message(base_error, base_error)
+            failure_type = FailureType.CRASH
+
+        return RawResult(
+            result=result_text,
+            messages=records if isinstance(records, list) else [],
+            metrics=Metrics(
+                duration_api_ms=duration_ms,
+                num_turns=1,
+                total_cost_usd=estimate_cli_cost(
+                    model=str(options.get("model", "")),
+                    prompt=prompt_for_codex,
+                    result_text=result_text,
+                ),
+                session_id="",
+            ),
+            is_error=is_error,
+            error_message=error_message,
+            failure_type=failure_type,
+            returncode=returncode,
+        )
+
+    _schema.build_prompt_suffix = build_prompt_suffix_with_schema_file
+    _runner.build_prompt_suffix = build_prompt_suffix_with_schema_file
+    CodexProvider.execute = execute_with_native_structured_output
+    _PATCHED = True

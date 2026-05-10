@@ -1,4 +1,7 @@
 from agentfield import AgentRouter
+from swe_af.runtime.codex_harness_patch import apply_codex_harness_patch
+
+apply_codex_harness_patch()
 
 router = AgentRouter(tags=["swe-planner"])
 
