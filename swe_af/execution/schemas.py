@@ -16,6 +16,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from swe_af.runtime.providers import RUNTIME_VALUES, runtime_to_harness_provider
 
 # Global default for all agent max_turns. Change this one value to adjust everywhere.
 DEFAULT_AGENT_MAX_TURNS: int = 150
@@ -460,8 +461,6 @@ class QASynthesisResult(BaseModel):
 # Model configuration: runtime + flat role map
 # ---------------------------------------------------------------------------
 
-RUNTIME_VALUES: tuple[str, str] = ("claude_code", "open_code")
-
 ROLE_TO_MODEL_FIELD: dict[str, str] = {
     "pm": "pm_model",
     "architect": "architect_model",
@@ -511,20 +510,17 @@ _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "open_code": {
         **{field: "openrouter/minimax/minimax-m2.5" for field in ALL_MODEL_FIELDS},
     },
+    "codex": {
+        **{field: "gpt-5.3-codex" for field in ALL_MODEL_FIELDS},
+    },
 }
 
 
-def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode"]:
-    if runtime == "claude_code":
-        return "claude"
-    if runtime == "open_code":
-        return "opencode"
-    raise ValueError(
-        f"Unsupported runtime {runtime!r}. Valid runtimes: {', '.join(RUNTIME_VALUES)}"
-    )
+def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode", "codex"]:
+    return runtime_to_harness_provider(runtime)  # type: ignore[return-value]
 
 
-def _default_runtime() -> Literal["claude_code", "open_code"]:
+def _default_runtime() -> Literal["claude_code", "open_code", "codex"]:
     """Default runtime, honoring the ``SWE_DEFAULT_RUNTIME`` env var.
 
     Lets the deployer pick the runtime without every caller having to pass
@@ -685,7 +681,7 @@ class BuildConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code"] = Field(default_factory=_default_runtime)
+    runtime: Literal["claude_code", "open_code", "codex"] = Field(default_factory=_default_runtime)
     models: dict[str, str] | None = None
 
     max_review_iterations: int = 2
@@ -800,7 +796,7 @@ class BuildConfig(BaseModel):
         _validate_flat_models(self.models)
 
     @property
-    def ai_provider(self) -> Literal["claude", "opencode"]:
+    def ai_provider(self) -> Literal["claude", "opencode", "codex"]:
         return _runtime_to_provider(self.runtime)
 
     @property
@@ -989,7 +985,7 @@ class ExecutionConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code"] = Field(default_factory=_default_runtime)
+    runtime: Literal["claude_code", "open_code", "codex"] = Field(default_factory=_default_runtime)
     models: dict[str, str] | None = None
     _resolved_models: dict[str, str] = PrivateAttr(default_factory=dict)
 
@@ -1039,7 +1035,7 @@ class ExecutionConfig(BaseModel):
         return self._resolved_models[field_name]
 
     @property
-    def ai_provider(self) -> Literal["claude", "opencode"]:
+    def ai_provider(self) -> Literal["claude", "opencode", "codex"]:
         return _runtime_to_provider(self.runtime)
 
     @property

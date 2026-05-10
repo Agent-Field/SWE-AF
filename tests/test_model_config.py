@@ -136,6 +136,35 @@ class TestDefaultRuntimeFromEnv(unittest.TestCase):
             self.assertEqual(BuildConfig().runtime, "claude_code")
 
 
+class TestCodexRuntimeConfig(unittest.TestCase):
+    def test_codex_runtime_provider_and_defaults(self) -> None:
+        cfg = BuildConfig(runtime="codex")
+        self.assertEqual(cfg.ai_provider, "codex")
+        resolved = cfg.resolved_models()
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "gpt-5.3-codex")
+
+    def test_codex_execution_config_provider_and_defaults(self) -> None:
+        cfg = ExecutionConfig(runtime="codex")
+        self.assertEqual(cfg.ai_provider, "codex")
+        self.assertEqual(cfg.coder_model, "gpt-5.3-codex")
+        self.assertEqual(cfg.verifier_model, "gpt-5.3-codex")
+
+    def test_env_codex_runtime_overrides_default(self) -> None:
+        with mock.patch.dict(os.environ, {"SWE_DEFAULT_RUNTIME": "codex"}):
+            self.assertEqual(BuildConfig().runtime, "codex")
+            self.assertEqual(ExecutionConfig().runtime, "codex")
+            self.assertEqual(BuildConfig().ai_provider, "codex")
+
+    def test_codex_models_default_and_role_override(self) -> None:
+        cfg = ExecutionConfig(
+            runtime="codex",
+            models={"default": "gpt-5.3-codex", "coder": "gpt-5.3-codex-spark"},
+        )
+        self.assertEqual(cfg.coder_model, "gpt-5.3-codex-spark")
+        self.assertEqual(cfg.qa_model, "gpt-5.3-codex")
+
+
 class TestDefaultModelFromEnv(unittest.TestCase):
     """`SWE_DEFAULT_MODEL` lets the deployer pin a single model id without
     code changes or threading config through every caller. Caller-supplied
