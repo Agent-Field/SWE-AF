@@ -12,6 +12,7 @@ import logging
 from swe_af.fast import fast_router
 from swe_af.fast.prompts import FAST_PLANNER_SYSTEM_PROMPT, fast_planner_task_prompt
 from swe_af.fast.schemas import FastPlanResult, FastTask
+from swe_af.runtime.providers import runtime_to_harness_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +97,7 @@ async def fast_plan_tasks(
         additional_context=additional_context,
     )
 
-    # Map 'claude' to 'claude-code' for AgentField router compatibility
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
     try:
         res = await fast_router.harness(
             prompt=task_prompt,

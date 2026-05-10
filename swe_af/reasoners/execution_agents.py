@@ -36,6 +36,7 @@ from swe_af.execution.schemas import (
     VerificationResult,
     WorkspaceInfo,
 )
+from swe_af.runtime.providers import runtime_to_harness_adapter
 from swe_af.prompts.ci_fixer import SYSTEM_PROMPT as CI_FIXER_SYSTEM_PROMPT
 from swe_af.prompts.ci_fixer import ci_fixer_task_prompt
 from swe_af.prompts.pr_resolver import SYSTEM_PROMPT as PR_RESOLVER_SYSTEM_PROMPT
@@ -161,7 +162,7 @@ async def run_retry_advisor(
         workspace_manifest=ws_manifest,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -244,7 +245,7 @@ async def run_issue_advisor(
     )
 
     cwd = worktree_path or dag_state_summary.get("repo_path", ".")
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -324,7 +325,7 @@ async def run_replanner(
     )
 
     log_dir = os.path.join(state.artifacts_dir, "logs") if state.artifacts_dir else None
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     current_prompt = task_prompt
     for attempt in range(2):
@@ -440,7 +441,7 @@ async def run_issue_writer(
         issue_file_path: str
         success: bool
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -507,7 +508,7 @@ async def run_verifier(
         workspace_manifest=ws_manifest,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -592,7 +593,7 @@ async def run_git_init(
             "- If the error indicates a parsing issue, ensure your output is valid JSON\n"
         )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -668,7 +669,7 @@ async def run_workspace_setup(
         workspaces: list[WorkspaceInfo]
         success: bool
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -733,7 +734,7 @@ async def run_merger(
         architecture_summary=architecture_summary,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -809,7 +810,7 @@ async def run_integration_tester(
         workspace_manifest=ws_manifest,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -878,7 +879,7 @@ async def run_workspace_cleanup(
         success: bool
         cleaned: list[str] = []
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -955,7 +956,7 @@ async def run_coder(
         target_repo=target_repo,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -1032,7 +1033,7 @@ async def run_qa(
         target_repo=target_repo,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -1112,7 +1113,7 @@ async def run_code_reviewer(
         target_repo=target_repo,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -1295,7 +1296,7 @@ async def generate_fix_issues(
         debt_items: list[dict] = []
         summary: str = ""
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -1362,7 +1363,7 @@ async def run_repo_finalize(
 
     task_prompt = repo_finalize_task_prompt(repo_path=repo_path)
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -1436,7 +1437,7 @@ async def run_github_pr(
         accumulated_debt=accumulated_debt,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -1579,7 +1580,7 @@ async def run_ci_fixer(
         previous_attempts=previous_attempts,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(
@@ -1679,7 +1680,7 @@ async def run_pr_resolver(
         additional_context=additional_context,
     )
 
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
 
     try:
         result = await router.harness(

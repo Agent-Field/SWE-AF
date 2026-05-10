@@ -15,6 +15,7 @@ from swe_af.execution.schemas import (
 )
 from swe_af.prompts.replanner import SYSTEM_PROMPT, replanner_task_prompt
 from swe_af.reasoners import router
+from swe_af.runtime.providers import runtime_to_harness_adapter
 
 
 async def invoke_replanner(
@@ -39,7 +40,7 @@ async def invoke_replanner(
         if dag_state.artifacts_dir
         else None
     )
-    provider = "claude-code" if config.ai_provider == "claude" else config.ai_provider
+    provider = runtime_to_harness_adapter(config.ai_provider)
 
     try:
         result = await router.harness(

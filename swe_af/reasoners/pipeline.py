@@ -22,6 +22,7 @@ from swe_af.reasoners.schemas import (
     PRD,
     ReviewResult,
 )
+from swe_af.runtime.providers import runtime_to_harness_adapter
 
 from . import router
 
@@ -191,7 +192,7 @@ async def run_product_manager(
         additional_context=additional_context,
         workspace_manifest=ws_manifest,
     )
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
     result = await router.harness(
         prompt=task_prompt,
         schema=PRD,
@@ -251,7 +252,7 @@ async def run_architect(
         feedback=feedback or None,
         workspace_manifest=ws_manifest,
     )
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
     result = await router.harness(
         prompt=task_prompt,
         schema=Architecture,
@@ -306,7 +307,7 @@ async def run_tech_lead(
         revision_number=revision_number,
         workspace_manifest=ws_manifest,
     )
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
     result = await router.harness(
         prompt=task_prompt,
         schema=ReviewResult,
@@ -383,7 +384,7 @@ async def run_sprint_planner(
         prd_path=paths["prd"],
         architecture_path=paths["architecture"],
     )
-    provider = "claude-code" if ai_provider == "claude" else ai_provider
+    provider = runtime_to_harness_adapter(ai_provider)
     result = await router.harness(
         prompt=task_prompt,
         schema=SprintPlanOutput,
