@@ -39,6 +39,18 @@ def _codex_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
                 _codex_strict_json_schema(item) if isinstance(item, dict) else item
                 for item in branch
             ]
+    defs = strict.get("$defs")
+    if isinstance(defs, dict):
+        strict["$defs"] = {
+            key: _codex_strict_json_schema(value) if isinstance(value, dict) else value
+            for key, value in defs.items()
+        }
+    definitions = strict.get("definitions")
+    if isinstance(definitions, dict):
+        strict["definitions"] = {
+            key: _codex_strict_json_schema(value) if isinstance(value, dict) else value
+            for key, value in definitions.items()
+        }
     return strict
 
 
@@ -96,15 +108,30 @@ def apply_codex_harness_patch() -> None:
     except Exception:
         return
 
-    original_build_prompt_suffix = _schema.build_prompt_suffix
-
     def build_prompt_suffix_with_schema_file(schema: Any, cwd: str) -> str:
+        """Use Codex-native structured output instead of AgentField's Write-tool suffix.
+
+        AgentField's default suffix asks the model to create
+        ``.agentfield_output.json`` with a Write tool. Codex CLI executions may
+        run under read-only sandboxing and do not have AgentField's Write tool,
+        so that instruction causes no final output. The Codex provider below
+        passes ``--output-schema`` and ``--output-last-message`` to the CLI; this
+        suffix only needs to create the schema file and ask for final JSON.
+        """
         schema_json = json.dumps(
             _codex_strict_json_schema(_schema.schema_to_json_schema(schema)),
             indent=2,
         )
         _schema.write_schema_file(schema_json, cwd)
-        return original_build_prompt_suffix(schema, cwd)
+        schema_path = _schema.get_schema_path(cwd)
+        return (
+            "\n\n---\n"
+            "CRITICAL CODEX STRUCTURED OUTPUT REQUIREMENTS:\n"
+            f"Return a single final JSON object conforming to: {schema_path}\n"
+            "Do not use markdown fences, comments, or surrounding prose.\n"
+            "Do not try to create .agentfield_output.json yourself; the Codex "
+            "CLI will persist your final JSON response for AgentField."
+        )
 
     async def execute_with_native_structured_output(self: Any, prompt: str, options: dict[str, object]) -> Any:
         cwd = str(options.get("cwd")) if isinstance(options.get("cwd"), str) else None
@@ -140,8 +167,8 @@ def apply_codex_harness_patch() -> None:
                     "CODEX STRUCTURED OUTPUT CONTRACT:\n"
                     f"The Codex CLI will save your final response to: {output_path}\n"
                     f"Your final response MUST be a single JSON object conforming to: {schema_path}\n"
-                    "Do not make the missing output file the subject of the task. "
-                    "Complete the user's task, then return the required JSON object as your final response."
+                    "Return the JSON object as your final answer. Do not write "
+                    "the output file yourself or make the output file the task."
                 )
 
         try:
