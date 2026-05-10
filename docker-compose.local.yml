@@ -19,10 +19,15 @@ services:
       - PORT=8003
       # Callback URL for control plane to reach this agent
       - AGENT_CALLBACK_URL=http://localhost:8003
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
+      - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     ports:
       - "8003:8003"
     volumes:
       - workspaces:/workspaces
+      - ${HOME}/.codex:/root/.codex
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

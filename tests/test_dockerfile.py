@@ -54,3 +54,14 @@ class TestWorkspacesDirectory:
             "/workspaces must be created before EXPOSE to ensure it's part of "
             "the image layer before any volume mount"
         )
+
+
+def test_dockerfile_installs_codex_cli(dockerfile_content: str) -> None:
+    assert "npm install -g @openai/codex" in dockerfile_content
+    assert "SWE_CODEX_AUTH_MODE" in dockerfile_content
+    assert "codex-real" in dockerfile_content
+
+
+def test_dockerfile_preserves_opencode_install(dockerfile_content: str) -> None:
+    assert "https://opencode.ai/install" in dockerfile_content
+    assert "OPENROUTER_API_KEY" in dockerfile_content

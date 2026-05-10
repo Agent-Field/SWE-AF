@@ -18,6 +18,16 @@ def load_pyproject():
         return tomllib.load(f)
 
 
+def _service_environment(service_name: str) -> list[str]:
+    compose = load_docker_compose()
+    return compose["services"][service_name]["environment"]
+
+
+def _service_volumes(service_name: str) -> list[str]:
+    compose = load_docker_compose()
+    return compose["services"][service_name]["volumes"]
+
+
 def test_swe_fast_service_exists():
     """swe-fast service is present in docker-compose.yml."""
     compose = load_docker_compose()
@@ -26,15 +36,13 @@ def test_swe_fast_service_exists():
 
 def test_swe_fast_node_id_env_var():
     """swe-fast service has NODE_ID=swe-fast in environment."""
-    compose = load_docker_compose()
-    env = compose["services"]["swe-fast"]["environment"]
+    env = _service_environment("swe-fast")
     assert "NODE_ID=swe-fast" in env, "NODE_ID=swe-fast must be in swe-fast environment"
 
 
 def test_swe_fast_port_env_var():
     """swe-fast service has PORT=8004 in environment."""
-    compose = load_docker_compose()
-    env = compose["services"]["swe-fast"]["environment"]
+    env = _service_environment("swe-fast")
     assert "PORT=8004" in env, "PORT=8004 must be in swe-fast environment"
 
 
@@ -54,8 +62,7 @@ def test_swe_fast_depends_on_control_plane():
 
 def test_swe_fast_agentfield_server_env_var():
     """swe-fast service has AGENTFIELD_SERVER=http://control-plane:8080 in environment."""
-    compose = load_docker_compose()
-    env = compose["services"]["swe-fast"]["environment"]
+    env = _service_environment("swe-fast")
     assert "AGENTFIELD_SERVER=http://control-plane:8080" in env, (
         "AGENTFIELD_SERVER=http://control-plane:8080 must be in swe-fast environment"
     )
@@ -70,6 +77,24 @@ def test_swe_agent_service_unchanged():
     assert "NODE_ID=swe-planner" in env, "swe-agent NODE_ID must remain swe-planner"
     assert "PORT=8003" in env, "swe-agent PORT must remain 8003"
     assert "8003:8003" in swe_agent["ports"], "swe-agent port mapping must remain 8003:8003"
+
+
+def test_codex_volume_mount_in_swe_agent_and_swe_fast():
+    expected = "${HOME}/.codex:/root/.codex"
+    assert expected in _service_volumes("swe-agent")
+    assert expected in _service_volumes("swe-fast")
+
+
+def test_codex_auth_mode_env_in_swe_agent_and_swe_fast():
+    expected = "SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}"
+    assert expected in _service_environment("swe-agent")
+    assert expected in _service_environment("swe-fast")
+
+
+def test_default_runtime_env_in_swe_agent_and_swe_fast():
+    expected = "SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}"
+    assert expected in _service_environment("swe-agent")
+    assert expected in _service_environment("swe-fast")
 
 
 def test_pyproject_swe_fast_script():

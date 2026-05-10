@@ -19,10 +19,15 @@ services:
       - NODE_ID=swe-planner
       - PORT=8003
       - AGENT_CALLBACK_URL=http://swe-agent:8003
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
+      - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     ports:
       - "8003:8003"
     volumes:
       - workspaces:/workspaces
+      - ${HOME}/.codex:/root/.codex
     depends_on:
       - control-plane
     deploy:
@@ -45,10 +50,14 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - OPENCODE_MODEL=${OPENCODE_MODEL:-}
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
+      - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
     ports:
       - "8004:8004"
     volumes:
       - workspaces:/workspaces
+      - ${HOME}/.codex:/root/.codex
     depends_on:
       - control-plane
 

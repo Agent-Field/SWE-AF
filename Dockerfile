@@ -8,7 +8,7 @@ WORKDIR /app
 # System deps: git (worktrees, branches), curl (healthcheck), jq (agent bash),
 # openssh-client (optional SSH git), gh CLI (draft PRs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl openssh-client jq && \
+    git curl openssh-client jq nodejs npm && \
     # Install GitHub CLI
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
@@ -17,6 +17,37 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get update && apt-get install -y --no-install-recommends gh && \
     # Install OpenCode CLI v1.2+ for opencode provider (with run --model support)
     curl -fsSL https://opencode.ai/install | bash && \
+    # Install Codex CLI for codex runtime provider
+    npm install -g @openai/codex && \
+    codex_path="$(command -v codex)" && \
+    mv "${codex_path}" /usr/local/bin/codex-real && \
+    printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    '' \
+    'auth_mode="${SWE_CODEX_AUTH_MODE:-auto}"' \
+    '' \
+    'case "${auth_mode}" in' \
+    '  chatgpt)' \
+    '    unset OPENAI_API_KEY' \
+    '    ;;' \
+    '  api_key)' \
+    '    if [ -z "${OPENAI_API_KEY:-}" ]; then' \
+    '      echo "SWE_CODEX_AUTH_MODE=api_key requires OPENAI_API_KEY to be set" >&2' \
+    '      exit 2' \
+    '    fi' \
+    '    ;;' \
+    '  auto)' \
+    '    ;;' \
+    '  *)' \
+    '    echo "Invalid SWE_CODEX_AUTH_MODE: ${auth_mode}. Expected one of: auto, chatgpt, api_key" >&2' \
+    '    exit 2' \
+    '    ;;' \
+    'esac' \
+    '' \
+    'exec /usr/local/bin/codex-real "$@"' \
+    > /usr/local/bin/codex && \
+    chmod +x /usr/local/bin/codex && \
     rm -rf /var/lib/apt/lists/*
 
 # Add OpenCode to PATH for non-interactive shells
