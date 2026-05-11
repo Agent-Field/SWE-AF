@@ -354,6 +354,75 @@ def _format_plan_for_approval(
     return plan_summary, prd_markdown, architecture_markdown, issues_for_template
 
 
+# Default timeout for the synchronous hax-sdk HTTP call. 120s gives hax-sdk
+# reasonable headroom for cold-start; anything longer is almost certainly
+# wedged. Module-level so tests can shorten it for fast iteration.
+HAX_CREATE_REQUEST_TIMEOUT_SECONDS = 120.0
+
+
+async def _create_hax_request_with_timeout(
+    *,
+    hax_client,
+    hax_create_kwargs: dict,
+    revision_iter: int,
+    timeout_seconds: float = HAX_CREATE_REQUEST_TIMEOUT_SECONDS,
+):
+    """Submit the hax-sdk approval request with a hard timeout.
+
+    Without this wrapper, a wedged hax-sdk causes ``app.pause()`` to never be
+    reached: the surrounding reasoner sits in the Phase 1.5 revision loop, no
+    new sub-reasoners are spawned, and the parent reasoner's pause-aware
+    active-time budget burns out silently. Observed on production run
+    ``run_1778512783034_f4985c96`` — the SECOND revision's ``create_request``
+    hung for 76min between sprint_planner completion (16:29:45) and the
+    parent watchdog firing (17:45:36).
+
+    The hax-sdk Python client is synchronous, so we run it on a thread and
+    bound the wait with ``asyncio.wait_for``. A ``TimeoutError`` is
+    surfaced as a clear ``RuntimeError`` so the caller can fail-fast rather
+    than chew through the parent's pause-aware budget for two hours.
+
+    Notifies the run timeline at three points (entry, success, error) so a
+    future hang is diagnosable from logs alone — the production failure was
+    invisible because the original synchronous call had no observability
+    hooks.
+    """
+    app.note(
+        f"Phase 1.5: Submitting hax create_request (iteration {revision_iter})",
+        tags=["build", "approval", "hax", "create_request"],
+    )
+    try:
+        hax_request = await asyncio.wait_for(
+            asyncio.to_thread(hax_client.create_request, **hax_create_kwargs),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        app.note(
+            f"hax_client.create_request timed out after {timeout_seconds}s "
+            f"(iteration {revision_iter})",
+            tags=["build", "approval", "hax", "timeout"],
+        )
+        raise RuntimeError(
+            f"hax-sdk create_request timed out after {timeout_seconds}s on "
+            f"iteration {revision_iter}; hax-sdk is likely wedged. Without "
+            f"this hard timeout the surrounding reasoner would silently "
+            f"consume the parent's pause-aware active-time budget."
+        ) from exc
+    except Exception as exc:
+        app.note(
+            f"hax_client.create_request raised "
+            f"{type(exc).__name__}: {exc} (iteration {revision_iter})",
+            tags=["build", "approval", "hax", "error"],
+        )
+        raise
+    app.note(
+        f"hax create_request succeeded "
+        f"(request_id={hax_request.id}, iteration {revision_iter})",
+        tags=["build", "approval", "hax", "submitted"],
+    )
+    return hax_request
+
+
 @app.reasoner()
 async def build(
     goal: str,
@@ -671,7 +740,11 @@ async def build(
             if approval_user_id:
                 hax_create_kwargs["user_id"] = approval_user_id
 
-            hax_request = hax_client.create_request(**hax_create_kwargs)
+            hax_request = await _create_hax_request_with_timeout(
+                hax_client=hax_client,
+                hax_create_kwargs=hax_create_kwargs,
+                revision_iter=revision_iter,
+            )
 
             with open(approval_state_path, "w") as _fp:
                 _json.dump({
