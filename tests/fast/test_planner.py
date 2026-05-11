@@ -158,6 +158,33 @@ class TestFastPlanTasksFunctional:
         assert result["tasks"][0]["name"] == "step-one"
         assert result["fallback_used"] is False
 
+    def test_successful_parse_forces_fallback_used_false_even_if_llm_set_true(self) -> None:
+        """If the LLM (e.g. codex with stripped schema defaults) returns
+        fallback_used=True alongside a valid task list, the planner must
+        treat the parse as successful and reset the flag to False — the
+        flag is planner-side state, not an LLM self-assessment."""
+        from swe_af.fast.planner import fast_plan_tasks
+
+        plan = FastPlanResult(
+            tasks=[_make_fast_task("real-task")],
+            rationale="Codex filled fallback_used=true by mistake.",
+            fallback_used=True,
+        )
+        mock_response = _make_mock_response(plan)
+
+        with patch("swe_af.fast.planner._note"), \
+             patch("swe_af.fast.planner.fast_router") as mock_router:
+            mock_router.harness = AsyncMock(return_value=mock_response)
+            mock_router.note = MagicMock()
+
+            result = _run(fast_plan_tasks(
+                goal="Add a /health endpoint",
+                repo_path="/tmp/repo",
+            ))
+
+        assert result["fallback_used"] is False
+        assert [t["name"] for t in result["tasks"]] == ["real-task"]
+
     def test_llm_parsed_none_triggers_fallback(self) -> None:
         """When parsed=None the fallback plan with 'implement-goal' is returned."""
         from swe_af.fast.planner import fast_plan_tasks
