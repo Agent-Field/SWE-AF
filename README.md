@@ -342,6 +342,10 @@ For OpenRouter with `open_code`, use model IDs in `openrouter/<provider>/<model>
 
 For Codex with ChatGPT subscription auth, install the Codex CLI on the host, run `codex login`, leave `OPENAI_API_KEY` unset for this process, and set `SWE_CODEX_AUTH_MODE=chatgpt` or `auto`. For OpenAI API-platform billing, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
+> **Codex deployments using the Docker image must set `SWE_DEFAULT_MODEL=gpt-5.3-codex` on the environment** (or pass `models: {"default": "gpt-5.3-codex"}` in every build's `config`). The image bakes `HARNESS_MODEL=openrouter/moonshotai/kimi-k2.6` as an OpenCode fallback, and SWE-AF's model-resolution env cascade reads `HARNESS_MODEL` — so without `SWE_DEFAULT_MODEL` set, the Codex CLI receives an OpenRouter model id it can't handle and the Product Manager reasoner fails in ~13s. Setting `SWE_DEFAULT_MODEL` makes the cascade pin every role to the Codex model.
+
+> Codex CLI's `workspace-write` sandbox uses bubblewrap (`bwrap`) and needs Linux user namespaces enabled on the host. Most production Linux hosts and managed container runtimes (Railway, etc.) allow this by default, but local Docker on WSL2 or hardened environments may refuse with `bwrap: No permissions to create a new namespace`. If the verifier reports that error, the coder ran but couldn't write files — enable user namespaces on the host before relying on the codex runtime there.
+
 ### Optional: web search
 
 Coding and review agents can look up external documentation, library APIs, error messages, and version/deprecation status during a build. This is opt-in via two env vars on the deployment:
