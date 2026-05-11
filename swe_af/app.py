@@ -671,7 +671,52 @@ async def build(
             if approval_user_id:
                 hax_create_kwargs["user_id"] = approval_user_id
 
-            hax_request = hax_client.create_request(**hax_create_kwargs)
+            # Hard timeout on the synchronous hax-sdk HTTP call. Without this,
+            # a wedged hax-sdk causes app.pause() to never be reached — build
+            # sits in the revision loop and the parent reasoner's active-time
+            # budget burns out silently. Observed on
+            # run_1778512783034_f4985c96: the SECOND revision's create_request
+            # hung, swe-planner.build never re-paused, and
+            # github-buddy.implement_from_issue tripped its 7200s watchdog after
+            # 76 minutes of nothing. 120s gives hax-sdk room for cold-start;
+            # anything longer is almost certainly wedged and we want to fail
+            # loudly rather than chew through the parent's pause-aware budget.
+            app.note(
+                f"Phase 1.5: Submitting hax create_request (iteration {revision_iter})",
+                tags=["build", "approval", "hax", "create_request"],
+            )
+            try:
+                hax_request = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        hax_client.create_request, **hax_create_kwargs
+                    ),
+                    timeout=120.0,
+                )
+            except asyncio.TimeoutError as exc:
+                app.note(
+                    f"hax_client.create_request timed out after 120s "
+                    f"(iteration {revision_iter})",
+                    tags=["build", "approval", "hax", "timeout"],
+                )
+                raise RuntimeError(
+                    f"hax-sdk create_request timed out after 120s on "
+                    f"iteration {revision_iter}; hax-sdk is likely wedged. "
+                    f"Without this hard timeout the surrounding reasoner "
+                    f"would silently consume the parent's pause-aware "
+                    f"active-time budget."
+                ) from exc
+            except Exception as exc:
+                app.note(
+                    f"hax_client.create_request raised "
+                    f"{type(exc).__name__}: {exc} (iteration {revision_iter})",
+                    tags=["build", "approval", "hax", "error"],
+                )
+                raise
+            app.note(
+                f"hax create_request succeeded "
+                f"(request_id={hax_request.id}, iteration {revision_iter})",
+                tags=["build", "approval", "hax", "submitted"],
+            )
 
             with open(approval_state_path, "w") as _fp:
                 _json.dump({
