@@ -3,6 +3,7 @@ from __future__ import annotations
 from swe_af.runtime.codex_harness_patch import (
     _augment_codex_error_message,
     _codex_strict_json_schema,
+    active_provider,
     apply_codex_harness_patch,
 )
 
@@ -68,6 +69,35 @@ def test_codex_prompt_suffix_uses_final_json_not_write_tool(tmp_path) -> None:
 
     apply_codex_harness_patch()
 
+    token = active_provider.set("codex")
+    try:
+        suffix = _schema.build_prompt_suffix(
+            {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+            },
+            str(tmp_path),
+        )
+    finally:
+        active_provider.reset(token)
+
+    assert "Return a single final JSON object" in suffix
+    assert "Write tool" not in suffix
+    assert (tmp_path / ".agentfield_schema.json").exists()
+
+
+def test_non_codex_prompt_suffix_keeps_agentfield_write_tool_default(tmp_path) -> None:
+    """For claude_code / open_code calls, build_prompt_suffix must return the
+    original AgentField suffix that instructs the agent to use its Write tool.
+
+    Without this gate the codex-native suffix would leak into every harness
+    call, forcing claude/opencode runs onto the slower stdout-parse fallback.
+    """
+    from agentfield.harness import _schema
+
+    apply_codex_harness_patch()
+
+    # No active provider set ⇒ default suffix.
     suffix = _schema.build_prompt_suffix(
         {
             "type": "object",
@@ -76,6 +106,5 @@ def test_codex_prompt_suffix_uses_final_json_not_write_tool(tmp_path) -> None:
         str(tmp_path),
     )
 
-    assert "Return a single final JSON object" in suffix
-    assert "Write tool" not in suffix
-    assert (tmp_path / ".agentfield_schema.json").exists()
+    assert "Write tool" in suffix
+    assert "Codex CLI" not in suffix

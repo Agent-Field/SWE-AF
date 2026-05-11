@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import os
 from pathlib import Path
 from typing import Any
 
 _PATCHED = False
+
+# Set by the wrapped Agent.harness for the duration of a harness call.
+# Read by the dispatching build_prompt_suffix so that claude_code / open_code
+# calls keep the original AgentField "use Write tool" instruction and only
+# codex calls get the Codex-native structured-output instruction.
+active_provider: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "swe_af_codex_active_provider", default=None
+)
+
+_ORIGINAL_BUILD_PROMPT_SUFFIX: Any = None
 
 
 def _codex_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -92,10 +103,11 @@ async def _run_codex_cli_with_stdin(
 
 
 def apply_codex_harness_patch() -> None:
-    global _PATCHED
+    global _PATCHED, _ORIGINAL_BUILD_PROMPT_SUFFIX
     if _PATCHED:
         return
     try:
+        from agentfield.agent import Agent
         from agentfield.harness import _runner, _schema
         from agentfield.harness._cli import (
             estimate_cli_cost,
@@ -107,6 +119,8 @@ def apply_codex_harness_patch() -> None:
         from agentfield.harness.providers.codex import CodexProvider
     except Exception:
         return
+
+    _ORIGINAL_BUILD_PROMPT_SUFFIX = _schema.build_prompt_suffix
 
     def build_prompt_suffix_with_schema_file(schema: Any, cwd: str) -> str:
         """Use Codex-native structured output instead of AgentField's Write-tool suffix.
@@ -255,7 +269,33 @@ def apply_codex_harness_patch() -> None:
             returncode=returncode,
         )
 
-    _schema.build_prompt_suffix = build_prompt_suffix_with_schema_file
-    _runner.build_prompt_suffix = build_prompt_suffix_with_schema_file
+    def build_prompt_suffix_dispatching(schema: Any, cwd: str) -> str:
+        """Route to codex-native suffix only when the active call is for codex.
+
+        Without this gate, every claude_code / open_code harness call would
+        also receive the codex-specific instruction "Do not try to create
+        .agentfield_output.json yourself; the Codex CLI will persist your
+        final JSON response" — which is wrong for those providers and forces
+        their runner into the slower stdout-parse fallback path.
+        """
+        if active_provider.get() == "codex":
+            return build_prompt_suffix_with_schema_file(schema, cwd)
+        return _ORIGINAL_BUILD_PROMPT_SUFFIX(schema, cwd)
+
+    _orig_agent_harness = Agent.harness
+
+    async def _harness_with_provider_context(
+        self: Any, prompt: str, *args: Any, **kwargs: Any
+    ) -> Any:
+        provider_value = kwargs.get("provider")
+        token = active_provider.set(str(provider_value) if provider_value else None)
+        try:
+            return await _orig_agent_harness(self, prompt, *args, **kwargs)
+        finally:
+            active_provider.reset(token)
+
+    _schema.build_prompt_suffix = build_prompt_suffix_dispatching
+    _runner.build_prompt_suffix = build_prompt_suffix_dispatching
     CodexProvider.execute = execute_with_native_structured_output
+    Agent.harness = _harness_with_provider_context
     _PATCHED = True
