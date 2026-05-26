@@ -45,6 +45,38 @@ app = Agent(
 app.include_router(router)
 
 
+# ---------------------------------------------------------------------------
+# Auto-inject scoped credentials into every router.harness call.
+#
+# The environment scout negotiates credentials with the user (via Hax) and
+# stashes them in process-local memory keyed by the build's run_id. Without
+# this wrapper, downstream reasoners would each have to explicitly call
+# ``env=harness_env_for(router)`` at every harness call site (25+ places).
+# Patching the Agent's bound ``harness`` method once means every reasoner
+# — existing and future — automatically gets the negotiated credentials
+# merged into the subprocess env, with zero per-call-site changes.
+#
+# Precedence: scoped credentials win over the inherited process env so a
+# fresh scout token overrides any stale value carried by os.environ.
+# Callers MAY still pass an explicit ``env=`` dict; we treat it as the
+# base, then merge scoped creds on top.
+# ---------------------------------------------------------------------------
+_original_harness = app.harness
+
+
+async def _harness_with_scoped_credentials(*args, env=None, **kwargs):
+    from swe_af.hitl import inject_credentials_into_env  # noqa: PLC0415
+
+    ctx = getattr(app, "ctx", None)
+    run_id = (getattr(ctx, "run_id", None) if ctx else None) or ""
+    base_env = dict(os.environ) if env is None else dict(env)
+    merged_env = inject_credentials_into_env(base_env, run_id)
+    return await _original_harness(*args, env=merged_env, **kwargs)
+
+
+app.harness = _harness_with_scoped_credentials
+
+
 async def _clone_repos(
     cfg: BuildConfig,
     artifacts_dir: str,
@@ -473,829 +505,842 @@ async def build(
 
     app.note(f"Build starting (build_id={build_id})", tags=["build", "start"])
 
-    # Clone if repo_url is set and target doesn't exist yet
-    git_dir = os.path.join(repo_path, ".git")
-    if cfg.repo_url and not os.path.exists(git_dir):
-        app.note(f"Cloning {cfg.repo_url} → {repo_path}", tags=["build", "clone"])
-        os.makedirs(repo_path, exist_ok=True)
-        clone_result = subprocess.run(
-            ["git", "clone", cfg.repo_url, repo_path],
-            capture_output=True,
-            text=True,
-        )
-        if clone_result.returncode != 0:
-            err = clone_result.stderr.strip()
-            app.note(f"Clone failed (exit {clone_result.returncode}): {err}", tags=["build", "clone", "error"])
-            raise RuntimeError(f"git clone failed (exit {clone_result.returncode}): {err}")
-    elif cfg.repo_url and os.path.exists(git_dir):
-        # Repo already exists at this build-scoped path (unlikely but handle gracefully).
-        # Reset to remote default branch for a clean baseline.
-        default_branch = cfg.github_pr_base or "main"
-        app.note(
-            f"Repo already exists at {repo_path} — resetting to origin/{default_branch}",
-            tags=["build", "clone", "reset"],
-        )
+    # Scope key for the in-memory credentials store negotiated by the
+    # environment scout. Shared by every reasoner in this build (run_id
+    # propagates through every app.call). Cleared in the `finally` below
+    # so even an exception leaves no secrets in process memory.
+    _scope_id = (getattr(app.ctx, "run_id", None) if app.ctx else None) or ""
 
-        # Remove stale worktrees on disk before touching branches
-        worktrees_dir = os.path.join(repo_path, ".worktrees")
-        if os.path.isdir(worktrees_dir):
-            import shutil
-            shutil.rmtree(worktrees_dir, ignore_errors=True)
-        subprocess.run(
-            ["git", "worktree", "prune"],
-            cwd=repo_path, capture_output=True, text=True,
-        )
+    try:
 
-        # Fetch latest remote state
-        fetch = subprocess.run(
-            ["git", "fetch", "origin"],
-            cwd=repo_path, capture_output=True, text=True,
-        )
-        if fetch.returncode != 0:
-            app.note(f"git fetch failed: {fetch.stderr.strip()}", tags=["build", "clone", "error"])
-
-        # Force-checkout default branch (handles dirty working tree from crashed builds)
-        subprocess.run(
-            ["git", "checkout", "-f", default_branch],
-            cwd=repo_path, capture_output=True, text=True,
-        )
-        reset = subprocess.run(
-            ["git", "reset", "--hard", f"origin/{default_branch}"],
-            cwd=repo_path, capture_output=True, text=True,
-        )
-        if reset.returncode != 0:
-            # Hard reset failed — nuke and re-clone as last resort
-            app.note(
-                f"Reset to origin/{default_branch} failed — re-cloning",
-                tags=["build", "clone", "reclone"],
-            )
-            import shutil
-            shutil.rmtree(repo_path, ignore_errors=True)
+        # Clone if repo_url is set and target doesn't exist yet
+        git_dir = os.path.join(repo_path, ".git")
+        if cfg.repo_url and not os.path.exists(git_dir):
+            app.note(f"Cloning {cfg.repo_url} → {repo_path}", tags=["build", "clone"])
             os.makedirs(repo_path, exist_ok=True)
             clone_result = subprocess.run(
                 ["git", "clone", cfg.repo_url, repo_path],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             if clone_result.returncode != 0:
                 err = clone_result.stderr.strip()
-                raise RuntimeError(f"git re-clone failed: {err}")
-    else:
-        # Ensure repo_path exists even when no repo_url is provided (fresh init case)
-        # This is needed because planning agents may need to read the repo in parallel with git_init
-        os.makedirs(repo_path, exist_ok=True)
+                app.note(f"Clone failed (exit {clone_result.returncode}): {err}", tags=["build", "clone", "error"])
+                raise RuntimeError(f"git clone failed (exit {clone_result.returncode}): {err}")
+        elif cfg.repo_url and os.path.exists(git_dir):
+            # Repo already exists at this build-scoped path (unlikely but handle gracefully).
+            # Reset to remote default branch for a clean baseline.
+            default_branch = cfg.github_pr_base or "main"
+            app.note(
+                f"Repo already exists at {repo_path} — resetting to origin/{default_branch}",
+                tags=["build", "clone", "reset"],
+            )
 
-    if execute_fn_target:
-        cfg.execute_fn_target = execute_fn_target
-    if permission_mode:
-        cfg.permission_mode = permission_mode
-    if enable_learning:
-        cfg.enable_learning = True
-    if max_turns > 0:
-        cfg.agent_max_turns = max_turns
+            # Remove stale worktrees on disk before touching branches
+            worktrees_dir = os.path.join(repo_path, ".worktrees")
+            if os.path.isdir(worktrees_dir):
+                import shutil
+                shutil.rmtree(worktrees_dir, ignore_errors=True)
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                cwd=repo_path, capture_output=True, text=True,
+            )
 
-    # Resolve runtime + flat model config once for this build.
-    resolved = cfg.resolved_models()
+            # Fetch latest remote state
+            fetch = subprocess.run(
+                ["git", "fetch", "origin"],
+                cwd=repo_path, capture_output=True, text=True,
+            )
+            if fetch.returncode != 0:
+                app.note(f"git fetch failed: {fetch.stderr.strip()}", tags=["build", "clone", "error"])
 
-    # Compute absolute artifacts directory path for logging
-    abs_artifacts_dir = os.path.join(os.path.abspath(repo_path), artifacts_dir)
+            # Force-checkout default branch (handles dirty working tree from crashed builds)
+            subprocess.run(
+                ["git", "checkout", "-f", default_branch],
+                cwd=repo_path, capture_output=True, text=True,
+            )
+            reset = subprocess.run(
+                ["git", "reset", "--hard", f"origin/{default_branch}"],
+                cwd=repo_path, capture_output=True, text=True,
+            )
+            if reset.returncode != 0:
+                # Hard reset failed — nuke and re-clone as last resort
+                app.note(
+                    f"Reset to origin/{default_branch} failed — re-cloning",
+                    tags=["build", "clone", "reclone"],
+                )
+                import shutil
+                shutil.rmtree(repo_path, ignore_errors=True)
+                os.makedirs(repo_path, exist_ok=True)
+                clone_result = subprocess.run(
+                    ["git", "clone", cfg.repo_url, repo_path],
+                    capture_output=True, text=True,
+                )
+                if clone_result.returncode != 0:
+                    err = clone_result.stderr.strip()
+                    raise RuntimeError(f"git re-clone failed: {err}")
+        else:
+            # Ensure repo_path exists even when no repo_url is provided (fresh init case)
+            # This is needed because planning agents may need to read the repo in parallel with git_init
+            os.makedirs(repo_path, exist_ok=True)
 
-    # Multi-repo path: clone all repos concurrently
-    manifest: WorkspaceManifest | None = None
-    if len(cfg.repos) > 1:
-        app.note(
-            f"Cloning {len(cfg.repos)} repos concurrently",
-            tags=["build", "clone", "multi-repo"],
-        )
-        manifest = await _clone_repos(cfg, abs_artifacts_dir)
-        # Use primary repo as the canonical repo_path
-        repo_path = manifest.primary_repo.absolute_path
-        app.note(
-            f"Multi-repo workspace ready: {manifest.workspace_root}",
-            tags=["build", "clone", "multi-repo", "complete"],
-        )
+        if execute_fn_target:
+            cfg.execute_fn_target = execute_fn_target
+        if permission_mode:
+            cfg.permission_mode = permission_mode
+        if enable_learning:
+            cfg.enable_learning = True
+        if max_turns > 0:
+            cfg.agent_max_turns = max_turns
 
-    # 1. PLAN + GIT INIT (concurrent — no data dependency between them)
-    app.note("Phase 1: Planning + Git init (parallel)", tags=["build", "parallel"])
+        # Resolve runtime + flat model config once for this build.
+        resolved = cfg.resolved_models()
 
-    plan_coro = app.call(
-        f"{NODE_ID}.plan",
-        goal=goal,
-        repo_path=repo_path,
-        artifacts_dir=artifacts_dir,
-        additional_context=additional_context,
-        max_review_iterations=cfg.max_review_iterations,
-        pm_model=resolved["pm_model"],
-        architect_model=resolved["architect_model"],
-        tech_lead_model=resolved["tech_lead_model"],
-        sprint_planner_model=resolved["sprint_planner_model"],
-        issue_writer_model=resolved["issue_writer_model"],
-        permission_mode=cfg.permission_mode,
-        ai_provider=cfg.ai_provider,
-        workspace_manifest=manifest.model_dump() if manifest else None,
-    )
+        # Compute absolute artifacts directory path for logging
+        abs_artifacts_dir = os.path.join(os.path.abspath(repo_path), artifacts_dir)
 
-    # Git init with retry logic
-    MAX_GIT_INIT_RETRIES = cfg.git_init_max_retries
-    git_init = None
-    previous_error = None
-    raw_plan = None
+        # Multi-repo path: clone all repos concurrently
+        manifest: WorkspaceManifest | None = None
+        if len(cfg.repos) > 1:
+            app.note(
+                f"Cloning {len(cfg.repos)} repos concurrently",
+                tags=["build", "clone", "multi-repo"],
+            )
+            manifest = await _clone_repos(cfg, abs_artifacts_dir)
+            # Use primary repo as the canonical repo_path
+            repo_path = manifest.primary_repo.absolute_path
+            app.note(
+                f"Multi-repo workspace ready: {manifest.workspace_root}",
+                tags=["build", "clone", "multi-repo", "complete"],
+            )
 
-    for attempt in range(1, MAX_GIT_INIT_RETRIES + 1):
-        app.note(
-            f"Git init attempt {attempt}/{MAX_GIT_INIT_RETRIES}"
-            + (f" (previous error: {previous_error})" if previous_error else ""),
-            tags=["build", "git_init", "retry"],
-        )
+        # 1. PLAN + GIT INIT (concurrent — no data dependency between them)
+        app.note("Phase 1: Planning + Git init (parallel)", tags=["build", "parallel"])
 
-        git_init_coro = app.call(
-            f"{NODE_ID}.run_git_init",
-            repo_path=repo_path,
+        plan_coro = app.call(
+            f"{NODE_ID}.plan",
             goal=goal,
-            artifacts_dir=abs_artifacts_dir,
-            model=resolved["git_model"],
+            repo_path=repo_path,
+            artifacts_dir=artifacts_dir,
+            additional_context=additional_context,
+            max_review_iterations=cfg.max_review_iterations,
+            pm_model=resolved["pm_model"],
+            architect_model=resolved["architect_model"],
+            tech_lead_model=resolved["tech_lead_model"],
+            sprint_planner_model=resolved["sprint_planner_model"],
+            issue_writer_model=resolved["issue_writer_model"],
             permission_mode=cfg.permission_mode,
             ai_provider=cfg.ai_provider,
-            previous_error=previous_error,
-            build_id=build_id,
+            workspace_manifest=manifest.model_dump() if manifest else None,
         )
 
-        # Run planning only on first attempt, then just git_init on retries
-        if attempt == 1:
-            raw_plan, raw_git = await asyncio.gather(plan_coro, git_init_coro)
-        else:
-            raw_git = await git_init_coro
+        # Git init with retry logic
+        MAX_GIT_INIT_RETRIES = cfg.git_init_max_retries
+        git_init = None
+        previous_error = None
+        raw_plan = None
 
-        # git_init failures are non-fatal — unwrap but don't raise
-        try:
-            git_init = _unwrap(raw_git, "run_git_init")
-        except RuntimeError:
-            git_init = raw_git if isinstance(raw_git, dict) else {"success": False, "error_message": str(raw_git)}
-
-        if git_init.get("success"):
+        for attempt in range(1, MAX_GIT_INIT_RETRIES + 1):
             app.note(
-                f"Git init succeeded on attempt {attempt}",
-                tags=["build", "git_init", "success"],
-            )
-            break
-        else:
-            previous_error = git_init.get("error_message", "unknown error")
-            app.note(
-                f"Git init attempt {attempt} failed: {previous_error}",
-                tags=["build", "git_init", "failed"],
+                f"Git init attempt {attempt}/{MAX_GIT_INIT_RETRIES}"
+                + (f" (previous error: {previous_error})" if previous_error else ""),
+                tags=["build", "git_init", "retry"],
             )
 
-            if attempt == MAX_GIT_INIT_RETRIES:
+            git_init_coro = app.call(
+                f"{NODE_ID}.run_git_init",
+                repo_path=repo_path,
+                goal=goal,
+                artifacts_dir=abs_artifacts_dir,
+                model=resolved["git_model"],
+                permission_mode=cfg.permission_mode,
+                ai_provider=cfg.ai_provider,
+                previous_error=previous_error,
+                build_id=build_id,
+            )
+
+            # Run planning only on first attempt, then just git_init on retries
+            if attempt == 1:
+                raw_plan, raw_git = await asyncio.gather(plan_coro, git_init_coro)
+            else:
+                raw_git = await git_init_coro
+
+            # git_init failures are non-fatal — unwrap but don't raise
+            try:
+                git_init = _unwrap(raw_git, "run_git_init")
+            except RuntimeError:
+                git_init = raw_git if isinstance(raw_git, dict) else {"success": False, "error_message": str(raw_git)}
+
+            if git_init.get("success"):
                 app.note(
-                    f"Git init failed after {MAX_GIT_INIT_RETRIES} attempts — "
-                    "proceeding without git workflow",
-                    tags=["build", "git_init", "exhausted"],
-                )
-
-            # Brief delay before retry (except on last attempt)
-            if attempt < MAX_GIT_INIT_RETRIES:
-                await asyncio.sleep(cfg.git_init_retry_delay)
-
-    # Unwrap plan result (should have been set on first attempt)
-    plan_result = _unwrap(raw_plan, "plan")
-
-    git_config = None
-    if git_init.get("success"):
-        git_config = {
-            "integration_branch": git_init["integration_branch"],
-            "original_branch": git_init["original_branch"],
-            "initial_commit_sha": git_init["initial_commit_sha"],
-            "mode": git_init["mode"],
-            "remote_url": git_init.get("remote_url", ""),
-            "remote_default_branch": git_init.get("remote_default_branch", ""),
-        }
-        app.note(
-            f"Git init: mode={git_init['mode']}, branch={git_init['integration_branch']}",
-            tags=["build", "git_init", "complete"],
-        )
-    else:
-        app.note(
-            f"Git init failed: {git_init.get('error_message', 'unknown')} — "
-            "proceeding without git workflow",
-            tags=["build", "git_init", "error"],
-        )
-
-    # 1.5 APPROVAL CHECKPOINT — pause for human plan review when HAX_API_KEY is set.
-    #     SWE-AF posts the plan to hax-sdk and pauses on the control plane until
-    #     the reviewer responds. On request_changes, re-runs Architect → Tech Lead
-    #     → Sprint Planner with the feedback and re-requests approval, bounded by
-    #     cfg.max_plan_revision_iterations.
-    _hax_api_key = os.environ.get("HAX_API_KEY", "").strip()
-    execution_id = app.ctx.execution_id if app.ctx else ""
-    if _hax_api_key and execution_id:
-        import json as _json
-        from hax import HaxClient
-
-        hax_client = HaxClient(
-            api_key=_hax_api_key,
-            base_url=os.environ.get("HAX_SDK_URL", "http://localhost:3000") + "/api/v1",
-        )
-        cp_base_url = (app.agentfield_server or "http://localhost:8080").rstrip("/")
-        approval_state_path = os.path.join(abs_artifacts_dir, "approval_state.json")
-        os.makedirs(os.path.dirname(approval_state_path), exist_ok=True)
-        revision_history: list[dict] = []
-
-        for revision_iter in range(cfg.max_plan_revision_iterations + 1):
-            app.note(
-                f"Phase 1.5: Requesting plan approval (iteration {revision_iter})",
-                tags=["build", "approval"],
-            )
-
-            plan_summary, prd_md, arch_md, issues_for_template = (
-                _format_plan_for_approval(plan_result)
-            )
-
-            title = "SWE-AF Plan Review"
-            if revision_iter > 0:
-                title = f"SWE-AF Plan Review (Revision {revision_iter})"
-
-            hax_payload = {
-                "planSummary": plan_summary,
-                "issues": issues_for_template,
-                "architecture": arch_md,
-                "prd": prd_md,
-                "metadata": {
-                    "repoUrl": cfg.repo_url,
-                    "goalDescription": goal,
-                    "agentNodeId": NODE_ID,
-                    "executionId": execution_id,
-                },
-                "revisionNumber": revision_iter,
-                "revisionHistory": revision_history,
-            }
-
-            hax_create_kwargs: dict = {
-                "type": "plan-review-v2",
-                "title": title,
-                "description": "Review the proposed implementation plan before execution begins",
-                "payload": hax_payload,
-                "webhook_url": f"{cp_base_url}/api/v1/webhooks/approval-response",
-                "expires_in_seconds": cfg.approval_expires_in_hours * 3600,
-            }
-            approval_user_id = os.environ.get("AGENTFIELD_APPROVAL_USER_ID", "")
-            if approval_user_id:
-                hax_create_kwargs["user_id"] = approval_user_id
-
-            hax_request = await _create_hax_request_with_timeout(
-                hax_client=hax_client,
-                hax_create_kwargs=hax_create_kwargs,
-                revision_iter=revision_iter,
-            )
-
-            with open(approval_state_path, "w") as _fp:
-                _json.dump({
-                    "decision": "pending",
-                    "feedback": "",
-                    "request_id": hax_request.id,
-                    "request_url": hax_request.url,
-                    "revision_number": revision_iter,
-                }, _fp, indent=2)
-
-            approval_result = await app.pause(
-                approval_request_id=hax_request.id,
-                approval_request_url=hax_request.url,
-                expires_in_hours=cfg.approval_expires_in_hours,
-            )
-
-            with open(approval_state_path, "w") as _fp:
-                _json.dump({
-                    "decision": approval_result.decision,
-                    "feedback": approval_result.feedback,
-                    "request_id": approval_result.approval_request_id,
-                    "request_url": hax_request.url,
-                    "revision_number": revision_iter,
-                    "revision_history": revision_history,
-                }, _fp, indent=2)
-
-            if approval_result.approved:
-                app.note(
-                    "Plan approved — proceeding to execution",
-                    tags=["build", "approval", "approved"],
+                    f"Git init succeeded on attempt {attempt}",
+                    tags=["build", "git_init", "success"],
                 )
                 break
-
-            if approval_result.changes_requested:
-                if revision_iter >= cfg.max_plan_revision_iterations:
-                    app.note(
-                        f"Max plan revision iterations ({cfg.max_plan_revision_iterations}) reached",
-                        tags=["build", "approval", "exhausted"],
-                    )
-                    return BuildResult(
-                        plan_result=plan_result,
-                        dag_state={},
-                        success=False,
-                        summary=f"Plan revision limit reached after {revision_iter + 1} iterations",
-                    ).model_dump()
-
-                revision_history.append({
-                    "iteration": revision_iter,
-                    "feedback": approval_result.feedback,
-                })
-
+            else:
+                previous_error = git_init.get("error_message", "unknown error")
                 app.note(
-                    f"Changes requested (iteration {revision_iter}): "
-                    f"{approval_result.feedback[:200]}",
-                    tags=["build", "approval", "request_changes"],
+                    f"Git init attempt {attempt} failed: {previous_error}",
+                    tags=["build", "git_init", "failed"],
                 )
 
-                # Re-plan with the reviewer feedback. Skip PM (PRD/scope is fixed)
-                # and re-run Architect → Tech Lead loop → Sprint Planner.
-                arch = _unwrap(await app.call(
-                    f"{NODE_ID}.run_architect",
-                    prd=plan_result.get("prd", {}),
-                    repo_path=repo_path,
-                    artifacts_dir=artifacts_dir,
-                    feedback=approval_result.feedback,
-                    model=resolved["architect_model"],
-                    permission_mode=cfg.permission_mode,
-                    ai_provider=cfg.ai_provider,
-                    workspace_manifest=manifest.model_dump() if manifest else None,
-                ), "run_architect (human revision)")
+                if attempt == MAX_GIT_INIT_RETRIES:
+                    app.note(
+                        f"Git init failed after {MAX_GIT_INIT_RETRIES} attempts — "
+                        "proceeding without git workflow",
+                        tags=["build", "git_init", "exhausted"],
+                    )
 
-                review = None
-                for tl_iter in range(cfg.max_review_iterations + 1):
-                    review = _unwrap(await app.call(
-                        f"{NODE_ID}.run_tech_lead",
+                # Brief delay before retry (except on last attempt)
+                if attempt < MAX_GIT_INIT_RETRIES:
+                    await asyncio.sleep(cfg.git_init_retry_delay)
+
+        # Unwrap plan result (should have been set on first attempt)
+        plan_result = _unwrap(raw_plan, "plan")
+
+        git_config = None
+        if git_init.get("success"):
+            git_config = {
+                "integration_branch": git_init["integration_branch"],
+                "original_branch": git_init["original_branch"],
+                "initial_commit_sha": git_init["initial_commit_sha"],
+                "mode": git_init["mode"],
+                "remote_url": git_init.get("remote_url", ""),
+                "remote_default_branch": git_init.get("remote_default_branch", ""),
+            }
+            app.note(
+                f"Git init: mode={git_init['mode']}, branch={git_init['integration_branch']}",
+                tags=["build", "git_init", "complete"],
+            )
+        else:
+            app.note(
+                f"Git init failed: {git_init.get('error_message', 'unknown')} — "
+                "proceeding without git workflow",
+                tags=["build", "git_init", "error"],
+            )
+
+        # 1.5 APPROVAL CHECKPOINT — pause for human plan review when HAX_API_KEY is set.
+        #     SWE-AF posts the plan to hax-sdk and pauses on the control plane until
+        #     the reviewer responds. On request_changes, re-runs Architect → Tech Lead
+        #     → Sprint Planner with the feedback and re-requests approval, bounded by
+        #     cfg.max_plan_revision_iterations.
+        _hax_api_key = os.environ.get("HAX_API_KEY", "").strip()
+        execution_id = app.ctx.execution_id if app.ctx else ""
+        if _hax_api_key and execution_id:
+            import json as _json
+            from hax import HaxClient
+
+            hax_client = HaxClient(
+                api_key=_hax_api_key,
+                base_url=os.environ.get("HAX_SDK_URL", "http://localhost:3000") + "/api/v1",
+            )
+            cp_base_url = (app.agentfield_server or "http://localhost:8080").rstrip("/")
+            approval_state_path = os.path.join(abs_artifacts_dir, "approval_state.json")
+            os.makedirs(os.path.dirname(approval_state_path), exist_ok=True)
+            revision_history: list[dict] = []
+
+            for revision_iter in range(cfg.max_plan_revision_iterations + 1):
+                app.note(
+                    f"Phase 1.5: Requesting plan approval (iteration {revision_iter})",
+                    tags=["build", "approval"],
+                )
+
+                plan_summary, prd_md, arch_md, issues_for_template = (
+                    _format_plan_for_approval(plan_result)
+                )
+
+                title = "SWE-AF Plan Review"
+                if revision_iter > 0:
+                    title = f"SWE-AF Plan Review (Revision {revision_iter})"
+
+                hax_payload = {
+                    "planSummary": plan_summary,
+                    "issues": issues_for_template,
+                    "architecture": arch_md,
+                    "prd": prd_md,
+                    "metadata": {
+                        "repoUrl": cfg.repo_url,
+                        "goalDescription": goal,
+                        "agentNodeId": NODE_ID,
+                        "executionId": execution_id,
+                    },
+                    "revisionNumber": revision_iter,
+                    "revisionHistory": revision_history,
+                }
+
+                hax_create_kwargs: dict = {
+                    "type": "plan-review-v2",
+                    "title": title,
+                    "description": "Review the proposed implementation plan before execution begins",
+                    "payload": hax_payload,
+                    "webhook_url": f"{cp_base_url}/api/v1/webhooks/approval-response",
+                    "expires_in_seconds": cfg.approval_expires_in_hours * 3600,
+                }
+                approval_user_id = os.environ.get("AGENTFIELD_APPROVAL_USER_ID", "")
+                if approval_user_id:
+                    hax_create_kwargs["user_id"] = approval_user_id
+
+                hax_request = await _create_hax_request_with_timeout(
+                    hax_client=hax_client,
+                    hax_create_kwargs=hax_create_kwargs,
+                    revision_iter=revision_iter,
+                )
+
+                with open(approval_state_path, "w") as _fp:
+                    _json.dump({
+                        "decision": "pending",
+                        "feedback": "",
+                        "request_id": hax_request.id,
+                        "request_url": hax_request.url,
+                        "revision_number": revision_iter,
+                    }, _fp, indent=2)
+
+                approval_result = await app.pause(
+                    approval_request_id=hax_request.id,
+                    approval_request_url=hax_request.url,
+                    expires_in_hours=cfg.approval_expires_in_hours,
+                )
+
+                with open(approval_state_path, "w") as _fp:
+                    _json.dump({
+                        "decision": approval_result.decision,
+                        "feedback": approval_result.feedback,
+                        "request_id": approval_result.approval_request_id,
+                        "request_url": hax_request.url,
+                        "revision_number": revision_iter,
+                        "revision_history": revision_history,
+                    }, _fp, indent=2)
+
+                if approval_result.approved:
+                    app.note(
+                        "Plan approved — proceeding to execution",
+                        tags=["build", "approval", "approved"],
+                    )
+                    break
+
+                if approval_result.changes_requested:
+                    if revision_iter >= cfg.max_plan_revision_iterations:
+                        app.note(
+                            f"Max plan revision iterations ({cfg.max_plan_revision_iterations}) reached",
+                            tags=["build", "approval", "exhausted"],
+                        )
+                        return BuildResult(
+                            plan_result=plan_result,
+                            dag_state={},
+                            success=False,
+                            summary=f"Plan revision limit reached after {revision_iter + 1} iterations",
+                        ).model_dump()
+
+                    revision_history.append({
+                        "iteration": revision_iter,
+                        "feedback": approval_result.feedback,
+                    })
+
+                    app.note(
+                        f"Changes requested (iteration {revision_iter}): "
+                        f"{approval_result.feedback[:200]}",
+                        tags=["build", "approval", "request_changes"],
+                    )
+
+                    # Re-plan with the reviewer feedback. Skip PM (PRD/scope is fixed)
+                    # and re-run Architect → Tech Lead loop → Sprint Planner.
+                    arch = _unwrap(await app.call(
+                        f"{NODE_ID}.run_architect",
                         prd=plan_result.get("prd", {}),
                         repo_path=repo_path,
                         artifacts_dir=artifacts_dir,
-                        revision_number=tl_iter,
-                        model=resolved["tech_lead_model"],
+                        feedback=approval_result.feedback,
+                        model=resolved["architect_model"],
                         permission_mode=cfg.permission_mode,
                         ai_provider=cfg.ai_provider,
                         workspace_manifest=manifest.model_dump() if manifest else None,
-                    ), "run_tech_lead")
-                    if review["approved"]:
-                        break
-                    if tl_iter < cfg.max_review_iterations:
-                        arch = _unwrap(await app.call(
-                            f"{NODE_ID}.run_architect",
+                    ), "run_architect (human revision)")
+
+                    review = None
+                    for tl_iter in range(cfg.max_review_iterations + 1):
+                        review = _unwrap(await app.call(
+                            f"{NODE_ID}.run_tech_lead",
                             prd=plan_result.get("prd", {}),
                             repo_path=repo_path,
                             artifacts_dir=artifacts_dir,
-                            feedback=review["feedback"],
-                            model=resolved["architect_model"],
+                            revision_number=tl_iter,
+                            model=resolved["tech_lead_model"],
                             permission_mode=cfg.permission_mode,
                             ai_provider=cfg.ai_provider,
                             workspace_manifest=manifest.model_dump() if manifest else None,
-                        ), "run_architect (tech lead revision)")
+                        ), "run_tech_lead")
+                        if review["approved"]:
+                            break
+                        if tl_iter < cfg.max_review_iterations:
+                            arch = _unwrap(await app.call(
+                                f"{NODE_ID}.run_architect",
+                                prd=plan_result.get("prd", {}),
+                                repo_path=repo_path,
+                                artifacts_dir=artifacts_dir,
+                                feedback=review["feedback"],
+                                model=resolved["architect_model"],
+                                permission_mode=cfg.permission_mode,
+                                ai_provider=cfg.ai_provider,
+                                workspace_manifest=manifest.model_dump() if manifest else None,
+                            ), "run_architect (tech lead revision)")
 
-                if review and not review["approved"]:
-                    review = ReviewResult(
-                        approved=True,
-                        feedback=review["feedback"],
-                        scope_issues=review.get("scope_issues", []),
-                        complexity_assessment=review.get("complexity_assessment", "appropriate"),
-                        summary=review["summary"] + " [auto-approved after max iterations]",
-                    ).model_dump()
+                    if review and not review["approved"]:
+                        review = ReviewResult(
+                            approved=True,
+                            feedback=review["feedback"],
+                            scope_issues=review.get("scope_issues", []),
+                            complexity_assessment=review.get("complexity_assessment", "appropriate"),
+                            summary=review["summary"] + " [auto-approved after max iterations]",
+                        ).model_dump()
 
-                sprint_result = _unwrap(await app.call(
-                    f"{NODE_ID}.run_sprint_planner",
-                    prd=plan_result.get("prd", {}),
-                    architecture=arch,
-                    repo_path=repo_path,
-                    artifacts_dir=artifacts_dir,
-                    model=resolved["sprint_planner_model"],
-                    permission_mode=cfg.permission_mode,
-                    ai_provider=cfg.ai_provider,
-                    workspace_manifest=manifest.model_dump() if manifest else None,
-                ), "run_sprint_planner (revision)")
+                    sprint_result = _unwrap(await app.call(
+                        f"{NODE_ID}.run_sprint_planner",
+                        prd=plan_result.get("prd", {}),
+                        architecture=arch,
+                        repo_path=repo_path,
+                        artifacts_dir=artifacts_dir,
+                        model=resolved["sprint_planner_model"],
+                        permission_mode=cfg.permission_mode,
+                        ai_provider=cfg.ai_provider,
+                        workspace_manifest=manifest.model_dump() if manifest else None,
+                    ), "run_sprint_planner (revision)")
 
-                plan_result = {
-                    **plan_result,
-                    "architecture": arch,
-                    "review": review,
-                    "issues": sprint_result["issues"],
-                    "rationale": sprint_result["rationale"],
-                }
-                continue
+                    plan_result = {
+                        **plan_result,
+                        "architecture": arch,
+                        "review": review,
+                        "issues": sprint_result["issues"],
+                        "rationale": sprint_result["rationale"],
+                    }
+                    continue
 
-            # Terminal: rejected, expired, or error
-            reason = approval_result.feedback or approval_result.decision
-            app.note(
-                f"Plan {approval_result.decision} by human reviewer: {reason}",
-                tags=["build", "approval", approval_result.decision],
-            )
-            return BuildResult(
-                plan_result=plan_result,
-                dag_state={},
-                success=False,
-                summary=f"Plan {approval_result.decision}: {reason}",
-            ).model_dump()
+                # Terminal: rejected, expired, or error
+                reason = approval_result.feedback or approval_result.decision
+                app.note(
+                    f"Plan {approval_result.decision} by human reviewer: {reason}",
+                    tags=["build", "approval", approval_result.decision],
+                )
+                return BuildResult(
+                    plan_result=plan_result,
+                    dag_state={},
+                    success=False,
+                    summary=f"Plan {approval_result.decision}: {reason}",
+                ).model_dump()
 
-    # 2. EXECUTE
-    exec_config = cfg.to_execution_config_dict()
+        # 2. EXECUTE
+        exec_config = cfg.to_execution_config_dict()
 
-    dag_result = _unwrap(await app.call(
-        f"{NODE_ID}.execute",
-        plan_result=plan_result,
-        repo_path=repo_path,
-        execute_fn_target=cfg.execute_fn_target,
-        config=exec_config,
-        git_config=git_config,
-        build_id=build_id,
-        workspace_manifest=manifest.model_dump() if manifest else None,
-    ), "execute")
-
-    # Refresh manifest with git_init_result populated by _init_all_repos() in
-    # the DAG executor.  Must happen before the verify/fix loop which can
-    # overwrite dag_result with fix-execution results (no workspace_manifest).
-    if manifest and dag_result.get("workspace_manifest"):
-        manifest = WorkspaceManifest(**dag_result["workspace_manifest"])
-
-    # 3. VERIFY
-    verification = None
-    for cycle in range(cfg.max_verify_fix_cycles + 1):
-        app.note(f"Verification cycle {cycle}", tags=["build", "verify"])
-        verification = _unwrap(await app.call(
-            f"{NODE_ID}.run_verifier",
-            prd=plan_result["prd"],
+        dag_result = _unwrap(await app.call(
+            f"{NODE_ID}.execute",
+            plan_result=plan_result,
             repo_path=repo_path,
-            artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-            completed_issues=[r for r in dag_result.get("completed_issues", [])],
-            failed_issues=[r for r in dag_result.get("failed_issues", [])],
-            skipped_issues=dag_result.get("skipped_issues", []),
-            model=resolved["verifier_model"],
-            permission_mode=cfg.permission_mode,
-            ai_provider=cfg.ai_provider,
+            execute_fn_target=cfg.execute_fn_target,
+            config=exec_config,
+            git_config=git_config,
+            build_id=build_id,
             workspace_manifest=manifest.model_dump() if manifest else None,
-        ), "run_verifier")
+        ), "execute")
 
-        if verification.get("passed", False) or cycle >= cfg.max_verify_fix_cycles:
-            break
+        # Refresh manifest with git_init_result populated by _init_all_repos() in
+        # the DAG executor.  Must happen before the verify/fix loop which can
+        # overwrite dag_result with fix-execution results (no workspace_manifest).
+        if manifest and dag_result.get("workspace_manifest"):
+            manifest = WorkspaceManifest(**dag_result["workspace_manifest"])
 
-        # Verification failed — generate targeted fix issues
-        failed_criteria = [
-            c for c in verification.get("criteria_results", [])
-            if not c.get("passed", True)
-        ]
-
-        if not failed_criteria:
-            app.note("Verification failed but no specific criteria failures found", tags=["build", "verify"])
-            break
-
-        app.note(
-            f"Verification failed ({len(failed_criteria)} criteria), "
-            f"{cfg.max_verify_fix_cycles - cycle} fix cycles remaining",
-            tags=["build", "verify", "retry"],
-        )
-
-        # Generate fix issues from failed criteria
-        fix_result = _unwrap(await app.call(
-            f"{NODE_ID}.generate_fix_issues",
-            failed_criteria=failed_criteria,
-            dag_state=dag_result,
-            prd=plan_result["prd"],
-            artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-            model=resolved["verifier_model"],
-            permission_mode=cfg.permission_mode,
-            ai_provider=cfg.ai_provider,
-            workspace_manifest=manifest.model_dump() if manifest else None,
-        ), "generate_fix_issues")
-
-        fix_issues = fix_result.get("fix_issues", [])
-        fix_debt = fix_result.get("debt_items", [])
-
-        # Record unfixable criteria as debt
-        for debt in fix_debt:
-            dag_result.setdefault("accumulated_debt", []).append({
-                "type": "unmet_acceptance_criterion",
-                "criterion": debt.get("criterion", ""),
-                "reason": debt.get("reason", ""),
-                "severity": debt.get("severity", "high"),
-            })
-
-        if fix_issues:
-            # Build a mini plan from fix issues and execute them
-            fix_plan = {
-                "prd": plan_result["prd"],
-                "architecture": plan_result.get("architecture", {}),
-                "review": plan_result.get("review", {}),
-                "issues": fix_issues,
-                "levels": [[fi.get("name", f"fix-{i}") for i, fi in enumerate(fix_issues)]],
-                "file_conflicts": [],
-                "artifacts_dir": plan_result.get("artifacts_dir", artifacts_dir),
-                "rationale": f"Fix issues for verification cycle {cycle + 1}",
-            }
-            dag_result = _unwrap(await app.call(
-                f"{NODE_ID}.execute",
-                plan_result=fix_plan,
+        # 3. VERIFY
+        verification = None
+        for cycle in range(cfg.max_verify_fix_cycles + 1):
+            app.note(f"Verification cycle {cycle}", tags=["build", "verify"])
+            verification = _unwrap(await app.call(
+                f"{NODE_ID}.run_verifier",
+                prd=plan_result["prd"],
                 repo_path=repo_path,
-                config=exec_config,
-                git_config=git_config,
+                artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
+                completed_issues=[r for r in dag_result.get("completed_issues", [])],
+                failed_issues=[r for r in dag_result.get("failed_issues", [])],
+                skipped_issues=dag_result.get("skipped_issues", []),
+                model=resolved["verifier_model"],
+                permission_mode=cfg.permission_mode,
+                ai_provider=cfg.ai_provider,
                 workspace_manifest=manifest.model_dump() if manifest else None,
-            ), "execute_fixes")
-            continue  # Re-verify
-        else:
-            app.note("No fixable issues generated — accepting with debt", tags=["build", "verify"])
-            break
+            ), "run_verifier")
 
-    success = verification.get("passed", False) if verification else False
-    completed = len(dag_result.get("completed_issues", []))
-    total = len(dag_result.get("all_issues", []))
+            if verification.get("passed", False) or cycle >= cfg.max_verify_fix_cycles:
+                break
 
-    app.note(
-        f"Build {'succeeded' if success else 'completed with issues'}: "
-        f"{completed}/{total} issues, verification={'passed' if success else 'failed'}",
-        tags=["build", "complete"],
-    )
+            # Verification failed — generate targeted fix issues
+            failed_criteria = [
+                c for c in verification.get("criteria_results", [])
+                if not c.get("passed", True)
+            ]
 
-    # Capture plan docs before finalize cleans up .artifacts/
-    _plan_dir = os.path.join(
-        plan_result.get("artifacts_dir", ""), "plan"
-    )
-    prd_markdown = ""
-    architecture_markdown = ""
-    for _name, _var in [("prd.md", "prd_markdown"), ("architecture.md", "architecture_markdown")]:
-        _fpath = os.path.join(_plan_dir, _name)
-        if os.path.isfile(_fpath):
-            try:
-                with open(_fpath, "r", encoding="utf-8") as _f:
-                    if _var == "prd_markdown":
-                        prd_markdown = _f.read()
-                    else:
-                        architecture_markdown = _f.read()
-            except OSError:
-                pass
+            if not failed_criteria:
+                app.note("Verification failed but no specific criteria failures found", tags=["build", "verify"])
+                break
 
-    # 3b. FINALIZE — clean up repo artifacts before PR
-    if manifest and len(manifest.repos) > 1:
-        # Multi-repo: finalize each repo individually
+            app.note(
+                f"Verification failed ({len(failed_criteria)} criteria), "
+                f"{cfg.max_verify_fix_cycles - cycle} fix cycles remaining",
+                tags=["build", "verify", "retry"],
+            )
+
+            # Generate fix issues from failed criteria
+            fix_result = _unwrap(await app.call(
+                f"{NODE_ID}.generate_fix_issues",
+                failed_criteria=failed_criteria,
+                dag_state=dag_result,
+                prd=plan_result["prd"],
+                artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
+                model=resolved["verifier_model"],
+                permission_mode=cfg.permission_mode,
+                ai_provider=cfg.ai_provider,
+                workspace_manifest=manifest.model_dump() if manifest else None,
+            ), "generate_fix_issues")
+
+            fix_issues = fix_result.get("fix_issues", [])
+            fix_debt = fix_result.get("debt_items", [])
+
+            # Record unfixable criteria as debt
+            for debt in fix_debt:
+                dag_result.setdefault("accumulated_debt", []).append({
+                    "type": "unmet_acceptance_criterion",
+                    "criterion": debt.get("criterion", ""),
+                    "reason": debt.get("reason", ""),
+                    "severity": debt.get("severity", "high"),
+                })
+
+            if fix_issues:
+                # Build a mini plan from fix issues and execute them
+                fix_plan = {
+                    "prd": plan_result["prd"],
+                    "architecture": plan_result.get("architecture", {}),
+                    "review": plan_result.get("review", {}),
+                    "issues": fix_issues,
+                    "levels": [[fi.get("name", f"fix-{i}") for i, fi in enumerate(fix_issues)]],
+                    "file_conflicts": [],
+                    "artifacts_dir": plan_result.get("artifacts_dir", artifacts_dir),
+                    "rationale": f"Fix issues for verification cycle {cycle + 1}",
+                }
+                dag_result = _unwrap(await app.call(
+                    f"{NODE_ID}.execute",
+                    plan_result=fix_plan,
+                    repo_path=repo_path,
+                    config=exec_config,
+                    git_config=git_config,
+                    workspace_manifest=manifest.model_dump() if manifest else None,
+                ), "execute_fixes")
+                continue  # Re-verify
+            else:
+                app.note("No fixable issues generated — accepting with debt", tags=["build", "verify"])
+                break
+
+        success = verification.get("passed", False) if verification else False
+        completed = len(dag_result.get("completed_issues", []))
+        total = len(dag_result.get("all_issues", []))
+
         app.note(
-            f"Phase 3b: Multi-repo finalization ({len(manifest.repos)} repos)",
-            tags=["build", "finalize", "multi-repo"],
+            f"Build {'succeeded' if success else 'completed with issues'}: "
+            f"{completed}/{total} issues, verification={'passed' if success else 'failed'}",
+            tags=["build", "complete"],
         )
-        for ws_repo in manifest.repos:
+
+        # Capture plan docs before finalize cleans up .artifacts/
+        _plan_dir = os.path.join(
+            plan_result.get("artifacts_dir", ""), "plan"
+        )
+        prd_markdown = ""
+        architecture_markdown = ""
+        for _name, _var in [("prd.md", "prd_markdown"), ("architecture.md", "architecture_markdown")]:
+            _fpath = os.path.join(_plan_dir, _name)
+            if os.path.isfile(_fpath):
+                try:
+                    with open(_fpath, "r", encoding="utf-8") as _f:
+                        if _var == "prd_markdown":
+                            prd_markdown = _f.read()
+                        else:
+                            architecture_markdown = _f.read()
+                except OSError:
+                    pass
+
+        # 3b. FINALIZE — clean up repo artifacts before PR
+        if manifest and len(manifest.repos) > 1:
+            # Multi-repo: finalize each repo individually
+            app.note(
+                f"Phase 3b: Multi-repo finalization ({len(manifest.repos)} repos)",
+                tags=["build", "finalize", "multi-repo"],
+            )
+            for ws_repo in manifest.repos:
+                try:
+                    finalize_result = _unwrap(await app.call(
+                        f"{NODE_ID}.run_repo_finalize",
+                        repo_path=ws_repo.absolute_path,
+                        artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
+                        model=resolved["git_model"],
+                        permission_mode=cfg.permission_mode,
+                        ai_provider=cfg.ai_provider,
+                    ), f"run_repo_finalize ({ws_repo.repo_name})")
+                    if finalize_result.get("success"):
+                        app.note(
+                            f"Repo finalized ({ws_repo.repo_name}): {finalize_result.get('summary', '')}",
+                            tags=["build", "finalize", "complete"],
+                        )
+                    else:
+                        app.note(
+                            f"Repo finalize incomplete ({ws_repo.repo_name}): {finalize_result.get('summary', '')}",
+                            tags=["build", "finalize", "warning"],
+                        )
+                except Exception as e:
+                    app.note(
+                        f"Repo finalize failed for {ws_repo.repo_name} (non-blocking): {e}",
+                        tags=["build", "finalize", "error"],
+                    )
+        else:
+            # Single-repo: existing finalize logic
+            app.note("Phase 3b: Repo finalization", tags=["build", "finalize"])
             try:
                 finalize_result = _unwrap(await app.call(
                     f"{NODE_ID}.run_repo_finalize",
-                    repo_path=ws_repo.absolute_path,
+                    repo_path=repo_path,
                     artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
                     model=resolved["git_model"],
                     permission_mode=cfg.permission_mode,
                     ai_provider=cfg.ai_provider,
-                ), f"run_repo_finalize ({ws_repo.repo_name})")
+                ), "run_repo_finalize")
                 if finalize_result.get("success"):
                     app.note(
-                        f"Repo finalized ({ws_repo.repo_name}): {finalize_result.get('summary', '')}",
+                        f"Repo finalized: {finalize_result.get('summary', '')}",
                         tags=["build", "finalize", "complete"],
                     )
                 else:
                     app.note(
-                        f"Repo finalize incomplete ({ws_repo.repo_name}): {finalize_result.get('summary', '')}",
+                        f"Repo finalize incomplete: {finalize_result.get('summary', '')}",
                         tags=["build", "finalize", "warning"],
                     )
             except Exception as e:
                 app.note(
-                    f"Repo finalize failed for {ws_repo.repo_name} (non-blocking): {e}",
+                    f"Repo finalize failed (non-blocking): {e}",
                     tags=["build", "finalize", "error"],
                 )
-    else:
-        # Single-repo: existing finalize logic
-        app.note("Phase 3b: Repo finalization", tags=["build", "finalize"])
-        try:
-            finalize_result = _unwrap(await app.call(
-                f"{NODE_ID}.run_repo_finalize",
-                repo_path=repo_path,
-                artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-                model=resolved["git_model"],
-                permission_mode=cfg.permission_mode,
-                ai_provider=cfg.ai_provider,
-            ), "run_repo_finalize")
-            if finalize_result.get("success"):
-                app.note(
-                    f"Repo finalized: {finalize_result.get('summary', '')}",
-                    tags=["build", "finalize", "complete"],
-                )
-            else:
-                app.note(
-                    f"Repo finalize incomplete: {finalize_result.get('summary', '')}",
-                    tags=["build", "finalize", "warning"],
-                )
-        except Exception as e:
-            app.note(
-                f"Repo finalize failed (non-blocking): {e}",
-                tags=["build", "finalize", "error"],
-            )
 
-    # 4. PUSH & DRAFT PR (if repo has a remote and PR creation is enabled)
-    pr_results: list[RepoPRResult] = []
-    ci_gate_results: list[dict] = []
-    build_summary = (
-        f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
-        + (f", verification: {verification.get('summary', '')}" if verification else "")
-    )
+        # 4. PUSH & DRAFT PR (if repo has a remote and PR creation is enabled)
+        pr_results: list[RepoPRResult] = []
+        ci_gate_results: list[dict] = []
+        build_summary = (
+            f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
+            + (f", verification: {verification.get('summary', '')}" if verification else "")
+        )
 
-    if manifest and len(manifest.repos) > 1:
-        # Multi-repo: one PR per repo where create_pr=True
-        app.note("Phase 4: Multi-repo Push + PRs", tags=["build", "github_pr", "multi-repo"])
-        for ws_repo in manifest.repos:
-            if not ws_repo.create_pr or not cfg.enable_github_pr:
-                continue
-            repo_git_init = ws_repo.git_init_result or {}
-            repo_remote_url = repo_git_init.get("remote_url", "") or ws_repo.repo_url
-            if not repo_remote_url:
-                continue
-            repo_integration_branch = repo_git_init.get("integration_branch", "")
-            if not repo_integration_branch:
-                continue
-            repo_base_branch = (
-                cfg.github_pr_base
-                or repo_git_init.get("remote_default_branch", "")
-                or "main"
-            )
-            try:
-                pr_r = _unwrap(await app.call(
-                    f"{NODE_ID}.run_github_pr",
-                    repo_path=ws_repo.absolute_path,
-                    integration_branch=repo_integration_branch,
-                    base_branch=repo_base_branch,
-                    goal=goal,
-                    build_summary=build_summary,
-                    completed_issues=[
-                        r for r in dag_result.get("completed_issues", [])
-                        if not r.get("repo_name") or r.get("repo_name") == ws_repo.repo_name
-                    ],
-                    accumulated_debt=dag_result.get("accumulated_debt", []),
-                    artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-                    model=resolved["git_model"],
-                    permission_mode=cfg.permission_mode,
-                    ai_provider=cfg.ai_provider,
-                ), "run_github_pr")
-                pr_results.append(RepoPRResult(
-                    repo_name=ws_repo.repo_name,
-                    repo_url=ws_repo.repo_url,
-                    success=pr_r.get("success", False),
-                    pr_url=pr_r.get("pr_url", ""),
-                    pr_number=pr_r.get("pr_number", 0),
-                    error_message=pr_r.get("error_message", ""),
-                ))
-                if pr_r.get("pr_url"):
-                    app.note(
-                        f"PR created for {ws_repo.repo_name}: {pr_r.get('pr_url')}",
-                        tags=["build", "github_pr", "complete"],
-                    )
-                    if cfg.check_ci and pr_r.get("pr_number"):
-                        gate = await _run_ci_gate(
-                            repo_path=ws_repo.absolute_path,
-                            pr_number=pr_r.get("pr_number", 0),
-                            pr_url=pr_r.get("pr_url", ""),
-                            integration_branch=repo_integration_branch,
-                            base_branch=repo_base_branch,
-                            cfg=cfg,
-                            resolved_models=resolved,
-                            goal=goal,
-                            completed_issues=[
-                                r for r in dag_result.get("completed_issues", [])
-                                if not r.get("repo_name") or r.get("repo_name") == ws_repo.repo_name
-                            ],
+        if manifest and len(manifest.repos) > 1:
+            # Multi-repo: one PR per repo where create_pr=True
+            app.note("Phase 4: Multi-repo Push + PRs", tags=["build", "github_pr", "multi-repo"])
+            for ws_repo in manifest.repos:
+                if not ws_repo.create_pr or not cfg.enable_github_pr:
+                    continue
+                repo_git_init = ws_repo.git_init_result or {}
+                repo_remote_url = repo_git_init.get("remote_url", "") or ws_repo.repo_url
+                if not repo_remote_url:
+                    continue
+                repo_integration_branch = repo_git_init.get("integration_branch", "")
+                if not repo_integration_branch:
+                    continue
+                repo_base_branch = (
+                    cfg.github_pr_base
+                    or repo_git_init.get("remote_default_branch", "")
+                    or "main"
+                )
+                try:
+                    pr_r = _unwrap(await app.call(
+                        f"{NODE_ID}.run_github_pr",
+                        repo_path=ws_repo.absolute_path,
+                        integration_branch=repo_integration_branch,
+                        base_branch=repo_base_branch,
+                        goal=goal,
+                        build_summary=build_summary,
+                        completed_issues=[
+                            r for r in dag_result.get("completed_issues", [])
+                            if not r.get("repo_name") or r.get("repo_name") == ws_repo.repo_name
+                        ],
+                        accumulated_debt=dag_result.get("accumulated_debt", []),
+                        artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
+                        model=resolved["git_model"],
+                        permission_mode=cfg.permission_mode,
+                        ai_provider=cfg.ai_provider,
+                    ), "run_github_pr")
+                    pr_results.append(RepoPRResult(
+                        repo_name=ws_repo.repo_name,
+                        repo_url=ws_repo.repo_url,
+                        success=pr_r.get("success", False),
+                        pr_url=pr_r.get("pr_url", ""),
+                        pr_number=pr_r.get("pr_number", 0),
+                        error_message=pr_r.get("error_message", ""),
+                    ))
+                    if pr_r.get("pr_url"):
+                        app.note(
+                            f"PR created for {ws_repo.repo_name}: {pr_r.get('pr_url')}",
+                            tags=["build", "github_pr", "complete"],
                         )
-                        ci_gate_results.append({
-                            "repo_name": ws_repo.repo_name,
-                            **gate,
-                        })
-            except Exception as e:
-                pr_results.append(RepoPRResult(
-                    repo_name=ws_repo.repo_name,
-                    repo_url=ws_repo.repo_url,
-                    success=False,
-                    error_message=str(e),
-                ))
-                app.note(
-                    f"PR creation failed for {ws_repo.repo_name}: {e}",
-                    tags=["build", "github_pr", "error"],
-                )
-    else:
-        # Single-repo: existing PR logic, wrap result in RepoPRResult
-        remote_url = git_config.get("remote_url", "") if git_config else ""
-        if remote_url and cfg.enable_github_pr:
-            app.note("Phase 4: Push + PR", tags=["build", "github_pr"])
-            base_branch = (
-                cfg.github_pr_base
-                or (git_config.get("remote_default_branch") if git_config else "")
-                or "main"
-            )
-            pr_url = ""
-            try:
-                pr_result = _unwrap(await app.call(
-                    f"{NODE_ID}.run_github_pr",
-                    repo_path=repo_path,
-                    integration_branch=git_config["integration_branch"],
-                    base_branch=base_branch,
-                    goal=goal,
-                    build_summary=build_summary,
-                    completed_issues=dag_result.get("completed_issues", []),
-                    accumulated_debt=dag_result.get("accumulated_debt", []),
-                    artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-                    model=resolved["git_model"],
-                    permission_mode=cfg.permission_mode,
-                    ai_provider=cfg.ai_provider,
-                ), "run_github_pr")
-                pr_url = pr_result.get("pr_url", "")
-                if pr_url:
-                    app.note(f"PR created: {pr_url}", tags=["build", "github_pr", "complete"])
-
-                    # Programmatically append plan docs to PR body
-                    if prd_markdown or architecture_markdown:
-                        try:
-                            current_body = subprocess.run(
-                                ["gh", "pr", "view", str(pr_result.get("pr_number", 0)),
-                                 "--json", "body", "--jq", ".body"],
-                                cwd=repo_path, capture_output=True, text=True, check=True,
-                            ).stdout.strip()
-
-                            plan_sections = "\n\n---\n"
-                            if prd_markdown:
-                                plan_sections += (
-                                    "\n<details><summary>📋 PRD (Product Requirements Document)"
-                                    "</summary>\n\n"
-                                    + prd_markdown
-                                    + "\n\n</details>\n"
-                                )
-                            if architecture_markdown:
-                                plan_sections += (
-                                    "\n<details><summary>🏗️ Architecture</summary>\n\n"
-                                    + architecture_markdown
-                                    + "\n\n</details>\n"
-                                )
-
-                            new_body = current_body + plan_sections
-
-                            subprocess.run(
-                                ["gh", "pr", "edit", str(pr_result.get("pr_number", 0)),
-                                 "--body", new_body],
-                                cwd=repo_path, capture_output=True, text=True, check=True,
+                        if cfg.check_ci and pr_r.get("pr_number"):
+                            gate = await _run_ci_gate(
+                                repo_path=ws_repo.absolute_path,
+                                pr_number=pr_r.get("pr_number", 0),
+                                pr_url=pr_r.get("pr_url", ""),
+                                integration_branch=repo_integration_branch,
+                                base_branch=repo_base_branch,
+                                cfg=cfg,
+                                resolved_models=resolved,
+                                goal=goal,
+                                completed_issues=[
+                                    r for r in dag_result.get("completed_issues", [])
+                                    if not r.get("repo_name") or r.get("repo_name") == ws_repo.repo_name
+                                ],
                             )
-                            app.note(
-                                "Plan docs appended to PR body",
-                                tags=["build", "github_pr", "plan_docs"],
-                            )
-                        except subprocess.CalledProcessError as e:
-                            app.note(
-                                f"Failed to append plan docs to PR (non-fatal): {e}",
-                                tags=["build", "github_pr", "plan_docs", "warning"],
-                            )
-                else:
+                            ci_gate_results.append({
+                                "repo_name": ws_repo.repo_name,
+                                **gate,
+                            })
+                except Exception as e:
+                    pr_results.append(RepoPRResult(
+                        repo_name=ws_repo.repo_name,
+                        repo_url=ws_repo.repo_url,
+                        success=False,
+                        error_message=str(e),
+                    ))
                     app.note(
-                        f"PR creation failed: {pr_result.get('error_message', 'unknown')}",
+                        f"PR creation failed for {ws_repo.repo_name}: {e}",
                         tags=["build", "github_pr", "error"],
                     )
-                if pr_url:
-                    pr_results.append(RepoPRResult(
-                        repo_name=_repo_name_from_url(cfg.repo_url) if cfg.repo_url else "repo",
-                        repo_url=cfg.repo_url,
-                        success=True,
-                        pr_url=pr_url,
-                        pr_number=pr_result.get("pr_number", 0),
-                    ))
-                    if cfg.check_ci and pr_result.get("pr_number"):
-                        gate = await _run_ci_gate(
-                            repo_path=repo_path,
-                            pr_number=pr_result.get("pr_number", 0),
-                            pr_url=pr_url,
-                            integration_branch=git_config["integration_branch"],
-                            base_branch=base_branch,
-                            cfg=cfg,
-                            resolved_models=resolved,
-                            goal=goal,
-                            completed_issues=dag_result.get("completed_issues", []),
+        else:
+            # Single-repo: existing PR logic, wrap result in RepoPRResult
+            remote_url = git_config.get("remote_url", "") if git_config else ""
+            if remote_url and cfg.enable_github_pr:
+                app.note("Phase 4: Push + PR", tags=["build", "github_pr"])
+                base_branch = (
+                    cfg.github_pr_base
+                    or (git_config.get("remote_default_branch") if git_config else "")
+                    or "main"
+                )
+                pr_url = ""
+                try:
+                    pr_result = _unwrap(await app.call(
+                        f"{NODE_ID}.run_github_pr",
+                        repo_path=repo_path,
+                        integration_branch=git_config["integration_branch"],
+                        base_branch=base_branch,
+                        goal=goal,
+                        build_summary=build_summary,
+                        completed_issues=dag_result.get("completed_issues", []),
+                        accumulated_debt=dag_result.get("accumulated_debt", []),
+                        artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
+                        model=resolved["git_model"],
+                        permission_mode=cfg.permission_mode,
+                        ai_provider=cfg.ai_provider,
+                    ), "run_github_pr")
+                    pr_url = pr_result.get("pr_url", "")
+                    if pr_url:
+                        app.note(f"PR created: {pr_url}", tags=["build", "github_pr", "complete"])
+
+                        # Programmatically append plan docs to PR body
+                        if prd_markdown or architecture_markdown:
+                            try:
+                                current_body = subprocess.run(
+                                    ["gh", "pr", "view", str(pr_result.get("pr_number", 0)),
+                                     "--json", "body", "--jq", ".body"],
+                                    cwd=repo_path, capture_output=True, text=True, check=True,
+                                ).stdout.strip()
+
+                                plan_sections = "\n\n---\n"
+                                if prd_markdown:
+                                    plan_sections += (
+                                        "\n<details><summary>📋 PRD (Product Requirements Document)"
+                                        "</summary>\n\n"
+                                        + prd_markdown
+                                        + "\n\n</details>\n"
+                                    )
+                                if architecture_markdown:
+                                    plan_sections += (
+                                        "\n<details><summary>🏗️ Architecture</summary>\n\n"
+                                        + architecture_markdown
+                                        + "\n\n</details>\n"
+                                    )
+
+                                new_body = current_body + plan_sections
+
+                                subprocess.run(
+                                    ["gh", "pr", "edit", str(pr_result.get("pr_number", 0)),
+                                     "--body", new_body],
+                                    cwd=repo_path, capture_output=True, text=True, check=True,
+                                )
+                                app.note(
+                                    "Plan docs appended to PR body",
+                                    tags=["build", "github_pr", "plan_docs"],
+                                )
+                            except subprocess.CalledProcessError as e:
+                                app.note(
+                                    f"Failed to append plan docs to PR (non-fatal): {e}",
+                                    tags=["build", "github_pr", "plan_docs", "warning"],
+                                )
+                    else:
+                        app.note(
+                            f"PR creation failed: {pr_result.get('error_message', 'unknown')}",
+                            tags=["build", "github_pr", "error"],
                         )
-                        ci_gate_results.append({
-                            "repo_name": (
-                                _repo_name_from_url(cfg.repo_url)
-                                if cfg.repo_url else "repo"
-                            ),
-                            **gate,
-                        })
-            except Exception as e:
-                app.note(f"PR creation failed: {e}", tags=["build", "github_pr", "error"])
+                    if pr_url:
+                        pr_results.append(RepoPRResult(
+                            repo_name=_repo_name_from_url(cfg.repo_url) if cfg.repo_url else "repo",
+                            repo_url=cfg.repo_url,
+                            success=True,
+                            pr_url=pr_url,
+                            pr_number=pr_result.get("pr_number", 0),
+                        ))
+                        if cfg.check_ci and pr_result.get("pr_number"):
+                            gate = await _run_ci_gate(
+                                repo_path=repo_path,
+                                pr_number=pr_result.get("pr_number", 0),
+                                pr_url=pr_url,
+                                integration_branch=git_config["integration_branch"],
+                                base_branch=base_branch,
+                                cfg=cfg,
+                                resolved_models=resolved,
+                                goal=goal,
+                                completed_issues=dag_result.get("completed_issues", []),
+                            )
+                            ci_gate_results.append({
+                                "repo_name": (
+                                    _repo_name_from_url(cfg.repo_url)
+                                    if cfg.repo_url else "repo"
+                                ),
+                                **gate,
+                            })
+                except Exception as e:
+                    app.note(f"PR creation failed: {e}", tags=["build", "github_pr", "error"])
 
-    # 5. WORKSPACE CLEANUP (non-blocking)
-    if manifest and manifest.workspace_root:
-        try:
-            import shutil
-            shutil.rmtree(manifest.workspace_root, ignore_errors=True)
-            app.note(
-                f"Workspace cleaned up: {manifest.workspace_root}",
-                tags=["build", "cleanup"],
-            )
-        except Exception:
-            pass  # non-blocking
+        # 5. WORKSPACE CLEANUP (non-blocking)
+        if manifest and manifest.workspace_root:
+            try:
+                import shutil
+                shutil.rmtree(manifest.workspace_root, ignore_errors=True)
+                app.note(
+                    f"Workspace cleaned up: {manifest.workspace_root}",
+                    tags=["build", "cleanup"],
+                )
+            except Exception:
+                pass  # non-blocking
 
-    return BuildResult(
-        plan_result=plan_result,
-        dag_state=dag_result,
-        verification=verification,
-        success=success,
-        summary=f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
-                + (f", verification: {verification.get('summary', '')}" if verification else ""),
-        pr_results=pr_results,
-        ci_gate_results=ci_gate_results,
-    ).model_dump()
+        return BuildResult(
+            plan_result=plan_result,
+            dag_state=dag_result,
+            verification=verification,
+            success=success,
+            summary=f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
+                    + (f", verification: {verification.get('summary', '')}" if verification else ""),
+            pr_results=pr_results,
+            ci_gate_results=ci_gate_results,
+        ).model_dump()
+
+    finally:
+        if _scope_id:
+            from swe_af.hitl import clear_scoped_credentials  # noqa: PLC0415
+            clear_scoped_credentials(_scope_id)
 
 
 @app.reasoner()
@@ -1333,6 +1378,25 @@ async def plan(
         ai_provider=ai_provider,
         workspace_manifest=workspace_manifest,
     ), "run_product_manager")
+
+    # 1.5. Environment Scout — negotiate scoped credentials with the user
+    # before architecture begins. Only engages when HAX is enabled (auto-
+    # skipped at the reasoner level when HAX_API_KEY is unset). The scout
+    # stashes negotiated values directly in the in-memory store keyed by
+    # run_id; subsequent reasoners pull them via get_scoped_credentials.
+    # No-op when HAX is disabled.
+    if os.environ.get("HAX_API_KEY", "").strip():
+        app.note("Phase 1.5: Environment Scout", tags=["pipeline", "scout"])
+        _unwrap(await app.call(
+            f"{NODE_ID}.run_environment_scout",
+            prd=prd,
+            repo_path=repo_path,
+            artifacts_dir=artifacts_dir,
+            model=pm_model,
+            permission_mode=permission_mode,
+            ai_provider=ai_provider,
+            workspace_manifest=workspace_manifest,
+        ), "run_environment_scout")
 
     # 2. Architect designs the solution
     app.note("Phase 2: Architect", tags=["pipeline", "architect"])

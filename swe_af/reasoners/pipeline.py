@@ -238,6 +238,123 @@ async def run_product_manager(
 
 
 @router.reasoner()
+async def run_environment_scout(
+    prd: dict,
+    repo_path: str,
+    artifacts_dir: str = ".artifacts",
+    model: str = "sonnet",
+    max_turns: int = DEFAULT_AGENT_MAX_TURNS,
+    permission_mode: str = "",
+    ai_provider: str = "claude",
+    workspace_manifest: dict | None = None,
+    prior_user_responses: list[dict] | None = None,
+) -> dict:
+    """Negotiate scoped third-party credentials with the user before architecture.
+
+    Runs once between PM and Architect. Reads the PRD + repo, identifies
+    third-party services the build will need to talk to, and asks the user
+    via a single Hax form for scoped/temporary tokens. The negotiated values
+    are returned in ``scoped_credentials`` (env_var -> value); the caller is
+    responsible for stashing them in the in-memory store with
+    ``store_scoped_credentials(execution_id, creds)``.
+
+    Returns an empty ``scoped_credentials`` dict when:
+      * HAX is disabled (``build_hax_client_from_env`` returns None)
+      * The LLM decides no credentials are needed (e.g. purely local PRD)
+      * The user opts out by leaving every form field blank
+    """
+    router.note("Environment scout starting", tags=["scout", "start"])
+
+    base = os.path.join(os.path.abspath(repo_path), artifacts_dir)
+    _ensure_paths(base)  # ensure paths exist; we don't write artifacts here
+
+    from swe_af.execution.schemas import WorkspaceManifest  # noqa: PLC0415
+    from swe_af.hitl import (  # noqa: PLC0415
+        AskUserBudget,
+        ScoutResult,
+        approval_webhook_url,
+        build_hax_client_from_env,
+        run_with_ask_user,
+        store_scoped_credentials,
+    )
+    from swe_af.prompts.environment_scout import (  # noqa: PLC0415
+        SYSTEM_PROMPT,
+        environment_scout_task_prompt,
+    )
+
+    ws_manifest = (
+        WorkspaceManifest(**workspace_manifest) if workspace_manifest else None
+    )
+    provider = runtime_to_harness_adapter(ai_provider)
+
+    async def _invoke_scout(prior_user_responses: list[dict] | None) -> ScoutResult | None:
+        task_prompt = environment_scout_task_prompt(
+            prd=prd,
+            repo_path=repo_path,
+            workspace_manifest=ws_manifest,
+            prior_user_responses=prior_user_responses,
+        )
+        result = await router.harness(
+            prompt=task_prompt,
+            schema=ScoutResult,
+            provider=provider,
+            model=model,
+            max_turns=max_turns,
+            tools=["Read", "Glob", "Grep", "Bash"],
+            permission_mode=permission_mode or None,
+            system_prompt=SYSTEM_PROMPT,
+            cwd=repo_path,
+        )
+        check_fatal_harness_error(result)
+        return result.parsed
+
+    initial_prior = list(prior_user_responses or [])
+    parsed = await run_with_ask_user(
+        reasoner_fn=_invoke_scout,
+        reasoner_kwargs={"prior_user_responses": initial_prior},
+        app=router,
+        hax_client=build_hax_client_from_env(),
+        budget=AskUserBudget(remaining=2),
+        webhook_url=approval_webhook_url(router),
+        note_label="environment_scout",
+    )
+
+    if parsed is None:
+        router.note(
+            "Scout produced no parseable result — proceeding without credentials",
+            tags=["scout", "fallback"],
+        )
+        return ScoutResult(
+            summary="Scout produced no parseable result; proceeding without credentials.",
+        ).model_dump(exclude={"scoped_credentials"})
+
+    # Stash credentials in the process-local in-memory store under the build's
+    # run_id (shared across every reasoner in this build). This MUST happen
+    # before we strip them out of the return value — otherwise the build()
+    # caller has no way to retrieve them.
+    ctx = getattr(router, "ctx", None)
+    scope_id = (
+        getattr(ctx, "run_id", None) or getattr(ctx, "root_workflow_id", None) or ""
+    )
+    if scope_id and parsed.scoped_credentials:
+        store_scoped_credentials(scope_id, parsed.scoped_credentials)
+
+    creds_count = len(parsed.scoped_credentials)
+    skipped_count = len(parsed.skipped_services)
+    router.note(
+        f"Scout complete: {creds_count} credential(s) negotiated, "
+        f"{skipped_count} skipped",
+        tags=["scout", "complete"],
+    )
+    # SAFETY: scoped_credentials is EXCLUDED from the returned dict. The
+    # control plane logs reasoner return values, so any value in this dict is
+    # persisted. The credentials live only in process memory via the call
+    # above; downstream reasoners retrieve them with get_scoped_credentials
+    # using the same scope_id (router.ctx.run_id).
+    return parsed.model_dump(exclude={"scoped_credentials"})
+
+
+@router.reasoner()
 async def run_architect(
     prd: dict,
     repo_path: str,
