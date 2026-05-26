@@ -5,7 +5,7 @@
 agentfield>=0.1.84
 pydantic>=2.0
 claude-agent-sdk==0.1.20
-hax-sdk>=0.2.0
+hax-sdk>=0.2.4
 python-dotenv>=1.0
 # cryptography 48.0.0 currently crashes with SIGILL on some Linux/aarch64
 # Docker hosts when AgentField imports Ed25519 for DID registration.
