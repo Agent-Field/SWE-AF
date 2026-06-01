@@ -39,7 +39,7 @@ SWE-AF is a first step toward **autonomous software engineering factories**, sca
 
 ## One-Call DX
 
-Trigger it with the `af` CLI (requires af ≥ 0.1.86) — it streams live progress and prints the result:
+Trigger it with the `af` CLI (requires af ≥ 0.1.87) — it streams live progress and prints the result:
 
 ```bash
 af call swe-planner.build --in '{
