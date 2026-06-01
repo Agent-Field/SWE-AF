@@ -39,6 +39,22 @@ SWE-AF is a first step toward **autonomous software engineering factories**, sca
 
 ## One-Call DX
 
+Trigger it with the `af` CLI (requires af ≥ 0.1.86) — it streams live progress and prints the result:
+
+```bash
+af call swe-planner.build --in '{
+  "goal": "Refactor and harden auth + billing flows",
+  "repo_url": "https://github.com/user/my-project",
+  "config": {
+    "runtime": "claude_code",
+    "models": { "default": "sonnet", "coder": "opus", "qa": "opus" },
+    "enable_learning": true
+  }
+}'
+```
+
+Prefer raw HTTP? Hit the API directly with curl:
+
 ```bash
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
