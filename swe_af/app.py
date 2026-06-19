@@ -773,6 +773,10 @@ async def build(
                     "title": title,
                     "description": "Review the proposed implementation plan before execution begins",
                     "payload": hax_payload,
+                    "sender": {
+                        "key": os.getenv("HAX_SENDER_KEY", os.getenv("HAX_SENDER_NAME") or NODE_ID),
+                        "display_name": os.getenv("HAX_SENDER_NAME") or NODE_ID,
+                    },
                     "webhook_url": f"{cp_base_url}/api/v1/webhooks/approval-response",
                     "expires_in_seconds": cfg.approval_expires_in_hours * 3600,
                 }
