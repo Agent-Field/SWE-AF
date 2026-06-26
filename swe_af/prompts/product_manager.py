@@ -121,6 +121,9 @@ def product_manager_prompts(
     if additional_context:
         context_block = f"\n## Additional Context\n{additional_context}\n"
 
+    from pathlib import Path  # noqa: PLC0415
+    output_path = str(Path(repo_path) / ".agentfield_output.json")
+
     task = f"""\
 ## Goal
 {goal}
@@ -143,6 +146,24 @@ Produce a PRD for this goal. Read the codebase first — understand the current
 state deeply before defining what needs to change.
 
 Write your full PRD to: {prd_path}
+
+After writing the markdown PRD, you MUST also write a JSON file to: {output_path}
+
+CRITICAL: Write a JSON INSTANCE with real values — NOT a schema definition.
+Do NOT output anything that starts with {{"$defs"}} or contains Pydantic schema keys.
+
+The file must have exactly this structure, with actual content substituted in:
+{{
+  "validated_description": "<one sentence describing what needs to be built>",
+  "acceptance_criteria": ["<testable condition 1>", "<testable condition 2>"],
+  "must_have": ["<required feature 1>", "<required feature 2>"],
+  "nice_to_have": ["<optional feature 1>"],
+  "out_of_scope": ["<explicitly excluded item 1>"],
+  "assumptions": [],
+  "risks": []
+}}
+
+Use your Write tool to write {output_path} with valid JSON. No markdown fences, no schema keys.
 
 The bar: an engineering team of autonomous agents can execute this PRD without
 asking a single clarifying question. Every acceptance criterion is a test they

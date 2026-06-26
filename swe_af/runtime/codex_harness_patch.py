@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import json
 import os
+import re as _re
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,32 @@ def apply_codex_harness_patch() -> None:
         return
 
     _ORIGINAL_BUILD_PROMPT_SUFFIX = _schema.build_prompt_suffix
+
+    _orig_followup = _schema.build_followup_prompt
+
+    def _patched_followup_prompt(error_message: str, cwd: str, schema: Any = None) -> str:
+        prompt = _orig_followup(error_message, cwd, schema)
+        return _re.sub(
+            r"The JSON MUST conform to this schema:\n.*?\n\n",
+            (
+                "Write a JSON object with real values to the output file.\n"
+                "Do NOT output schema definitions ($defs, type: object, etc.).\n\n"
+                "Required fields (fill in real content):\n"
+                '  "validated_description": "<one sentence describing what needs to be built>"\n'
+                '  "acceptance_criteria": ["<testable condition>", ...]\n'
+                '  "must_have": ["<required feature>", ...]\n'
+                '  "nice_to_have": ["<optional feature>", ...]\n'
+                '  "out_of_scope": ["<excluded item>", ...]\n'
+                '  "assumptions": []\n'
+                '  "risks": []\n'
+                "\n"
+            ),
+            prompt,
+            flags=_re.DOTALL,
+        )
+
+    _schema.build_followup_prompt = _patched_followup_prompt
+    _runner.build_followup_prompt = _patched_followup_prompt
 
     def build_prompt_suffix_with_schema_file(schema: Any, cwd: str) -> str:
         """Use Codex-native structured output instead of AgentField's Write-tool suffix.
