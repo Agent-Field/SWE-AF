@@ -1,0 +1,34 @@
+name: swe-planner
+version: 0.1.0
+description: SWE planning/execution agent node (plans and executes software-engineering tasks)
+author: Agent-Field
+
+entrypoint:
+  start: python -m swe_af
+  healthcheck: /health
+
+agent_node:
+  node_id: swe-planner
+  default_port: 8003
+
+user_environment:
+  required:
+    - name: ANTHROPIC_API_KEY
+      description: Anthropic API key used by the SWE harness
+      type: secret
+      scope: global
+  optional:
+    - name: AGENTFIELD_SERVER
+      description: Control-plane URL
+      default: http://localhost:8080
+    - name: AGENTFIELD_API_KEY
+      description: Control-plane API key (if auth is enabled)
+      type: secret
+      scope: global
+    - name: GH_TOKEN
+      description: GitHub token for cloning repos / opening PRs
+      type: secret
+      scope: global
+    - name: NODE_ID
+      description: Identity this node registers under
+      default: swe-planner
