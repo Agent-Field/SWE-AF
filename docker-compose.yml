@@ -9,6 +9,27 @@ services:
     volumes:
       - agentfield-data:/data
 
+  # Ephemeral Postgres for build-time integration checks. Repo-agnostic: it
+  # ships an empty database and the *target repo's own* integration global-setup
+  # migrates it, so the factory needs no schema knowledge. Tests that hard-require
+  # a DB (e.g. REQUIRE_TEST_DB=1 …) can connect via DATABASE_URL_TEST instead of
+  # failing at the connection layer (pg-pool ECONNREFUSED) and cascading.
+  #
+  # The data is intentionally throwaway (no volume). One shared DB means
+  # DB-dependent builds should run one at a time; per-build databases would be
+  # the next step if concurrent DB builds are needed.
+  build-db:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=${BUILD_DB_USER:-builder}
+      - POSTGRES_PASSWORD=${BUILD_DB_PASSWORD:-builder}
+      - POSTGRES_DB=${BUILD_DB_NAME:-buildtest}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BUILD_DB_USER:-builder} -d ${BUILD_DB_NAME:-buildtest}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
   swe-agent:
     build:
       context: .
@@ -23,13 +44,17 @@ services:
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}
     ports:
       - "8003:8003"
     volumes:
       - workspaces:/workspaces
       - ${HOME}/.codex:/root/.codex
     depends_on:
-      - control-plane
+      control-plane:
+        condition: service_started
+      build-db:
+        condition: service_healthy
     deploy:
       replicas: 1  # Scale with: docker compose up --scale swe-agent=3
 
@@ -54,13 +79,17 @@ services:
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
+      - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}
     ports:
       - "8004:8004"
     volumes:
       - workspaces:/workspaces
       - ${HOME}/.codex:/root/.codex
     depends_on:
-      - control-plane
+      control-plane:
+        condition: service_started
+      build-db:
+        condition: service_healthy
 
 volumes:
   agentfield-data:
