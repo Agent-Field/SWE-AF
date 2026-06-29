@@ -495,15 +495,27 @@ class TestBuildEdgeCases:
         assert _runtime_to_provider("other") == "opencode"
 
 
-def test_fast_build_config_accepts_codex_runtime() -> None:
+def test_fast_build_config_accepts_codex_runtime(monkeypatch) -> None:
     from swe_af.fast.schemas import FastBuildConfig, fast_resolve_models
 
+    # API-key auth: -codex models are available.
+    monkeypatch.setenv("SWE_CODEX_AUTH_MODE", "api_key")
     cfg = FastBuildConfig(runtime="codex")
     resolved = fast_resolve_models(cfg)
     assert resolved["pm_model"] == "gpt-5.3-codex"
     assert resolved["coder_model"] == "gpt-5.3-codex"
     assert resolved["verifier_model"] == "gpt-5.3-codex"
     assert resolved["git_model"] == "gpt-5.3-codex"
+
+
+def test_fast_codex_chatgpt_auth_uses_non_codex_model(monkeypatch) -> None:
+    # ChatGPT-account auth: -codex models 400, so fall back to gpt-5.5 (#82 Gap 3).
+    from swe_af.fast.schemas import FastBuildConfig, fast_resolve_models
+
+    monkeypatch.setenv("SWE_CODEX_AUTH_MODE", "chatgpt")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    resolved = fast_resolve_models(FastBuildConfig(runtime="codex"))
+    assert all(m == "gpt-5.5" for m in resolved.values()), resolved
 
 
 class TestBuildNonFatalPaths:

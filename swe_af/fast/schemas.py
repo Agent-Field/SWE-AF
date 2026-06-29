@@ -14,13 +14,23 @@ from swe_af.runtime.providers import RUNTIME_VALUES
 
 _CLAUDE_CODE_DEFAULT = "haiku"
 _OPEN_CODE_DEFAULT = "qwen/qwen-2.5-coder-32b-instruct"
-_CODEX_DEFAULT = "gpt-5.3-codex"
 
 _RUNTIME_DEFAULTS: dict[str, str] = {
     "claude_code": _CLAUDE_CODE_DEFAULT,
     "open_code": _OPEN_CODE_DEFAULT,
-    "codex": _CODEX_DEFAULT,
+    # codex is resolved dynamically (auth-mode dependent); see _runtime_default().
 }
+
+
+def _runtime_default(runtime: str) -> str:
+    """Default model for a runtime. Codex is auth-mode dependent: the ``-codex``
+    models are blocked under ChatGPT-account auth, so fall back to a
+    ChatGPT-compatible model there (see ``schemas._codex_default_model``)."""
+    if runtime == "codex":
+        from swe_af.execution.schemas import _codex_default_model  # noqa: PLC0415
+
+        return _codex_default_model()
+    return _RUNTIME_DEFAULTS[runtime]
 
 # All four roles resolved by fast_resolve_models()
 _FAST_ROLES: tuple[str, ...] = ("pm_model", "coder_model", "verifier_model", "git_model")
@@ -150,7 +160,7 @@ def fast_resolve_models(config: FastBuildConfig) -> dict[str, str]:
         ValueError: If ``config.models`` contains a key that is not ``"default"``
             and not one of the four known role names.
     """
-    runtime_default = _RUNTIME_DEFAULTS[config.runtime]
+    runtime_default = _runtime_default(config.runtime)
 
     resolved: dict[str, str] = {role: runtime_default for role in _FAST_ROLES}
 

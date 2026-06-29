@@ -138,17 +138,44 @@ class TestDefaultRuntimeFromEnv(unittest.TestCase):
 
 class TestCodexRuntimeConfig(unittest.TestCase):
     def test_codex_runtime_provider_and_defaults(self) -> None:
-        cfg = BuildConfig(runtime="codex")
-        self.assertEqual(cfg.ai_provider, "codex")
-        resolved = cfg.resolved_models()
-        for field in ALL_MODEL_FIELDS:
-            self.assertEqual(resolved[field], "gpt-5.3-codex")
+        # API-key auth: the -codex models are available, so that's the default.
+        with mock.patch.dict(os.environ, {"SWE_CODEX_AUTH_MODE": "api_key"}):
+            cfg = BuildConfig(runtime="codex")
+            self.assertEqual(cfg.ai_provider, "codex")
+            resolved = cfg.resolved_models()
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(resolved[field], "gpt-5.3-codex")
 
     def test_codex_execution_config_provider_and_defaults(self) -> None:
-        cfg = ExecutionConfig(runtime="codex")
-        self.assertEqual(cfg.ai_provider, "codex")
-        self.assertEqual(cfg.coder_model, "gpt-5.3-codex")
-        self.assertEqual(cfg.verifier_model, "gpt-5.3-codex")
+        with mock.patch.dict(os.environ, {"SWE_CODEX_AUTH_MODE": "api_key"}):
+            cfg = ExecutionConfig(runtime="codex")
+            self.assertEqual(cfg.ai_provider, "codex")
+            self.assertEqual(cfg.coder_model, "gpt-5.3-codex")
+            self.assertEqual(cfg.verifier_model, "gpt-5.3-codex")
+
+    def test_codex_chatgpt_auth_uses_non_codex_model(self) -> None:
+        # ChatGPT-account auth: the -codex models 400, so the default must be a
+        # ChatGPT-compatible model (#82 Gap 3 root cause).
+        with mock.patch.dict(
+            os.environ, {"SWE_CODEX_AUTH_MODE": "chatgpt", "OPENAI_API_KEY": ""}
+        ):
+            resolved = BuildConfig(runtime="codex").resolved_models()
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(resolved[field], "gpt-5.5")
+            self.assertEqual(ExecutionConfig(runtime="codex").coder_model, "gpt-5.5")
+
+    def test_codex_auto_auth_follows_openai_api_key_presence(self) -> None:
+        # auto: API key present -> -codex; absent -> ChatGPT-compatible.
+        with mock.patch.dict(
+            os.environ, {"SWE_CODEX_AUTH_MODE": "auto", "OPENAI_API_KEY": "sk-test"}
+        ):
+            self.assertEqual(
+                ExecutionConfig(runtime="codex").coder_model, "gpt-5.3-codex"
+            )
+        with mock.patch.dict(
+            os.environ, {"SWE_CODEX_AUTH_MODE": "auto", "OPENAI_API_KEY": ""}
+        ):
+            self.assertEqual(ExecutionConfig(runtime="codex").coder_model, "gpt-5.5")
 
     def test_env_codex_runtime_overrides_default(self) -> None:
         with mock.patch.dict(os.environ, {"SWE_DEFAULT_RUNTIME": "codex"}):

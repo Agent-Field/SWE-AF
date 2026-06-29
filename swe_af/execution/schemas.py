@@ -507,6 +507,14 @@ _LEGACY_TOP_LEVEL_EQUIVALENTS: dict[str, str] = {
     **{field: f"models.{role}" for field, role in _MODEL_FIELD_TO_ROLE.items()},
 }
 
+# Codex model defaults are auth-mode dependent. The ``-codex`` models (e.g.
+# ``gpt-5.3-codex``) are only available with OpenAI API-key auth — they return
+# HTTP 400 "not supported when using Codex with a ChatGPT account" under
+# ChatGPT-account login, which fails in ~3s and (pre-fix) cascaded into an empty
+# build. So the base default is chosen by ``_codex_default_model()`` below.
+_CODEX_API_KEY_MODEL = "gpt-5.3-codex"   # OpenAI API-key auth (api_key mode)
+_CODEX_CHATGPT_MODEL = "gpt-5.5"         # ChatGPT-account auth (-codex blocked)
+
 _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "claude_code": {
         **{field: "sonnet" for field in ALL_MODEL_FIELDS},
@@ -516,9 +524,36 @@ _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
         **{field: "openrouter/minimax/minimax-m2.5" for field in ALL_MODEL_FIELDS},
     },
     "codex": {
-        **{field: "gpt-5.3-codex" for field in ALL_MODEL_FIELDS},
+        **{field: _CODEX_API_KEY_MODEL for field in ALL_MODEL_FIELDS},
     },
 }
+
+
+def _codex_uses_chatgpt_auth() -> bool:
+    """Whether codex will authenticate via a ChatGPT account (not an API key).
+
+    Mirrors the Codex CLI's own auth selection and the ``SWE_CODEX_AUTH_MODE``
+    contract documented in ``.env.example``:
+
+    - ``api_key``  → always API-key auth.
+    - ``chatgpt``  → always ChatGPT-account login.
+    - ``auto`` (default) → API key when ``OPENAI_API_KEY`` is set, else ChatGPT.
+
+    Matters because the ``-codex`` models are unavailable under ChatGPT-account
+    auth, so the default model must differ between the two.
+    """
+    mode = os.getenv("SWE_CODEX_AUTH_MODE", "auto").strip().lower()
+    if mode == "api_key":
+        return False
+    if mode == "chatgpt":
+        return True
+    # auto
+    return not os.getenv("OPENAI_API_KEY", "").strip()
+
+
+def _codex_default_model() -> str:
+    """Base codex model for the active auth mode (overridable per role/env)."""
+    return _CODEX_CHATGPT_MODEL if _codex_uses_chatgpt_auth() else _CODEX_API_KEY_MODEL
 
 
 def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode", "codex"]:
@@ -659,6 +694,10 @@ def resolve_runtime_models(
     flat_models = _validate_flat_models(models)
 
     base = _RUNTIME_BASE_MODELS[runtime]
+    if runtime == "codex":
+        # Choose the codex base default by auth mode (see _codex_default_model).
+        codex_model = _codex_default_model()
+        base = {field: codex_model for field in base}
     resolved: dict[str, str] = {field: base[field] for field in field_names}
 
     env_default = _default_model_from_env()
