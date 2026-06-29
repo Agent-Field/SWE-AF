@@ -22,6 +22,20 @@ from swe_af.reasoners.pipeline import _assign_sequence_numbers, _compute_levels,
 from swe_af.reasoners.schemas import PlanResult, ReviewResult
 
 from agentfield import Agent
+
+try:
+    # Added in a later agentfield SDK release. When present, raising it makes a
+    # reasoner report `failed` to the control plane while preserving its
+    # structured result. The fallback keeps SWE-AF importable against older SDKs
+    # — raising the shim still flips the execution to `failed` via the SDK's
+    # generic exception path (the result just isn't carried onto the record).
+    from agentfield import ReasonerFailed  # type: ignore
+except ImportError:  # pragma: no cover - exercised only on older agentfield SDKs
+    class ReasonerFailed(Exception):  # type: ignore[no-redef]
+        def __init__(self, message: str, *, result=None, error_details=None) -> None:
+            super().__init__(message)
+            self.result = result
+            self.error_details = error_details
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.schemas import (
     BuildConfig,
@@ -453,6 +467,22 @@ async def _create_hax_request_with_timeout(
         tags=["build", "approval", "hax", "submitted"],
     )
     return hax_request
+
+
+def _is_empty_build(success: bool, ever_completed: int, ever_merged: int) -> bool:
+    """Decide whether a finished build shipped nothing and must report failed.
+
+    A build is "empty" when verification did not pass AND the build never
+    completed an issue or merged a branch across its original run and every
+    fix cycle. Such a build implemented nothing real (at most a cosmetic diff
+    like a lone .gitignore change), so it must surface as a failed execution
+    rather than `succeeded`.
+
+    A build that completed at least one issue or merged at least one branch is
+    NOT empty even when verification later failed — it shipped real code and an
+    open PR worth surfacing, so it returns normally (a partial success).
+    """
+    return not success and ever_completed == 0 and ever_merged == 0
 
 
 @app.reasoner()
@@ -945,6 +975,16 @@ async def build(
             workspace_manifest=manifest.model_dump() if manifest else None,
         ), "execute")
 
+        # High-water mark of work the build ever shipped. The verify/fix loop
+        # below reassigns ``dag_result`` to each fix-execution's state, so the
+        # final ``dag_result`` reflects only the last (fix) run — a fix cycle
+        # that completes/merges nothing would otherwise erase evidence that the
+        # original build merged real code. Track the max across all executions
+        # so the "empty build" guard at the end can't false-fail a build that
+        # genuinely shipped something.
+        ever_completed = len(dag_result.get("completed_issues", []) or [])
+        ever_merged = len(dag_result.get("merged_branches", []) or [])
+
         # Refresh manifest with git_init_result populated by _init_all_repos() in
         # the DAG executor.  Must happen before the verify/fix loop which can
         # overwrite dag_result with fix-execution results (no workspace_manifest).
@@ -1033,6 +1073,12 @@ async def build(
                     git_config=git_config,
                     workspace_manifest=manifest.model_dump() if manifest else None,
                 ), "execute_fixes")
+                ever_completed = max(
+                    ever_completed, len(dag_result.get("completed_issues", []) or [])
+                )
+                ever_merged = max(
+                    ever_merged, len(dag_result.get("merged_branches", []) or [])
+                )
                 continue  # Re-verify
             else:
                 app.note("No fixable issues generated — accepting with debt", tags=["build", "verify"])
@@ -1330,7 +1376,7 @@ async def build(
             except Exception:
                 pass  # non-blocking
 
-        return BuildResult(
+        build_result = BuildResult(
             plan_result=plan_result,
             dag_state=dag_result,
             verification=verification,
@@ -1340,6 +1386,21 @@ async def build(
             pr_results=pr_results,
             ci_gate_results=ci_gate_results,
         ).model_dump()
+
+        # An empty build — verification failed AND nothing was ever completed
+        # or merged across the original run and every fix cycle — must not
+        # surface as a succeeded execution. Returning the result (even with
+        # success=False) makes the control plane record `succeeded`, so a
+        # fully-failed build reads as green. Raise ReasonerFailed instead: it
+        # flips the execution to `failed` while still preserving the structured
+        # BuildResult (debt, DAG state, any cosmetic PR) on the record.
+        if _is_empty_build(success, ever_completed, ever_merged):
+            raise ReasonerFailed(
+                f"Build failed: 0/{total} issues completed, no branches merged",
+                result=build_result,
+            )
+
+        return build_result
 
     finally:
         if _scope_id:
