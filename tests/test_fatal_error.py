@@ -50,6 +50,9 @@ class TestIsFatalError:
             "billing suspended",
             "Quota exceeded for this model",
             "quota has been exceeded",
+            # Codex model/auth mismatches (#82 Gap 3) — non-retryable.
+            "The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.",
+            "The 'gpt-5.5' model requires a newer version of Codex. Please upgrade.",
         ],
     )
     def test_fatal_patterns_detected(self, message: str) -> None:

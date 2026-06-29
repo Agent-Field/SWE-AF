@@ -32,6 +32,12 @@ _FATAL_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"account.{0,10}is disabled",
         r"unauthorized",
         r"quota.{0,20}exceeded",
+        # Codex model/auth mismatches: retrying with the same model + auth mode
+        # fails identically. Treating these as fatal surfaces the real reason
+        # (instead of a silent empty build that burns the retry cap) — e.g. the
+        # default `-codex` model under ChatGPT-account auth (#82 Gap 3).
+        r"not supported when using codex with a chatgpt account",
+        r"requires a newer version of codex",
     )
 )
 

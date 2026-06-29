@@ -1002,6 +1002,7 @@ async def run_coder(
 
     provider = runtime_to_harness_adapter(ai_provider)
 
+    harness_error = ""
     try:
         result = await router.harness(
             task_prompt,
@@ -1025,17 +1026,31 @@ async def run_coder(
             out = result.parsed.model_dump()
             out["iteration_id"] = iteration_id
             return out
+        # Harness returned but produced no parseable CoderResult. Surface the
+        # underlying error (e.g. a codex model/auth 400) so the empty result
+        # carries *why* instead of a bare "Coder agent failed".
+        harness_error = (
+            getattr(result, "error_message", "") or "no structured output returned"
+        )
+        router.note(
+            f"Coder produced no result: {issue_name}: {harness_error}",
+            tags=["coder", "error"],
+        )
     except FatalHarnessError:
         raise  # Non-retryable — propagate immediately
     except Exception as e:
+        harness_error = str(e)
         router.note(
             f"Coder agent failed: {issue_name}: {e}",
             tags=["coder", "error"],
         )
 
+    summary = f"Coder agent failed for {issue_name}"
+    if harness_error:
+        summary += f": {harness_error}"
     return CoderResult(
         files_changed=[],
-        summary=f"Coder agent failed for {issue_name}",
+        summary=summary,
         complete=False,
         iteration_id=iteration_id,
     ).model_dump()
