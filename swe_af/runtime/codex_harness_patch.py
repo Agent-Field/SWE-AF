@@ -4,6 +4,8 @@ import asyncio
 import contextvars
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,9 @@ _PATCHED = False
 active_provider: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "swe_af_codex_active_provider", default=None
 )
+active_output_paths: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "swe_af_codex_output_paths", default=None
+)
 
 _ORIGINAL_BUILD_PROMPT_SUFFIX: Any = None
 
@@ -23,6 +28,10 @@ _ORIGINAL_BUILD_PROMPT_SUFFIX: Any = None
 def _codex_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(schema, dict):
         return schema
+    if not schema:
+        # Codex/OpenAI structured output rejects unconstrained `{}` schemas,
+        # including Pydantic `Any` branches inside `anyOf`.
+        return {"type": "string"}
     strict = dict(schema)
     schema_type = strict.get("type")
     if schema_type == "object":
@@ -39,6 +48,23 @@ def _codex_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
             strict["properties"] = cleaned
             strict["required"] = list(cleaned.keys())
             strict["additionalProperties"] = False
+        else:
+            additional = strict.get("additionalProperties")
+            if additional is True:
+                # Codex/OpenAI strict structured output does not accept
+                # free-form maps. Keep the field object-shaped for Pydantic,
+                # but require it to be empty.
+                strict["properties"] = {}
+                strict["required"] = []
+                strict["additionalProperties"] = False
+            elif isinstance(additional, dict):
+                strict["properties"] = {}
+                strict["required"] = []
+                strict["additionalProperties"] = False
+            else:
+                strict["properties"] = {}
+                strict["required"] = []
+                strict["additionalProperties"] = False
     if schema_type == "array":
         items = strict.get("items")
         if isinstance(items, dict):
@@ -81,6 +107,42 @@ def _augment_codex_error_message(message: str, detail: str) -> str:
     return message
 
 
+def _codex_no_final_message_error(records: Any) -> tuple[str, bool]:
+    if not isinstance(records, list):
+        return ("Codex CLI completed without a final assistant message.", False)
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        payload = record.get("payload")
+        event = payload if isinstance(payload, dict) else record
+        if event.get("type") != "token_count":
+            continue
+        rate_limits = event.get("rate_limits")
+        if not isinstance(rate_limits, dict):
+            continue
+        credits = rate_limits.get("credits")
+        if isinstance(credits, dict) and credits.get("has_credits") is False:
+            limit_id = rate_limits.get("limit_id") or "unknown"
+            balance = credits.get("balance")
+            balance_note = f", balance={balance}" if balance is not None else ""
+            return (
+                "Codex CLI completed without a final assistant message because "
+                f"Codex reported unavailable credits/rate-limit capacity "
+                f"(limit_id={limit_id}{balance_note}).",
+                True,
+            )
+        rate_limit_type = rate_limits.get("rate_limit_reached_type")
+        if rate_limit_type:
+            return (
+                "Codex CLI completed without a final assistant message because "
+                f"Codex reported a rate limit ({rate_limit_type}).",
+                True,
+            )
+
+    return ("Codex CLI completed without a final assistant message.", False)
+
+
 async def _run_codex_cli_with_stdin(
     cmd: list[str],
     prompt_for_codex: str,
@@ -110,6 +172,7 @@ def apply_codex_harness_patch() -> None:
         from agentfield.agent import Agent
         from agentfield.harness import _runner, _schema
         from agentfield.harness._cli import (
+            apply_subprocess_env,
             estimate_cli_cost,
             extract_final_text,
             parse_jsonl,
@@ -136,8 +199,17 @@ def apply_codex_harness_patch() -> None:
             _codex_strict_json_schema(_schema.schema_to_json_schema(schema)),
             indent=2,
         )
-        _schema.write_schema_file(schema_json, cwd)
-        schema_path = _schema.get_schema_path(cwd)
+        output_dir = tempfile.mkdtemp(prefix=".agentfield-codex-", dir=cwd)
+        schema_path = Path(output_dir) / "schema.json"
+        output_path = Path(output_dir) / "output.json"
+        schema_path.write_text(schema_json, encoding="utf-8")
+        active_output_paths.set(
+            {
+                "schema": str(schema_path),
+                "output": str(output_path),
+                "dir": output_dir,
+            }
+        )
         return (
             "\n\n---\n"
             "CRITICAL CODEX STRUCTURED OUTPUT REQUIREMENTS:\n"
@@ -148,13 +220,15 @@ def apply_codex_harness_patch() -> None:
         )
 
     async def execute_with_native_structured_output(self: Any, prompt: str, options: dict[str, object]) -> Any:
-        cwd = str(options.get("cwd")) if isinstance(options.get("cwd"), str) else None
+        root = options.get("project_dir") or options.get("cwd")
+        cwd = str(root) if isinstance(root, str) else None
         model = options.get("model")
         permission_mode = options.get("permission_mode")
         env_value = options.get("env")
         merged_env = {**os.environ}
         if isinstance(env_value, dict):
             merged_env.update({str(k): str(v) for k, v in env_value.items() if isinstance(k, str)})
+        apply_subprocess_env(merged_env)
 
         cmd = [self._bin, "exec", "--json", "--skip-git-repo-check"]
         if cwd:
@@ -170,20 +244,24 @@ def apply_codex_harness_patch() -> None:
             cmd.extend(["--sandbox", "workspace-write"])
 
         prompt_for_codex = prompt
-        if cwd:
+        output_paths = active_output_paths.get()
+        schema_path = output_paths.get("schema") if output_paths else None
+        output_path = output_paths.get("output") if output_paths else None
+        if not schema_path and cwd:
             schema_path = _schema.get_schema_path(cwd)
             output_path = _schema.get_output_path(cwd)
-            if Path(schema_path).exists():
-                cmd.extend(["--output-schema", schema_path])
-                cmd.extend(["--output-last-message", output_path])
-                prompt_for_codex += (
-                    "\n\n---\n"
-                    "CODEX STRUCTURED OUTPUT CONTRACT:\n"
-                    f"The Codex CLI will save your final response to: {output_path}\n"
-                    f"Your final response MUST be a single JSON object conforming to: {schema_path}\n"
-                    "Return the JSON object as your final answer. Do not write "
-                    "the output file yourself or make the output file the task."
-                )
+
+        if schema_path and output_path and Path(schema_path).exists():
+            cmd.extend(["--output-schema", schema_path])
+            cmd.extend(["--output-last-message", output_path])
+            prompt_for_codex += (
+                "\n\n---\n"
+                "CODEX STRUCTURED OUTPUT CONTRACT:\n"
+                f"The Codex CLI will save your final response to: {output_path}\n"
+                f"Your final response MUST be a single JSON object conforming to: {schema_path}\n"
+                "Return the JSON object as your final answer. Do not write "
+                "the output file yourself or make the output file the task."
+            )
 
         try:
             start = asyncio.get_running_loop().time()
@@ -233,8 +311,7 @@ def apply_codex_harness_patch() -> None:
         records = parse_jsonl(stdout or "")
         result_text = extract_final_text(records) or ""
 
-        if not result_text and cwd:
-            output_path = _schema.get_output_path(cwd)
+        if not result_text and output_path:
             output_file = Path(output_path)
             if output_file.exists():
                 try:
@@ -245,10 +322,26 @@ def apply_codex_harness_patch() -> None:
         is_error = returncode != 0
         error_message = ""
         failure_type = FailureType.NONE
+        if not result_text:
+            error_message, is_api_error = _codex_no_final_message_error(records)
+            is_error = True
+            failure_type = FailureType.API_ERROR if is_api_error else FailureType.NO_OUTPUT
         if is_error:
-            base_error = stderr_clean or "Codex CLI failed"
+            stdout_error = ""
+            if isinstance(records, list):
+                for record in records:
+                    if isinstance(record, dict) and record.get("type") in {
+                        "error",
+                        "turn.failed",
+                    }:
+                        stdout_error = json.dumps(record, ensure_ascii=False)
+                        break
+            base_error = "\n".join(
+                part for part in (stderr_clean, stdout_error) if part
+            ) or error_message or "Codex CLI failed"
             error_message = _augment_codex_error_message(base_error, base_error)
-            failure_type = FailureType.CRASH
+            if returncode != 0:
+                failure_type = FailureType.CRASH
 
         return RawResult(
             result=result_text,
@@ -289,9 +382,15 @@ def apply_codex_harness_patch() -> None:
     ) -> Any:
         provider_value = kwargs.get("provider")
         token = active_provider.set(str(provider_value) if provider_value else None)
+        output_token = active_output_paths.set(None)
         try:
             return await _orig_agent_harness(self, prompt, *args, **kwargs)
         finally:
+            output_paths = active_output_paths.get()
+            tmp_dir = output_paths.get("dir") if output_paths else None
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            active_output_paths.reset(output_token)
             active_provider.reset(token)
 
     _schema.build_prompt_suffix = build_prompt_suffix_dispatching

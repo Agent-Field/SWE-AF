@@ -3,7 +3,12 @@ import json
 from pathlib import Path
 
 from swe_af.execution.coding_loop import run_coding_loop
-from swe_af.execution.schemas import DAGState, ExecutionConfig, IssueOutcome
+from swe_af.execution.schemas import (
+    DAGState,
+    ExecutionConfig,
+    IssueOutcome,
+    QASynthesisResult,
+)
 
 
 def _make_dag_state(tmp_path: Path, build_id: str) -> DAGState:
@@ -98,3 +103,60 @@ def test_run_coding_loop_propagates_permission_mode_to_all_agents(tmp_path: Path
     assert result.outcome == IssueOutcome.COMPLETED
     for agent_name in ("run_coder", "run_qa", "run_code_reviewer", "run_qa_synthesizer"):
         assert observed_modes[agent_name] == "bypassPermissions"
+
+
+def test_run_qa_synthesizer_uses_provider_aware_harness_for_codex(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from swe_af.reasoners import execution_agents
+
+    observed: dict[str, object] = {}
+
+    class FakeAgent:
+        async def harness(self, prompt: str, **kwargs):
+            observed["prompt"] = prompt
+            observed.update(kwargs)
+
+            class Result:
+                parsed = QASynthesisResult(
+                    action="approve",
+                    summary="ok",
+                    stuck=False,
+                )
+
+            return Result()
+
+        async def ai(self, *args, **kwargs):  # pragma: no cover - should never run
+            raise AssertionError("QA synthesizer must use router.harness, not router.ai")
+
+        def note(self, *args, **kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(execution_agents.router, "_agent", FakeAgent())
+
+    result = asyncio.run(
+        execution_agents.run_qa_synthesizer(
+            qa_result={"passed": True, "summary": "qa ok", "test_failures": []},
+            review_result={
+                "approved": True,
+                "blocking": False,
+                "summary": "review ok",
+                "debt_items": [],
+            },
+            iteration_history=[],
+            iteration_id="it1",
+            worktree_path=str(tmp_path),
+            model="gpt-5.5",
+            permission_mode="auto",
+            ai_provider="codex",
+        )
+    )
+
+    assert result["action"] == "approve"
+    assert result["iteration_id"] == "it1"
+    assert observed["model"] == "gpt-5.5"
+    assert observed["provider"] == "codex"
+    assert observed["cwd"] == str(tmp_path)
+    assert observed["permission_mode"] == "auto"
+    assert observed["schema"] is QASynthesisResult

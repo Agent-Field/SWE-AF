@@ -1250,13 +1250,21 @@ async def run_qa_synthesizer(
         workspace_manifest=ws_manifest,
     )
 
+    provider = runtime_to_harness_adapter(ai_provider)
+    cwd = worktree_path or target_repo or "."
+
     try:
-        result = await router.ai(
+        result = await router.harness(
             task_prompt,
-            system=QA_SYNTHESIZER_SYSTEM_PROMPT,
+            system_prompt=QA_SYNTHESIZER_SYSTEM_PROMPT,
             schema=QASynthesisResult,
             model=model,
+            provider=provider,
+            cwd=cwd,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
+        check_fatal_harness_error(result)
         if result.parsed is not None:
             router.note(
                 f"QA synthesizer complete: action={result.parsed.action.value}, "

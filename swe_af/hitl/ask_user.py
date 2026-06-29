@@ -72,6 +72,13 @@ FieldType = Literal[
 ]
 
 
+class AskUserFormOption(BaseModel):
+    """One selectable option for select, radio, or checkbox_group fields."""
+
+    value: str = Field(description="Submitted value for this option.")
+    label: str = Field(description="Human-readable label shown to the user.")
+
+
 class AskUserFormField(BaseModel):
     """One field in a form the agent is constructing for the user."""
 
@@ -103,7 +110,7 @@ class AskUserFormField(BaseModel):
         default=None,
         description="Pre-filled value if the user submits without changing it.",
     )
-    options: list[dict[str, str]] | None = Field(
+    options: list[AskUserFormOption] | None = Field(
         default=None,
         description=(
             "Required for 'select', 'radio', 'checkbox_group'. Each entry is "
@@ -217,6 +224,7 @@ def _field_to_form_builder_call(form: Any, field: AskUserFormField) -> None:
         common["default_value"] = field.default_value
 
     ftype = field.type
+    options = [option.model_dump() for option in field.options or []]
 
     if ftype == "input":
         form.input(field.id, **common)
@@ -243,19 +251,19 @@ def _field_to_form_builder_call(form: Any, field: AskUserFormField) -> None:
             kwargs["step"] = field.step
         form.slider(field.id, **kwargs)
     elif ftype == "select":
-        if not field.options:
+        if not options:
             raise ValueError(f"select field '{field.id}' requires options")
-        form.select(field.id, options=field.options, **common)
+        form.select(field.id, options=options, **common)
     elif ftype == "radio":
-        if not field.options:
+        if not options:
             raise ValueError(f"radio field '{field.id}' requires options")
-        form.radio_group(field.id, options=field.options, **common)
+        form.radio_group(field.id, options=options, **common)
     elif ftype == "checkbox_group":
-        if not field.options:
+        if not options:
             raise ValueError(
                 f"checkbox_group field '{field.id}' requires options"
             )
-        form.checkbox_group(field.id, options=field.options, **common)
+        form.checkbox_group(field.id, options=options, **common)
     elif ftype == "checkbox":
         common.pop("placeholder", None)
         form.checkbox(field.id, checkbox_label=field.label, **common)
