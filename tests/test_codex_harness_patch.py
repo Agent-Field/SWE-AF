@@ -5,6 +5,7 @@ import shutil
 from swe_af.runtime.codex_harness_patch import (
     _augment_codex_error_message,
     _codex_no_final_message_error,
+    _codex_permission_args,
     _codex_strict_json_schema,
     active_output_paths,
     active_provider,
@@ -86,6 +87,24 @@ def test_codex_git_metadata_error_gets_actionable_hint() -> None:
 
 def test_codex_unrelated_error_is_unchanged() -> None:
     assert _augment_codex_error_message("plain error", "plain error") == "plain error"
+
+
+def test_codex_default_permission_mode_bypasses_sandbox() -> None:
+    assert _codex_permission_args(None) == ["--dangerously-bypass-approvals-and-sandbox"]
+    assert _codex_permission_args("") == ["--dangerously-bypass-approvals-and-sandbox"]
+    assert _codex_permission_args("auto") == ["--dangerously-bypass-approvals-and-sandbox"]
+    assert _codex_permission_args("default") == ["--dangerously-bypass-approvals-and-sandbox"]
+    assert _codex_permission_args("danger-full-access") == [
+        "--dangerously-bypass-approvals-and-sandbox"
+    ]
+    assert _codex_permission_args("bypassPermissions") == [
+        "--dangerously-bypass-approvals-and-sandbox"
+    ]
+
+
+def test_codex_explicit_narrow_permission_modes_are_preserved() -> None:
+    assert _codex_permission_args("read-only") == ["--sandbox", "read-only"]
+    assert _codex_permission_args("workspace-write") == ["--sandbox", "workspace-write"]
 
 
 def test_codex_no_final_message_reports_unavailable_credits() -> None:

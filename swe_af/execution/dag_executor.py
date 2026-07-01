@@ -88,6 +88,7 @@ async def _setup_worktrees(
             artifacts_dir=dag_state.artifacts_dir,
             level=dag_state.current_level,
             model=config.git_model,
+            permission_mode=config.permission_mode,
             ai_provider=config.ai_provider,
             build_id=build_id,
         )
@@ -258,6 +259,7 @@ async def _merge_level_branches(
             artifacts_dir=dag_state.artifacts_dir,
             level=level_result.level_index,
             model=config.merger_model,
+            permission_mode=config.permission_mode,
             ai_provider=config.ai_provider,
         )
 
@@ -348,6 +350,7 @@ async def _merge_level_branches(
             artifacts_dir=dag_state.artifacts_dir,
             level=level_result.level_index,
             model=config.merger_model,
+            permission_mode=config.permission_mode,
             ai_provider=config.ai_provider,
         )
         return result
@@ -459,6 +462,7 @@ async def _run_integration_tests(
             artifacts_dir=dag_state.artifacts_dir,
             level=level_result.level_index,
             model=config.integration_tester_model,
+            permission_mode=config.permission_mode,
             ai_provider=config.ai_provider,
             workspace_manifest=dag_state.workspace_manifest,
         )
@@ -491,6 +495,7 @@ async def _cleanup_worktrees(
     level: int = 0,
     model: str = "sonnet",
     ai_provider: str = "claude",
+    permission_mode: str = "",
     completed_results: list | None = None,
 ) -> None:
     """Remove worktrees and clean up branches after merge.
@@ -527,7 +532,7 @@ async def _cleanup_worktrees(
             await _cleanup_single_repo(
                 call_fn, node_id, ws_repo.absolute_path, repo_worktrees_dir,
                 repo_branches, dag_state.artifacts_dir, level, model, ai_provider,
-                note_fn,
+                note_fn, permission_mode,
             )
         return
 
@@ -535,7 +540,7 @@ async def _cleanup_worktrees(
     await _cleanup_single_repo(
         call_fn, node_id, dag_state.repo_path, dag_state.worktrees_dir,
         branches_to_clean, dag_state.artifacts_dir, level, model, ai_provider,
-        note_fn,
+        note_fn, permission_mode,
     )
 
 
@@ -550,6 +555,7 @@ async def _cleanup_single_repo(
     model: str,
     ai_provider: str,
     note_fn: Callable | None = None,
+    permission_mode: str = "",
 ) -> None:
     """Clean up worktrees for a single repo. Retries once on failure."""
     for attempt in range(2):  # up to 1 retry
@@ -562,6 +568,7 @@ async def _cleanup_single_repo(
                 artifacts_dir=artifacts_dir,
                 level=level,
                 model=model,
+                permission_mode=permission_mode,
                 ai_provider=ai_provider,
             )
             if result.get("success"):
@@ -1591,6 +1598,7 @@ async def run_dag(
                     level=dag_state.current_level,
                     model=config.git_model,
                     ai_provider=config.ai_provider,
+                    permission_mode=config.permission_mode,
                     completed_results=level_result.completed,
                 )
             )

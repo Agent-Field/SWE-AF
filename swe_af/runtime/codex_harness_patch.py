@@ -143,6 +143,12 @@ def _codex_no_final_message_error(records: Any) -> tuple[str, bool]:
     return ("Codex CLI completed without a final assistant message.", False)
 
 
+def _codex_permission_args(permission_mode: object) -> list[str]:
+    if permission_mode in {"read-only", "workspace-write"}:
+        return ["--sandbox", str(permission_mode)]
+    return ["--dangerously-bypass-approvals-and-sandbox"]
+
+
 async def _run_codex_cli_with_stdin(
     cmd: list[str],
     prompt_for_codex: str,
@@ -236,12 +242,7 @@ def apply_codex_harness_patch() -> None:
         if model:
             cmd.extend(["-m", str(model)])
 
-        if permission_mode == "auto":
-            cmd.append("--dangerously-bypass-approvals-and-sandbox")
-        elif permission_mode in {"read-only", "workspace-write", "danger-full-access"}:
-            cmd.extend(["--sandbox", str(permission_mode)])
-        else:
-            cmd.extend(["--sandbox", "workspace-write"])
+        cmd.extend(_codex_permission_args(permission_mode))
 
         prompt_for_codex = prompt
         output_paths = active_output_paths.get()
