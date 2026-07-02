@@ -12,8 +12,8 @@ ready for a pull request or handoff.
 ## What "Production-Ready" Means
 
 Imagine a new team member cloning this repo for the first time. They should see:
-- Only intentional, purposeful files — no build artifacts, no tooling \
-  leftovers, no pipeline infrastructure
+- Only intentional, purposeful files — no build artifacts or tooling \
+  leftovers, while preserving SWE-AF handoff evidence under `.artifacts/`
 - A comprehensive .gitignore that prevents future accidents
 - A clean `git status` with no untracked debris
 - No broken symlinks or empty placeholder files that have outlived their \
@@ -27,8 +27,13 @@ Imagine a new team member cloning this repo for the first time. They should see:
    what's debris.
 2. **Clean with judgment** — remove things that clearly don't belong: \
    dependency directories that should be installed fresh, build outputs, \
-   pipeline artifacts, broken symlinks, caches. Don't remove anything \
-   you're unsure about — if in doubt, leave it and note it.
+   untracked pipeline scratch directories, broken symlinks, caches. Before \
+   removing any path, check whether it is tracked with `git ls-files -- \
+   <path>`. Never delete tracked files. Preserve SWE-AF handoff artifacts \
+   under `.artifacts/plan/`, `.artifacts/execution/`, \
+   `.artifacts/verification/`, and `.artifacts/build_state.json` even when \
+   they are untracked or ignored. Don't remove anything you're unsure about \
+   — if in doubt, leave it and note it.
 3. **Fortify the .gitignore** — ensure it covers the standard patterns for \
    this project's ecosystem. A good .gitignore is the repo's immune system.
 4. **Final commit** — stage and commit your cleanup work. This should be a \
@@ -40,6 +45,10 @@ Imagine a new team member cloning this repo for the first time. They should see:
 - Do NOT modify source code, tests, or documentation
 - Do NOT change the project's behavior in any way
 - Do NOT remove files you're uncertain about — only clear artifacts
+- Do NOT remove tracked files, including tracked generated verification fixtures
+- Do NOT remove SWE-AF handoff artifacts: `.artifacts/plan/`, \
+  `.artifacts/execution/`, `.artifacts/verification/`, or \
+  `.artifacts/build_state.json`, even when they are untracked or ignored
 - Do NOT restructure or reorganize the project
 
 ## Tools Available
@@ -61,9 +70,14 @@ def repo_finalize_task_prompt(repo_path: str) -> str:
     sections.append(
         "\n## Your Task\n"
         "1. Survey the directory tree to understand the project and its ecosystem.\n"
-        "2. Identify and remove clear artifacts: dependency dirs (node_modules, "
-        "__pycache__, .venv, etc.), build outputs, broken symlinks, pipeline "
-        "leftovers (.artifacts/, .worktrees/), caches.\n"
+        "2. Identify and remove clear untracked artifacts: dependency dirs "
+        "(node_modules, __pycache__, .venv, etc.), build outputs, broken "
+        "symlinks, untracked pipeline scratch directories, caches. Before "
+        "removing any path, run `git ls-files -- <path>` or equivalent and "
+        "preserve tracked files. Also preserve SWE-AF handoff artifacts under "
+        "`.artifacts/plan/`, `.artifacts/execution/`, "
+        "`.artifacts/verification/`, and `.artifacts/build_state.json` even "
+        "when untracked or ignored.\n"
         "3. Create or update `.gitignore` with standard patterns for the detected "
         "language/framework, plus `.artifacts/`, `.worktrees/`, `.env`, `.DS_Store`.\n"
         "4. Check `git status` — ensure the working tree is clean.\n"
