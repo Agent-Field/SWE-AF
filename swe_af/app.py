@@ -535,6 +535,10 @@ def _checkpoint_path(repo_path: str, artifacts_dir: str) -> str:
 def _load_execution_checkpoint(repo_path: str, artifacts_dir: str) -> dict:
     path = _checkpoint_path(repo_path, artifacts_dir)
     if not os.path.exists(path):
+        build_state = _load_build_state(repo_path, artifacts_dir)
+        checkpoint = build_state.get("dag_result")
+        if checkpoint:
+            return checkpoint
         raise RuntimeError(f"No checkpoint found at {path}. Cannot resume.")
     with open(path, encoding="utf-8") as fp:
         return json.load(fp)
@@ -542,9 +546,26 @@ def _load_execution_checkpoint(repo_path: str, artifacts_dir: str) -> dict:
 
 def _plan_result_from_checkpoint(checkpoint: dict) -> dict:
     artifacts_dir = checkpoint.get("artifacts_dir", "")
+    prd_summary = checkpoint.get("prd_summary", "")
+    acceptance_criteria: list[str] = []
+    in_acceptance = False
+    for line in prd_summary.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("acceptance criteria:"):
+            in_acceptance = True
+            continue
+        if in_acceptance and stripped.startswith("- "):
+            acceptance_criteria.append(stripped[2:].strip())
+        elif in_acceptance and stripped:
+            in_acceptance = False
     return {
-        "prd": {},
-        "architecture": {},
+        "prd": {
+            "validated_description": prd_summary,
+            "acceptance_criteria": acceptance_criteria,
+        },
+        "architecture": {
+            "summary": checkpoint.get("architecture_summary", ""),
+        },
         "review": {},
         "issues": checkpoint.get("all_issues", []),
         "levels": checkpoint.get("levels", []),

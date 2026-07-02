@@ -122,6 +122,48 @@ def test_build_config_saved_state_round_trips_normalized_repo_url():
     assert len(cfg.repos) == 1
 
 
+def test_plan_result_from_checkpoint_preserves_prd_summary_and_acceptance():
+    import swe_af.app as app_module
+
+    plan = app_module._plan_result_from_checkpoint({
+        "artifacts_dir": "/tmp/repo/.artifacts",
+        "prd_summary": (
+            "Build the thing.\n\nAcceptance Criteria:\n"
+            "- command one exits 0.\n"
+            "- command two exits 0.\n"
+        ),
+        "architecture_summary": "Use the intended architecture.",
+        "all_issues": [{"name": "one"}],
+        "levels": [["one"]],
+    })
+
+    assert plan["prd"]["validated_description"].startswith("Build the thing")
+    assert plan["prd"]["acceptance_criteria"] == [
+        "command one exits 0.",
+        "command two exits 0.",
+    ]
+    assert plan["architecture"]["summary"] == "Use the intended architecture."
+
+
+def test_load_execution_checkpoint_falls_back_to_build_state(tmp_path: Path):
+    import swe_af.app as app_module
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    expected = {
+        "repo_path": str(repo_path),
+        "all_issues": [{"name": "one"}],
+        "levels": [["one"]],
+    }
+    app_module._save_build_state(
+        str(repo_path),
+        ".artifacts",
+        {"dag_result": expected},
+    )
+
+    assert app_module._load_execution_checkpoint(str(repo_path), ".artifacts") == expected
+
+
 @pytest.mark.asyncio
 async def test_resume_execute_only_resumes_dag(tmp_path: Path):
     import swe_af.app as app_module
