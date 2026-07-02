@@ -11,7 +11,9 @@ discoverable and pass.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch, call as mock_call
+import json
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -47,6 +49,12 @@ def _make_plan_result(issues: list[dict] | None = None) -> dict:
     }
 
 
+def _write_checkpoint(repo_path: Path, checkpoint: dict) -> None:
+    checkpoint_path = repo_path / ".artifacts" / "execution" / "checkpoint.json"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+
 def _make_dag_state(completed: list[str], failed: list[str]) -> DAGState:
     """Build a DAGState with given completed / failed issue names."""
     return DAGState(
@@ -68,6 +76,171 @@ def _make_dag_state(completed: list[str], failed: list[str]) -> DAGState:
             for name in failed
         ],
     )
+
+
+def test_resume_incomplete_summary_empty_for_finished_dag():
+    import swe_af.app as app_module
+
+    result = {
+        "all_issues": [{"name": "one"}],
+        "completed_issues": [{"issue_name": "one"}],
+        "failed_issues": [],
+        "skipped_issues": [],
+    }
+
+    assert app_module._resume_incomplete_summary(result) == ""
+
+
+def test_resume_incomplete_summary_flags_failed_and_skipped_dag():
+    import swe_af.app as app_module
+
+    result = {
+        "all_issues": [{"name": "one"}, {"name": "two"}, {"name": "three"}],
+        "completed_issues": [{"issue_name": "one"}],
+        "failed_issues": [{"issue_name": "two"}],
+        "skipped_issues": ["three"],
+    }
+
+    summary = app_module._resume_incomplete_summary(result)
+
+    assert "Resume incomplete: 1/3 issues completed" in summary
+    assert "failed=['two']" in summary
+    assert "skipped=['three']" in summary
+
+
+def test_build_config_saved_state_round_trips_normalized_repo_url():
+    import swe_af.app as app_module
+    from swe_af.execution.schemas import BuildConfig
+
+    saved_config = BuildConfig(
+        repo_url="https://github.com/example/repo.git",
+    ).model_dump()
+
+    cfg = app_module._build_config_from_saved_state(saved_config)
+
+    assert cfg.repo_url == "https://github.com/example/repo.git"
+    assert len(cfg.repos) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_execute_only_resumes_dag(tmp_path: Path):
+    import swe_af.app as app_module
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    plan_result = _make_plan_result()
+    completed_result = {
+        "all_issues": plan_result["issues"],
+        "completed_issues": [{"issue_name": "implement-feature"}],
+        "failed_issues": [],
+        "skipped_issues": [],
+        "merged_branches": ["feature-branch"],
+    }
+    _write_checkpoint(
+        repo_path,
+        {
+            "all_issues": plan_result["issues"],
+            "levels": plan_result["levels"],
+            "artifacts_dir": str(repo_path / ".artifacts"),
+            "git_integration_branch": "integration",
+        },
+    )
+
+    async def fake_call(target: str, **kwargs):
+        assert target == f"{app_module.NODE_ID}.execute"
+        assert kwargs["resume"] is True
+        return completed_result
+
+    with patch.object(app_module.app, "call", new=AsyncMock(side_effect=fake_call)):
+        result = await app_module.resume_execute(repo_path=str(repo_path))
+
+    assert result == completed_result
+
+
+@pytest.mark.asyncio
+async def test_resume_build_continues_full_tail(tmp_path: Path):
+    import swe_af.app as app_module
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    plan_result = _make_plan_result()
+    dag_result = {
+        "all_issues": plan_result["issues"],
+        "completed_issues": [{"issue_name": "implement-feature"}],
+        "failed_issues": [],
+        "skipped_issues": [],
+        "merged_branches": ["feature-branch"],
+        "accumulated_debt": [],
+    }
+    git_config = {
+        "integration_branch": "integration",
+        "original_branch": "main",
+        "initial_commit_sha": "abc123",
+        "mode": "existing",
+        "remote_url": "https://github.com/example/repo.git",
+        "remote_default_branch": "main",
+    }
+    _write_checkpoint(
+        repo_path,
+        {
+            "all_issues": plan_result["issues"],
+            "levels": plan_result["levels"],
+            "artifacts_dir": str(repo_path / ".artifacts"),
+            "git_integration_branch": "integration",
+        },
+    )
+    app_module._save_build_state(
+        str(repo_path),
+        ".artifacts",
+        {
+            "goal": "ship feature",
+            "repo_path": str(repo_path),
+            "repo_url": "https://github.com/example/repo.git",
+            "artifacts_dir": ".artifacts",
+            "config": {
+                "runtime": "codex",
+                "models": {"default": "gpt-5.5"},
+                "enable_github_pr": True,
+                "check_ci": False,
+            },
+            "plan_result": plan_result,
+            "git_config": git_config,
+        },
+    )
+
+    calls: list[str] = []
+
+    async def fake_call(target: str, **kwargs):
+        calls.append(target)
+        if target == f"{app_module.NODE_ID}.execute":
+            assert kwargs["resume"] is True
+            return dag_result
+        if target == f"{app_module.NODE_ID}.run_verifier":
+            return {"passed": True, "summary": "ok", "criteria_results": []}
+        if target == f"{app_module.NODE_ID}.run_repo_finalize":
+            return {"success": True, "summary": "clean"}
+        if target == f"{app_module.NODE_ID}.run_github_pr":
+            return {
+                "success": True,
+                "pr_url": "https://github.com/example/repo/pull/1",
+                "pr_number": 1,
+            }
+        raise AssertionError(f"unexpected call: {target}")
+
+    with (
+        patch.object(app_module.app, "call", new=AsyncMock(side_effect=fake_call)),
+        patch.object(app_module, "_existing_pr_for_branch", return_value={}),
+        patch.object(app_module, "_append_plan_docs_to_pr"),
+    ):
+        result = await app_module.resume_build(repo_path=str(repo_path))
+
+    assert result["success"] is True
+    assert calls == [
+        f"{app_module.NODE_ID}.execute",
+        f"{app_module.NODE_ID}.run_verifier",
+        f"{app_module.NODE_ID}.run_repo_finalize",
+        f"{app_module.NODE_ID}.run_github_pr",
+    ]
 
 
 # ---------------------------------------------------------------------------
