@@ -9,7 +9,6 @@ Exposes:
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import subprocess
 import uuid
@@ -58,8 +57,6 @@ app = Agent(
 )
 
 app.include_router(router)
-
-BUILD_STATE_FILENAME = "build_state.json"
 
 
 # ---------------------------------------------------------------------------
@@ -486,607 +483,6 @@ def _is_empty_build(success: bool, ever_completed: int, ever_merged: int) -> boo
     open PR worth surfacing, so it returns normally (a partial success).
     """
     return not success and ever_completed == 0 and ever_merged == 0
-
-
-def _absolute_artifacts_dir(repo_path: str, artifacts_dir: str) -> str:
-    if os.path.isabs(artifacts_dir):
-        return artifacts_dir
-    return os.path.join(os.path.abspath(repo_path), artifacts_dir)
-
-
-def _build_state_path(repo_path: str, artifacts_dir: str) -> str:
-    return os.path.join(_absolute_artifacts_dir(repo_path, artifacts_dir), BUILD_STATE_FILENAME)
-
-
-def _save_build_state(repo_path: str, artifacts_dir: str, state: dict) -> None:
-    path = _build_state_path(repo_path, artifacts_dir)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fp:
-        json.dump(state, fp, indent=2)
-
-
-def _load_build_state(repo_path: str, artifacts_dir: str) -> dict:
-    path = _build_state_path(repo_path, artifacts_dir)
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding="utf-8") as fp:
-        return json.load(fp)
-
-
-def _build_config_from_saved_state(
-    stored_config: dict,
-    overrides: dict | None = None,
-) -> BuildConfig:
-    data = dict(stored_config or {})
-    data.update(overrides or {})
-
-    # BuildConfig normalizes repo_url into repos, so model_dump() may contain
-    # both fields. Rehydrate through the canonical multi-repo form.
-    if data.get("repo_url") and data.get("repos"):
-        data.pop("repo_url")
-
-    return BuildConfig(**data) if data else BuildConfig()
-
-
-def _checkpoint_path(repo_path: str, artifacts_dir: str) -> str:
-    return os.path.join(_absolute_artifacts_dir(repo_path, artifacts_dir), "execution", "checkpoint.json")
-
-
-def _load_execution_checkpoint(repo_path: str, artifacts_dir: str) -> dict:
-    path = _checkpoint_path(repo_path, artifacts_dir)
-    if not os.path.exists(path):
-        raise RuntimeError(f"No checkpoint found at {path}. Cannot resume.")
-    with open(path, encoding="utf-8") as fp:
-        return json.load(fp)
-
-
-def _plan_result_from_checkpoint(checkpoint: dict) -> dict:
-    artifacts_dir = checkpoint.get("artifacts_dir", "")
-    return {
-        "prd": {},
-        "architecture": {},
-        "review": {},
-        "issues": checkpoint.get("all_issues", []),
-        "levels": checkpoint.get("levels", []),
-        "file_conflicts": [],
-        "artifacts_dir": artifacts_dir,
-        "rationale": checkpoint.get("original_plan_summary", ""),
-    }
-
-
-def _git_config_from_checkpoint(checkpoint: dict) -> dict | None:
-    integration_branch = checkpoint.get("git_integration_branch", "")
-    if not integration_branch:
-        return None
-    return {
-        "integration_branch": integration_branch,
-        "original_branch": checkpoint.get("git_original_branch", ""),
-        "initial_commit_sha": checkpoint.get("git_initial_commit", ""),
-        "mode": checkpoint.get("git_mode", ""),
-        "remote_url": checkpoint.get("git_remote_url", ""),
-        "remote_default_branch": checkpoint.get("git_remote_default_branch", ""),
-    }
-
-
-def _read_plan_docs(plan_result: dict) -> tuple[str, str]:
-    plan_dir = os.path.join(plan_result.get("artifacts_dir", ""), "plan")
-    docs: dict[str, str] = {"prd.md": "", "architecture.md": ""}
-    for name in docs:
-        path = os.path.join(plan_dir, name)
-        if os.path.isfile(path):
-            try:
-                with open(path, encoding="utf-8") as fp:
-                    docs[name] = fp.read()
-            except OSError:
-                pass
-    return docs["prd.md"], docs["architecture.md"]
-
-
-def _resume_incomplete_summary(result: dict) -> str:
-    """Return a short failure summary when a resumed DAG is still incomplete."""
-    failed = result.get("failed_issues", []) or []
-    skipped = result.get("skipped_issues", []) or []
-    if not failed and not skipped:
-        return ""
-
-    failed_names = [
-        item.get("issue_name", "<unknown>") if isinstance(item, dict) else str(item)
-        for item in failed
-    ]
-    skipped_names = [
-        item.get("issue_name", "<unknown>") if isinstance(item, dict) else str(item)
-        for item in skipped
-    ]
-    completed = len(result.get("completed_issues", []) or [])
-    total = len(result.get("all_issues", []) or [])
-    parts = [f"Resume incomplete: {completed}/{total} issues completed"]
-    if failed_names:
-        parts.append(f"failed={failed_names}")
-    if skipped_names:
-        parts.append(f"skipped={skipped_names}")
-    return "; ".join(parts)
-
-
-def _existing_pr_for_branch(repo_path: str, branch: str, base_branch: str) -> dict:
-    """Return an open PR for branch when one already exists, else empty dict."""
-    if not branch:
-        return {}
-    cmd = [
-        "gh", "pr", "list",
-        "--head", branch,
-        "--base", base_branch,
-        "--state", "open",
-        "--json", "url,number",
-        "--limit", "1",
-    ]
-    res = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True)
-    if res.returncode != 0:
-        return {}
-    try:
-        matches = json.loads(res.stdout or "[]")
-    except json.JSONDecodeError:
-        return {}
-    if not matches:
-        return {}
-    first = matches[0]
-    return {
-        "success": True,
-        "pr_url": first.get("url", ""),
-        "pr_number": first.get("number", 0),
-    }
-
-
-def _push_existing_pr_branch(repo_path: str, branch: str) -> None:
-    if not branch:
-        return
-    subprocess.run(
-        ["git", "push", "origin", branch],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
-
-
-def _append_plan_docs_to_pr(
-    *,
-    repo_path: str,
-    pr_number: int,
-    prd_markdown: str,
-    architecture_markdown: str,
-) -> None:
-    if not pr_number or not (prd_markdown or architecture_markdown):
-        return
-    current_body = subprocess.run(
-        ["gh", "pr", "view", str(pr_number), "--json", "body", "--jq", ".body"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-
-    if (
-        "PRD (Product Requirements Document)" in current_body
-        or "Architecture</summary>" in current_body
-    ):
-        return
-
-    plan_sections = "\n\n---\n"
-    if prd_markdown:
-        plan_sections += (
-            "\n<details><summary>📋 PRD (Product Requirements Document)"
-            "</summary>\n\n"
-            + prd_markdown
-            + "\n\n</details>\n"
-        )
-    if architecture_markdown:
-        plan_sections += (
-            "\n<details><summary>🏗️ Architecture</summary>\n\n"
-            + architecture_markdown
-            + "\n\n</details>\n"
-        )
-
-    subprocess.run(
-        ["gh", "pr", "edit", str(pr_number), "--body", current_body + plan_sections],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-
-async def _continue_build_tail(
-    *,
-    goal: str,
-    repo_path: str,
-    artifacts_dir: str,
-    cfg: BuildConfig,
-    resolved: dict[str, str],
-    plan_result: dict,
-    dag_result: dict,
-    git_config: dict | None,
-    manifest: WorkspaceManifest | None,
-    ever_completed: int,
-    ever_merged: int,
-    build_state: dict | None = None,
-) -> dict:
-    """Run the post-DAG build tail shared by build() and resume_build()."""
-    build_state = dict(build_state or {})
-    if manifest and dag_result.get("workspace_manifest"):
-        manifest = WorkspaceManifest(**dag_result["workspace_manifest"])
-
-    exec_config = cfg.to_execution_config_dict()
-    verification = build_state.get("verification")
-    for cycle in range(cfg.max_verify_fix_cycles + 1):
-        app.note(f"Verification cycle {cycle}", tags=["build", "verify"])
-        verification = _unwrap(await app.call(
-            f"{NODE_ID}.run_verifier",
-            prd=plan_result.get("prd", {}),
-            repo_path=repo_path,
-            artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-            completed_issues=[r for r in dag_result.get("completed_issues", [])],
-            failed_issues=[r for r in dag_result.get("failed_issues", [])],
-            skipped_issues=dag_result.get("skipped_issues", []),
-            model=resolved["verifier_model"],
-            permission_mode=cfg.permission_mode,
-            ai_provider=cfg.ai_provider,
-            workspace_manifest=manifest.model_dump() if manifest else None,
-        ), "run_verifier")
-        build_state["verification"] = verification
-
-        if verification.get("passed", False) or cycle >= cfg.max_verify_fix_cycles:
-            break
-
-        failed_criteria = [
-            c for c in verification.get("criteria_results", [])
-            if not c.get("passed", True)
-        ]
-        if not failed_criteria:
-            app.note("Verification failed but no specific criteria failures found", tags=["build", "verify"])
-            break
-
-        app.note(
-            f"Verification failed ({len(failed_criteria)} criteria), "
-            f"{cfg.max_verify_fix_cycles - cycle} fix cycles remaining",
-            tags=["build", "verify", "retry"],
-        )
-        fix_result = _unwrap(await app.call(
-            f"{NODE_ID}.generate_fix_issues",
-            failed_criteria=failed_criteria,
-            dag_state=dag_result,
-            prd=plan_result.get("prd", {}),
-            artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-            model=resolved["verifier_model"],
-            permission_mode=cfg.permission_mode,
-            ai_provider=cfg.ai_provider,
-            workspace_manifest=manifest.model_dump() if manifest else None,
-        ), "generate_fix_issues")
-
-        for debt in fix_result.get("debt_items", []):
-            dag_result.setdefault("accumulated_debt", []).append({
-                "type": "unmet_acceptance_criterion",
-                "criterion": debt.get("criterion", ""),
-                "reason": debt.get("reason", ""),
-                "severity": debt.get("severity", "high"),
-            })
-
-        fix_issues = fix_result.get("fix_issues", [])
-        if not fix_issues:
-            app.note("No fixable issues generated — accepting with debt", tags=["build", "verify"])
-            break
-
-        fix_plan = {
-            "prd": plan_result.get("prd", {}),
-            "architecture": plan_result.get("architecture", {}),
-            "review": plan_result.get("review", {}),
-            "issues": fix_issues,
-            "levels": [[fi.get("name", f"fix-{i}") for i, fi in enumerate(fix_issues)]],
-            "file_conflicts": [],
-            "artifacts_dir": plan_result.get("artifacts_dir", artifacts_dir),
-            "rationale": f"Fix issues for verification cycle {cycle + 1}",
-        }
-        dag_result = _unwrap(await app.call(
-            f"{NODE_ID}.execute",
-            plan_result=fix_plan,
-            repo_path=repo_path,
-            config=exec_config,
-            git_config=git_config,
-            workspace_manifest=manifest.model_dump() if manifest else None,
-        ), "execute_fixes")
-        ever_completed = max(ever_completed, len(dag_result.get("completed_issues", []) or []))
-        ever_merged = max(ever_merged, len(dag_result.get("merged_branches", []) or []))
-        build_state["dag_result"] = dag_result
-
-    success = verification.get("passed", False) if verification else False
-    completed = len(dag_result.get("completed_issues", []))
-    total = len(dag_result.get("all_issues", []))
-    app.note(
-        f"Build {'succeeded' if success else 'completed with issues'}: "
-        f"{completed}/{total} issues, verification={'passed' if success else 'failed'}",
-        tags=["build", "complete"],
-    )
-
-    prd_markdown, architecture_markdown = _read_plan_docs(plan_result)
-
-    if manifest and len(manifest.repos) > 1:
-        app.note(
-            f"Phase 3b: Multi-repo finalization ({len(manifest.repos)} repos)",
-            tags=["build", "finalize", "multi-repo"],
-        )
-        for ws_repo in manifest.repos:
-            try:
-                finalize_result = _unwrap(await app.call(
-                    f"{NODE_ID}.run_repo_finalize",
-                    repo_path=ws_repo.absolute_path,
-                    artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-                    model=resolved["git_model"],
-                    permission_mode=cfg.permission_mode,
-                    ai_provider=cfg.ai_provider,
-                ), f"run_repo_finalize ({ws_repo.repo_name})")
-                if finalize_result.get("success"):
-                    app.note(
-                        f"Repo finalized ({ws_repo.repo_name}): {finalize_result.get('summary', '')}",
-                        tags=["build", "finalize", "complete"],
-                    )
-                else:
-                    app.note(
-                        f"Repo finalize incomplete ({ws_repo.repo_name}): {finalize_result.get('summary', '')}",
-                        tags=["build", "finalize", "warning"],
-                    )
-            except Exception as e:
-                app.note(
-                    f"Repo finalize failed for {ws_repo.repo_name} (non-blocking): {e}",
-                    tags=["build", "finalize", "error"],
-                )
-    else:
-        app.note("Phase 3b: Repo finalization", tags=["build", "finalize"])
-        try:
-            finalize_result = _unwrap(await app.call(
-                f"{NODE_ID}.run_repo_finalize",
-                repo_path=repo_path,
-                artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-                model=resolved["git_model"],
-                permission_mode=cfg.permission_mode,
-                ai_provider=cfg.ai_provider,
-            ), "run_repo_finalize")
-            if finalize_result.get("success"):
-                app.note(
-                    f"Repo finalized: {finalize_result.get('summary', '')}",
-                    tags=["build", "finalize", "complete"],
-                )
-            else:
-                app.note(
-                    f"Repo finalize incomplete: {finalize_result.get('summary', '')}",
-                    tags=["build", "finalize", "warning"],
-                )
-        except Exception as e:
-            app.note(
-                f"Repo finalize failed (non-blocking): {e}",
-                tags=["build", "finalize", "error"],
-            )
-
-    pr_results: list[RepoPRResult] = []
-    ci_gate_results: list[dict] = []
-    build_summary = (
-        f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
-        + (f", verification: {verification.get('summary', '')}" if verification else "")
-    )
-
-    if manifest and len(manifest.repos) > 1:
-        app.note("Phase 4: Multi-repo Push + PRs", tags=["build", "github_pr", "multi-repo"])
-        for ws_repo in manifest.repos:
-            if not ws_repo.create_pr or not cfg.enable_github_pr:
-                continue
-            repo_git_init = ws_repo.git_init_result or {}
-            repo_remote_url = repo_git_init.get("remote_url", "") or ws_repo.repo_url
-            if not repo_remote_url:
-                continue
-            repo_integration_branch = repo_git_init.get("integration_branch", "")
-            if not repo_integration_branch:
-                continue
-            repo_base_branch = (
-                cfg.github_pr_base
-                or repo_git_init.get("remote_default_branch", "")
-                or "main"
-            )
-            try:
-                existing = _existing_pr_for_branch(
-                    ws_repo.absolute_path, repo_integration_branch, repo_base_branch
-                )
-                if existing:
-                    _push_existing_pr_branch(ws_repo.absolute_path, repo_integration_branch)
-                    pr_r = existing
-                else:
-                    pr_r = _unwrap(await app.call(
-                        f"{NODE_ID}.run_github_pr",
-                        repo_path=ws_repo.absolute_path,
-                        integration_branch=repo_integration_branch,
-                        base_branch=repo_base_branch,
-                        goal=goal,
-                        build_summary=build_summary,
-                        completed_issues=[
-                            r for r in dag_result.get("completed_issues", [])
-                            if not r.get("repo_name") or r.get("repo_name") == ws_repo.repo_name
-                        ],
-                        accumulated_debt=dag_result.get("accumulated_debt", []),
-                        artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-                        model=resolved["git_model"],
-                        permission_mode=cfg.permission_mode,
-                        ai_provider=cfg.ai_provider,
-                    ), "run_github_pr")
-                pr_results.append(RepoPRResult(
-                    repo_name=ws_repo.repo_name,
-                    repo_url=ws_repo.repo_url,
-                    success=pr_r.get("success", False),
-                    pr_url=pr_r.get("pr_url", ""),
-                    pr_number=pr_r.get("pr_number", 0),
-                    error_message=pr_r.get("error_message", ""),
-                ))
-                if pr_r.get("pr_url"):
-                    app.note(
-                        f"PR ready for {ws_repo.repo_name}: {pr_r.get('pr_url')}",
-                        tags=["build", "github_pr", "complete"],
-                    )
-                    if cfg.check_ci and pr_r.get("pr_number"):
-                        gate = await _run_ci_gate(
-                            repo_path=ws_repo.absolute_path,
-                            pr_number=pr_r.get("pr_number", 0),
-                            pr_url=pr_r.get("pr_url", ""),
-                            integration_branch=repo_integration_branch,
-                            base_branch=repo_base_branch,
-                            cfg=cfg,
-                            resolved_models=resolved,
-                            goal=goal,
-                            completed_issues=[
-                                r for r in dag_result.get("completed_issues", [])
-                                if not r.get("repo_name") or r.get("repo_name") == ws_repo.repo_name
-                            ],
-                        )
-                        ci_gate_results.append({"repo_name": ws_repo.repo_name, **gate})
-            except Exception as e:
-                pr_results.append(RepoPRResult(
-                    repo_name=ws_repo.repo_name,
-                    repo_url=ws_repo.repo_url,
-                    success=False,
-                    error_message=str(e),
-                ))
-                app.note(
-                    f"PR creation failed for {ws_repo.repo_name}: {e}",
-                    tags=["build", "github_pr", "error"],
-                )
-    else:
-        remote_url = git_config.get("remote_url", "") if git_config else ""
-        if remote_url and cfg.enable_github_pr:
-            app.note("Phase 4: Push + PR", tags=["build", "github_pr"])
-            base_branch = (
-                cfg.github_pr_base
-                or (git_config.get("remote_default_branch") if git_config else "")
-                or "main"
-            )
-            pr_url = ""
-            try:
-                existing = _existing_pr_for_branch(
-                    repo_path, git_config["integration_branch"], base_branch
-                )
-                pr_existed = bool(existing)
-                if existing:
-                    _push_existing_pr_branch(repo_path, git_config["integration_branch"])
-                    pr_result = existing
-                else:
-                    pr_result = _unwrap(await app.call(
-                        f"{NODE_ID}.run_github_pr",
-                        repo_path=repo_path,
-                        integration_branch=git_config["integration_branch"],
-                        base_branch=base_branch,
-                        goal=goal,
-                        build_summary=build_summary,
-                        completed_issues=dag_result.get("completed_issues", []),
-                        accumulated_debt=dag_result.get("accumulated_debt", []),
-                        artifacts_dir=plan_result.get("artifacts_dir", artifacts_dir),
-                        model=resolved["git_model"],
-                        permission_mode=cfg.permission_mode,
-                        ai_provider=cfg.ai_provider,
-                    ), "run_github_pr")
-                pr_url = pr_result.get("pr_url", "")
-                if pr_url:
-                    app.note(f"PR ready: {pr_url}", tags=["build", "github_pr", "complete"])
-                    if not pr_existed:
-                        try:
-                            _append_plan_docs_to_pr(
-                                repo_path=repo_path,
-                                pr_number=pr_result.get("pr_number", 0),
-                                prd_markdown=prd_markdown,
-                                architecture_markdown=architecture_markdown,
-                            )
-                            app.note(
-                                "Plan docs appended to PR body",
-                                tags=["build", "github_pr", "plan_docs"],
-                            )
-                        except subprocess.CalledProcessError as e:
-                            app.note(
-                                f"Failed to append plan docs to PR (non-fatal): {e}",
-                                tags=["build", "github_pr", "plan_docs", "warning"],
-                            )
-                else:
-                    app.note(
-                        f"PR creation failed: {pr_result.get('error_message', 'unknown')}",
-                        tags=["build", "github_pr", "error"],
-                    )
-                if pr_url:
-                    pr_results.append(RepoPRResult(
-                        repo_name=_repo_name_from_url(cfg.repo_url) if cfg.repo_url else "repo",
-                        repo_url=cfg.repo_url,
-                        success=True,
-                        pr_url=pr_url,
-                        pr_number=pr_result.get("pr_number", 0),
-                    ))
-                    if cfg.check_ci and pr_result.get("pr_number"):
-                        gate = await _run_ci_gate(
-                            repo_path=repo_path,
-                            pr_number=pr_result.get("pr_number", 0),
-                            pr_url=pr_url,
-                            integration_branch=git_config["integration_branch"],
-                            base_branch=base_branch,
-                            cfg=cfg,
-                            resolved_models=resolved,
-                            goal=goal,
-                            completed_issues=dag_result.get("completed_issues", []),
-                        )
-                        ci_gate_results.append({
-                            "repo_name": (
-                                _repo_name_from_url(cfg.repo_url)
-                                if cfg.repo_url else "repo"
-                            ),
-                            **gate,
-                        })
-            except Exception as e:
-                app.note(f"PR creation failed: {e}", tags=["build", "github_pr", "error"])
-
-    if manifest and manifest.workspace_root:
-        try:
-            import shutil
-            shutil.rmtree(manifest.workspace_root, ignore_errors=True)
-            app.note(
-                f"Workspace cleaned up: {manifest.workspace_root}",
-                tags=["build", "cleanup"],
-            )
-        except Exception:
-            pass
-
-    build_result = BuildResult(
-        plan_result=plan_result,
-        dag_state=dag_result,
-        verification=verification,
-        success=success,
-        summary=f"{'Success' if success else 'Partial'}: {completed}/{total} issues completed"
-                + (f", verification: {verification.get('summary', '')}" if verification else ""),
-        pr_results=pr_results,
-        ci_gate_results=ci_gate_results,
-    ).model_dump()
-
-    build_state.update({
-        "goal": goal,
-        "repo_path": repo_path,
-        "repo_url": cfg.repo_url,
-        "artifacts_dir": artifacts_dir,
-        "config": cfg.model_dump(),
-        "plan_result": plan_result,
-        "dag_result": dag_result,
-        "git_config": git_config,
-        "workspace_manifest": manifest.model_dump() if manifest else None,
-        "verification": verification,
-        "pr_results": [r.model_dump() for r in pr_results],
-        "ci_gate_results": ci_gate_results,
-        "build_result": build_result,
-    })
-    _save_build_state(repo_path, artifacts_dir, build_state)
-
-    if _is_empty_build(success, ever_completed, ever_merged):
-        raise ReasonerFailed(
-            f"Build failed: 0/{total} issues completed, no branches merged",
-            result=build_result,
-        )
-
-    return build_result
 
 
 @app.reasoner()
@@ -1565,19 +961,6 @@ async def build(
                     summary=f"Plan {approval_result.decision}: {reason}",
                 ).model_dump()
 
-        build_state = {
-            "goal": goal,
-            "repo_path": repo_path,
-            "repo_url": cfg.repo_url,
-            "artifacts_dir": artifacts_dir,
-            "config": cfg.model_dump(),
-            "build_id": build_id,
-            "plan_result": plan_result,
-            "git_config": git_config,
-            "workspace_manifest": manifest.model_dump() if manifest else None,
-        }
-        _save_build_state(repo_path, artifacts_dir, build_state)
-
         # 2. EXECUTE
         exec_config = cfg.to_execution_config_dict()
 
@@ -1601,8 +984,6 @@ async def build(
         # genuinely shipped something.
         ever_completed = len(dag_result.get("completed_issues", []) or [])
         ever_merged = len(dag_result.get("merged_branches", []) or [])
-        build_state["dag_result"] = dag_result
-        _save_build_state(repo_path, artifacts_dir, build_state)
 
         # Refresh manifest with git_init_result populated by _init_all_repos() in
         # the DAG executor.  Must happen before the verify/fix loop which can
@@ -2005,14 +1386,6 @@ async def build(
             pr_results=pr_results,
             ci_gate_results=ci_gate_results,
         ).model_dump()
-        build_state.update({
-            "dag_result": dag_result,
-            "verification": verification,
-            "pr_results": [r.model_dump() for r in pr_results],
-            "ci_gate_results": ci_gate_results,
-            "build_result": build_result,
-        })
-        _save_build_state(repo_path, artifacts_dir, build_state)
 
         # An empty build — verification failed AND nothing was ever completed
         # or merged across the original run and every fix cycle — must not
@@ -2687,109 +2060,60 @@ async def _post_thread_replies_and_resolve(
     return results
 
 
-async def _resume_execute_impl(
-    repo_path: str,
-    artifacts_dir: str = ".artifacts",
-    config: dict | None = None,
-    git_config: dict | None = None,
-) -> dict:
-    checkpoint = _load_execution_checkpoint(repo_path, artifacts_dir)
-    build_state = _load_build_state(repo_path, artifacts_dir)
-    plan_result = build_state.get("plan_result") or _plan_result_from_checkpoint(checkpoint)
-    effective_git_config = git_config or build_state.get("git_config") or _git_config_from_checkpoint(checkpoint)
-
-    app.note("Resuming DAG execution from checkpoint", tags=["execute", "resume"])
-
-    result = _unwrap(await app.call(
-        f"{NODE_ID}.execute",
-        plan_result=plan_result,
-        repo_path=repo_path,
-        config=config,
-        git_config=effective_git_config,
-        resume=True,
-    ), "execute")
-
-    incomplete = _resume_incomplete_summary(result)
-    if incomplete:
-        raise ReasonerFailed(incomplete, result=result)
-
-    return result
-
-
-@app.reasoner()
-async def resume_execute(
-    repo_path: str,
-    artifacts_dir: str = ".artifacts",
-    config: dict | None = None,
-    git_config: dict | None = None,
-) -> dict:
-    """Resume DAG execution only from ``.artifacts/execution/checkpoint.json``."""
-    return await _resume_execute_impl(
-        repo_path=repo_path,
-        artifacts_dir=artifacts_dir,
-        config=config,
-        git_config=git_config,
-    )
-
-
 @app.reasoner()
 async def resume_build(
     repo_path: str,
     artifacts_dir: str = ".artifacts",
     config: dict | None = None,
     git_config: dict | None = None,
-    goal: str = "",
-    repo_url: str = "",
 ) -> dict:
-    """Resume DAG execution, then continue verifier/finalize/PR/CI build tail."""
-    checkpoint = _load_execution_checkpoint(repo_path, artifacts_dir)
-    build_state = _load_build_state(repo_path, artifacts_dir)
-    overrides = dict(config or {})
-    if repo_url:
-        overrides["repo_url"] = repo_url
-    cfg = _build_config_from_saved_state(build_state.get("config") or {}, overrides)
+    """Resume a crashed build from the last checkpoint.
 
-    effective_goal = goal or build_state.get("goal", "")
-    plan_result = build_state.get("plan_result") or _plan_result_from_checkpoint(checkpoint)
-    effective_git_config = git_config or build_state.get("git_config") or _git_config_from_checkpoint(checkpoint)
-    manifest_data = build_state.get("workspace_manifest") or checkpoint.get("workspace_manifest")
-    manifest = WorkspaceManifest(**manifest_data) if manifest_data else None
+    Loads the plan result from artifacts and calls execute with resume=True.
+    """
+    import json
 
-    app.note("Resuming full build from checkpoint", tags=["build", "resume"])
-    exec_config = cfg.to_execution_config_dict()
-    dag_result = await _resume_execute_impl(
-        repo_path=repo_path,
-        artifacts_dir=artifacts_dir,
-        config=exec_config,
-        git_config=effective_git_config,
-    )
-    build_state.update({
-        "goal": effective_goal,
-        "repo_path": repo_path,
-        "repo_url": cfg.repo_url,
-        "artifacts_dir": artifacts_dir,
-        "config": cfg.model_dump(),
-        "plan_result": plan_result,
-        "dag_result": dag_result,
-        "git_config": effective_git_config,
-        "workspace_manifest": manifest.model_dump() if manifest else None,
-    })
-    _save_build_state(repo_path, artifacts_dir, build_state)
+    base = os.path.join(os.path.abspath(repo_path), artifacts_dir)
 
-    return await _continue_build_tail(
-        goal=effective_goal,
-        repo_path=repo_path,
-        artifacts_dir=artifacts_dir,
-        cfg=cfg,
-        resolved=cfg.resolved_models(),
+    # Reconstruct plan_result from saved artifacts
+    plan_path = os.path.join(base, "execution", "checkpoint.json")
+    if not os.path.exists(plan_path):
+        raise RuntimeError(
+            f"No checkpoint found at {plan_path}. Cannot resume."
+        )
+
+    # Load the original plan artifacts to reconstruct plan_result
+    prd_path = os.path.join(base, "plan", "prd.md")
+    arch_path = os.path.join(base, "plan", "architecture.md")
+    rationale_path = os.path.join(base, "rationale.md")
+
+    # We need the plan_result dict — reconstruct from checkpoint's DAGState
+    with open(plan_path, "r") as f:
+        checkpoint = json.load(f)
+
+    plan_result = {
+        "prd": {},  # Not needed for resume — DAGState has summaries
+        "architecture": {},
+        "review": {},
+        "issues": checkpoint.get("all_issues", []),
+        "levels": checkpoint.get("levels", []),
+        "file_conflicts": [],
+        "artifacts_dir": checkpoint.get("artifacts_dir", base),
+        "rationale": checkpoint.get("original_plan_summary", ""),
+    }
+
+    app.note("Resuming build from checkpoint", tags=["build", "resume"])
+
+    result = await app.call(
+        f"{NODE_ID}.execute",
         plan_result=plan_result,
-        dag_result=dag_result,
-        git_config=effective_git_config,
-        manifest=manifest,
-        ever_completed=len(dag_result.get("completed_issues", []) or []),
-        ever_merged=len(dag_result.get("merged_branches", []) or []),
-        build_state=build_state,
+        repo_path=repo_path,
+        config=config,
+        git_config=git_config,
+        resume=True,
     )
+
+    return result
 
 
 def main():

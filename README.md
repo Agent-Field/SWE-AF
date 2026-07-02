@@ -169,7 +169,7 @@ Most agent frameworks wrap a single coder loop. SWE-AF is a coordinated engineer
 - **Agent-scale parallelism** — dependency-level scheduling + isolated git worktrees allow large fan-out without branch collisions.
 - **Fleet-scale orchestration** — many SWE-AF nodes can run continuously in parallel via AgentField, driving thousands of agent invocations across concurrent builds.
 - **Explicit compromise tracking** — when scope is relaxed, debt is typed, severity-rated, and propagated.
-- **Long-run reliability** — checkpointed execution supports `resume_execute` for DAG-only recovery and `resume_build` for full build recovery through verification, finalization, PR creation, and CI gating.
+- **Long-run reliability** — checkpointed execution supports `resume_build` after crashes or interruptions.
 
 ## In Action
 
@@ -623,10 +623,7 @@ POST /api/v1/execute/async/swe-planner.plan
 # Execute a prebuilt plan
 POST /api/v1/execute/async/swe-planner.execute
 
-# Resume DAG execution after interruption
-POST /api/v1/execute/async/swe-planner.resume_execute
-
-# Resume full build after interruption
+# Resume after interruption
 POST /api/v1/execute/async/swe-planner.resume_build
 ```
 
