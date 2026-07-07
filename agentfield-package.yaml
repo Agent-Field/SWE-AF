@@ -27,6 +27,15 @@ user_environment:
           description: OpenRouter API key (DeepSeek/Qwen/Llama/… — 200+ models)
           type: secret
           scope: global
+  required:
+    # SWE-AF's core loop clones a repo, pushes a branch, and opens a pull
+    # request — all of which need GitHub write access. `gh`/`git` read this
+    # token for authentication (see prompts/github_pr.py). Required so setup
+    # prompts for it up front rather than failing partway through a build.
+    - name: GH_TOKEN
+      description: GitHub token (repo scope) for cloning repos and opening pull requests
+      type: secret
+      scope: global
   optional:
     - name: SWE_DEFAULT_MODEL
       description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash)
@@ -35,10 +44,6 @@ user_environment:
       default: http://localhost:8080
     - name: AGENTFIELD_API_KEY
       description: Control-plane API key (if auth is enabled)
-      type: secret
-      scope: global
-    - name: GH_TOKEN
-      description: GitHub token for cloning repos / opening PRs
       type: secret
       scope: global
     - name: NODE_ID
