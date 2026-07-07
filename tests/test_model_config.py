@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import unittest
 from unittest import mock
@@ -11,8 +12,36 @@ from swe_af.execution.schemas import (
     BuildConfig,
     ExecutionConfig,
     ROLE_TO_MODEL_FIELD,
+    _default_runtime,
     resolve_runtime_models,
 )
+
+# Env vars that steer provider/runtime/model selection. Tests clear them so the
+# result never depends on the developer's ambient shell.
+_PROVIDER_ENV_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "SWE_DEFAULT_RUNTIME",
+    "SWE_DEFAULT_MODEL",
+    "AI_MODEL",
+    "HARNESS_MODEL",
+)
+
+
+@contextlib.contextmanager
+def _provider_env(**overrides: str):
+    """Run with the provider-selection env vars cleared, then apply overrides."""
+    saved = {k: os.environ.get(k) for k in _PROVIDER_ENV_KEYS}
+    for k in _PROVIDER_ENV_KEYS:
+        os.environ.pop(k, None)
+    os.environ.update(overrides)
+    try:
+        yield
+    finally:
+        for k in _PROVIDER_ENV_KEYS:
+            os.environ.pop(k, None)
+            if saved[k] is not None:
+                os.environ[k] = saved[k]
 
 
 class TestResolveRuntimeModels(unittest.TestCase):
@@ -25,7 +54,9 @@ class TestResolveRuntimeModels(unittest.TestCase):
         self.assertEqual(resolved["qa_synthesizer_model"], "haiku")
 
     def test_open_code_defaults(self) -> None:
-        resolved = resolve_runtime_models(runtime="open_code", models=None)
+        # No provider env set → not the auto-OpenRouter path → minimax base default.
+        with _provider_env():
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
             self.assertEqual(resolved[field], "openrouter/minimax/minimax-m2.5")
 
@@ -61,10 +92,65 @@ class TestBuildConfig(unittest.TestCase):
         self.assertEqual(cfg.ai_provider, "claude")
 
     def test_open_code_runtime_provider(self) -> None:
-        cfg = BuildConfig(runtime="open_code")
-        self.assertEqual(cfg.ai_provider, "opencode")
-        resolved = cfg.resolved_models()
+        with _provider_env():
+            cfg = BuildConfig(runtime="open_code")
+            self.assertEqual(cfg.ai_provider, "opencode")
+            resolved = cfg.resolved_models()
         self.assertEqual(resolved["coder_model"], "openrouter/minimax/minimax-m2.5")
+
+
+class TestOpenRouterAutoSelection(unittest.TestCase):
+    """When only an OpenRouter key is present (no explicit runtime), SWE-AF
+    auto-selects the open_code runtime and defaults to DeepSeek."""
+
+    def test_openrouter_only_auto_selects_open_code(self) -> None:
+        with _provider_env(OPENROUTER_API_KEY="sk-or-x"):
+            self.assertEqual(_default_runtime(), "open_code")
+
+    def test_anthropic_key_keeps_claude_code(self) -> None:
+        with _provider_env(ANTHROPIC_API_KEY="sk-ant"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_both_keys_keep_claude_code(self) -> None:
+        # Anthropic present → claude_code even if OpenRouter is also set.
+        with _provider_env(ANTHROPIC_API_KEY="sk-ant", OPENROUTER_API_KEY="sk-or"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_no_keys_default_claude_code(self) -> None:
+        with _provider_env():
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_explicit_runtime_overrides_autoselect(self) -> None:
+        # Explicit SWE_DEFAULT_RUNTIME wins over key-based auto-selection.
+        with _provider_env(OPENROUTER_API_KEY="sk-or", SWE_DEFAULT_RUNTIME="claude_code"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_auto_openrouter_defaults_to_deepseek(self) -> None:
+        with _provider_env(OPENROUTER_API_KEY="sk-or"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash")
+
+    def test_explicit_open_code_keeps_minimax(self) -> None:
+        # A deployer who explicitly sets open_code keeps the runtime's own
+        # default even with an OpenRouter key present.
+        with _provider_env(OPENROUTER_API_KEY="sk-or", SWE_DEFAULT_RUNTIME="open_code"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "openrouter/minimax/minimax-m2.5")
+
+    def test_swe_default_model_overrides_auto_deepseek(self) -> None:
+        with _provider_env(OPENROUTER_API_KEY="sk-or", SWE_DEFAULT_MODEL="openrouter/qwen/qwen-3"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "openrouter/qwen/qwen-3")
+
+    def test_build_config_auto_openrouter_end_to_end(self) -> None:
+        with _provider_env(OPENROUTER_API_KEY="sk-or"):
+            cfg = BuildConfig()
+            self.assertEqual(cfg.runtime, "open_code")
+            resolved = cfg.resolved_models()
+        self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash")
 
     def test_to_execution_config_dict_roundtrips(self) -> None:
         cfg = BuildConfig(runtime="open_code", models={"coder": "deepseek/deepseek-chat"})

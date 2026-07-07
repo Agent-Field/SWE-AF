@@ -560,16 +560,39 @@ def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode", "codex"]
     return runtime_to_harness_provider(runtime)  # type: ignore[return-value]
 
 
+# Default model for the auto-selected OpenRouter path (see _openrouter_only_env).
+_OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash"
+
+
+def _openrouter_only_env() -> bool:
+    """Whether the deployer implicitly chose the OpenRouter runtime.
+
+    True when no explicit ``SWE_DEFAULT_RUNTIME`` is set, no Anthropic key is
+    present, but an ``OPENROUTER_API_KEY`` is — i.e. the user "went with
+    OpenRouter" without spelling out a runtime. In that case SWE-AF defaults to
+    the ``open_code`` runtime and to ``_OPENROUTER_AUTO_DEFAULT_MODEL``. Setting
+    ``SWE_DEFAULT_RUNTIME`` (to anything) opts out and preserves the explicit
+    runtime's own defaults.
+    """
+    if os.getenv("SWE_DEFAULT_RUNTIME", "").strip():
+        return False
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        return False
+    return bool(os.getenv("OPENROUTER_API_KEY", "").strip())
+
+
 def _default_runtime() -> Literal["claude_code", "open_code", "codex"]:
     """Default runtime, honoring the ``SWE_DEFAULT_RUNTIME`` env var.
 
     Lets the deployer pick the runtime without every caller having to pass
-    a config. Falls back to ``claude_code`` when unset; logs and falls back
-    when the env value isn't a valid runtime.
+    a config. When ``SWE_DEFAULT_RUNTIME`` is unset, auto-selects ``open_code``
+    if only an OpenRouter key is present (see ``_openrouter_only_env``),
+    otherwise ``claude_code``. Logs and falls back to ``claude_code`` when the
+    env value isn't a valid runtime.
     """
     value = os.getenv("SWE_DEFAULT_RUNTIME", "").strip()
     if not value:
-        return "claude_code"
+        return "open_code" if _openrouter_only_env() else "claude_code"
     if value in RUNTIME_VALUES:
         return value  # type: ignore[return-value]
     logging.getLogger(__name__).warning(
@@ -698,6 +721,11 @@ def resolve_runtime_models(
         # Choose the codex base default by auth mode (see _codex_default_model).
         codex_model = _codex_default_model()
         base = {field: codex_model for field in base}
+    elif runtime == "open_code" and _openrouter_only_env():
+        # OpenRouter was auto-selected (an OpenRouter key, no explicit runtime):
+        # default to DeepSeek. Explicit open_code deployers keep their own base
+        # default; SWE_DEFAULT_MODEL / models overrides still win over this.
+        base = {field: _OPENROUTER_AUTO_DEFAULT_MODEL for field in base}
     resolved: dict[str, str] = {field: base[field] for field in field_names}
 
     env_default = _default_model_from_env()
