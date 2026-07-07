@@ -12,12 +12,24 @@ agent_node:
   default_port: 8003
 
 user_environment:
-  required:
-    - name: ANTHROPIC_API_KEY
-      description: Anthropic API key used by the SWE harness
-      type: secret
-      scope: global
+  require_one_of:
+    # SWE-AF runs on either Claude (Anthropic) or open models via OpenRouter.
+    # Provide one. With only an OpenRouter key it auto-selects the open_code
+    # runtime and defaults to openrouter/deepseek/deepseek-v4-flash.
+    - id: llm_provider
+      description: an LLM provider key
+      options:
+        - name: ANTHROPIC_API_KEY
+          description: Anthropic API key (Claude)
+          type: secret
+          scope: global
+        - name: OPENROUTER_API_KEY
+          description: OpenRouter API key (DeepSeek/Qwen/Llama/… — 200+ models)
+          type: secret
+          scope: global
   optional:
+    - name: SWE_DEFAULT_MODEL
+      description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash)
     - name: AGENTFIELD_SERVER
       description: Control-plane URL
       default: http://localhost:8080
