@@ -43,6 +43,8 @@ from swe_af.execution.schemas import (
     RepoPRResult,
     WorkspaceManifest,
     WorkspaceRepo,
+    _default_planning_model,
+    _default_runtime,
     _derive_repo_name as _repo_name_from_url,
 )
 
@@ -1415,19 +1417,35 @@ async def plan(
     artifacts_dir: str = ".artifacts",
     additional_context: str = "",
     max_review_iterations: int = 2,
-    pm_model: str = "sonnet",
-    architect_model: str = "sonnet",
-    tech_lead_model: str = "sonnet",
-    sprint_planner_model: str = "sonnet",
-    issue_writer_model: str = "sonnet",
+    pm_model: str | None = None,
+    architect_model: str | None = None,
+    tech_lead_model: str | None = None,
+    sprint_planner_model: str | None = None,
+    issue_writer_model: str | None = None,
     permission_mode: str = "",
-    ai_provider: str = "claude",
+    ai_provider: str | None = None,
     workspace_manifest: dict | None = None,
 ) -> dict:
     """Run the full planning pipeline.
 
     Orchestrates: product_manager → architect ↔ tech_lead → sprint_planner → issue_writers
+
+    ``ai_provider`` and the per-role ``*_model`` arguments default to ``None`` and
+    are resolved from the environment so an OpenRouter-only deployment needs zero
+    config: with only an ``OPENROUTER_API_KEY`` present, the pipeline runs on the
+    ``open_code`` runtime with the default OpenRouter model instead of Claude
+    (mirroring ``build``/``execute``, which already auto-select via
+    ``_default_runtime``). Any explicitly passed value always wins.
     """
+    # Resolve provider/model defaults from the environment (see docstring).
+    ai_provider = ai_provider or _default_runtime()
+    default_model = _default_planning_model()
+    pm_model = pm_model or default_model
+    architect_model = architect_model or default_model
+    tech_lead_model = tech_lead_model or default_model
+    sprint_planner_model = sprint_planner_model or default_model
+    issue_writer_model = issue_writer_model or default_model
+
     app.note("Pipeline starting", tags=["pipeline", "start"])
 
     # 1. PM scopes the goal into a PRD

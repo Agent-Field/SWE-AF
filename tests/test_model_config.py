@@ -12,6 +12,8 @@ from swe_af.execution.schemas import (
     BuildConfig,
     ExecutionConfig,
     ROLE_TO_MODEL_FIELD,
+    _OPENROUTER_AUTO_DEFAULT_MODEL,
+    _default_planning_model,
     _default_runtime,
     resolve_runtime_models,
 )
@@ -42,6 +44,30 @@ def _provider_env(**overrides: str):
             os.environ.pop(k, None)
             if saved[k] is not None:
                 os.environ[k] = saved[k]
+
+
+class TestDefaultPlanningModel(unittest.TestCase):
+    """`_default_planning_model` picks the planning-reasoner model default."""
+
+    def test_claude_env_defaults_to_sonnet(self) -> None:
+        with _provider_env(ANTHROPIC_API_KEY="sk-ant"):
+            self.assertEqual(_default_planning_model(), "sonnet")
+
+    def test_no_provider_env_defaults_to_sonnet(self) -> None:
+        with _provider_env():
+            self.assertEqual(_default_planning_model(), "sonnet")
+
+    def test_openrouter_only_defaults_to_openrouter_model(self) -> None:
+        with _provider_env(OPENROUTER_API_KEY="sk-or"):
+            self.assertEqual(_default_planning_model(), _OPENROUTER_AUTO_DEFAULT_MODEL)
+
+    def test_swe_default_model_wins_over_openrouter_auto(self) -> None:
+        with _provider_env(OPENROUTER_API_KEY="sk-or", SWE_DEFAULT_MODEL="openrouter/qwen/qwen3-max"):
+            self.assertEqual(_default_planning_model(), "openrouter/qwen/qwen3-max")
+
+    def test_ai_model_cascade_applies(self) -> None:
+        with _provider_env(ANTHROPIC_API_KEY="sk-ant", AI_MODEL="opus"):
+            self.assertEqual(_default_planning_model(), "opus")
 
 
 class TestResolveRuntimeModels(unittest.TestCase):
