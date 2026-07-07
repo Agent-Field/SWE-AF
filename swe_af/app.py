@@ -2118,7 +2118,13 @@ async def resume_build(
 
 def main():
     """Entry point for ``python -m swe_af`` and the ``swe-af`` console script."""
-    app.run(port=8003, host="0.0.0.0")
+    # Don't hardcode the port: the AgentField control plane assigns a free port
+    # per launch and passes it via the PORT env var, then polls readiness on
+    # that port. The SDK's Agent.run() reads PORT when no port is given (and
+    # auto-selects a free port when run standalone), so leaving it unset is what
+    # lets `af run` work. Passing port=8003 bound the wrong port and made the
+    # control plane's readiness check time out ("did not become ready").
+    app.run(host="0.0.0.0")
 
 
 if __name__ == "__main__":
