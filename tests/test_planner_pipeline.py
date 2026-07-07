@@ -336,3 +336,100 @@ async def test_plan_returns_dict_with_levels(mock_agent_ai, tmp_path):
     # Both in level 0 (same parallel level)
     assert "issue-alpha" in levels[0]
     assert "issue-beta" in levels[0]
+
+
+# ---------------------------------------------------------------------------
+# Provider/model default resolution (OpenRouter-only zero-config)
+# ---------------------------------------------------------------------------
+
+_PROVIDER_ENV_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "SWE_DEFAULT_RUNTIME",
+    "SWE_DEFAULT_MODEL",
+    "AI_MODEL",
+    "HARNESS_MODEL",
+)
+
+
+async def _run_plan_defaults(tmp_path: str, **kwargs) -> None:
+    """Invoke plan() letting ai_provider/*_model default (omit them so the
+    env-resolution under test runs). A full happy-path mock lets it complete."""
+    import swe_af.app as _app_module
+
+    real_fn = getattr(_app_module.plan, "_original_func", _app_module.plan)
+    await real_fn(goal="Build a test app", repo_path=str(tmp_path), **kwargs)
+
+
+def _happy_path_side_effect() -> list:
+    return [
+        _make_prd_dict(),
+        _make_architecture_dict(),
+        _make_review_approved_dict(),
+        _make_sprint_result_dict(),
+        _make_issue_writer_result_dict(),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_plan_openrouter_only_defaults_to_open_code(mock_agent_ai, tmp_path, monkeypatch):
+    """Only an OpenRouter key present → plan() runs on open_code with the default
+    OpenRouter model, with no ai_provider/model args passed."""
+    for k in _PROVIDER_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+
+    mock_agent_ai.side_effect = _happy_path_side_effect()
+    await _run_plan_defaults(str(tmp_path))
+
+    pm_call = mock_agent_ai.call_args_list[0]
+    assert pm_call.args[0].endswith("run_product_manager")
+    assert pm_call.kwargs["ai_provider"] == "open_code"
+    assert pm_call.kwargs["model"] == "openrouter/deepseek/deepseek-v4-flash"
+
+
+@pytest.mark.asyncio
+async def test_plan_claude_env_keeps_sonnet_defaults(mock_agent_ai, tmp_path, monkeypatch):
+    """An Anthropic key present → historical claude_code/sonnet defaults are kept
+    (no behavior change for Claude users)."""
+    for k in _PROVIDER_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    mock_agent_ai.side_effect = _happy_path_side_effect()
+    await _run_plan_defaults(str(tmp_path))
+
+    pm_call = mock_agent_ai.call_args_list[0]
+    assert pm_call.kwargs["ai_provider"] == "claude_code"
+    assert pm_call.kwargs["model"] == "sonnet"
+
+
+@pytest.mark.asyncio
+async def test_plan_explicit_args_override_env(mock_agent_ai, tmp_path, monkeypatch):
+    """Explicit ai_provider/model always win over the env-resolved defaults."""
+    for k in _PROVIDER_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")  # would otherwise force open_code
+
+    mock_agent_ai.side_effect = _happy_path_side_effect()
+    await _run_plan_defaults(str(tmp_path), ai_provider="codex", pm_model="gpt-5")
+
+    pm_call = mock_agent_ai.call_args_list[0]
+    assert pm_call.kwargs["ai_provider"] == "codex"
+    assert pm_call.kwargs["model"] == "gpt-5"
+
+
+@pytest.mark.asyncio
+async def test_plan_swe_default_model_overrides_openrouter_auto(mock_agent_ai, tmp_path, monkeypatch):
+    """SWE_DEFAULT_MODEL sets the planning model even on the OpenRouter path."""
+    for k in _PROVIDER_ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("SWE_DEFAULT_MODEL", "openrouter/qwen/qwen3-max")
+
+    mock_agent_ai.side_effect = _happy_path_side_effect()
+    await _run_plan_defaults(str(tmp_path))
+
+    pm_call = mock_agent_ai.call_args_list[0]
+    assert pm_call.kwargs["ai_provider"] == "open_code"
+    assert pm_call.kwargs["model"] == "openrouter/qwen/qwen3-max"

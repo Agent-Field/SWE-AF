@@ -631,6 +631,27 @@ def _default_model_from_env() -> str | None:
     return None
 
 
+def _default_planning_model() -> str:
+    """Model for the planning reasoners (the ``plan`` pipeline) when the caller
+    passes no model.
+
+    The planning reasoners take an explicit ``model`` argument rather than a
+    runtime ``models={}`` config, so the ``resolve_runtime_models`` cascade
+    doesn't apply to them. This mirrors that cascade for the planning path so an
+    OpenRouter-only deployment is zero-config. Precedence, first match wins:
+
+        1. deployer env (``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` → ``HARNESS_MODEL``)
+        2. the OpenRouter default when only an OpenRouter key is present
+        3. the Claude ``sonnet`` alias (historical default)
+    """
+    env_model = _default_model_from_env()
+    if env_model:
+        return env_model
+    if _openrouter_only_env():
+        return _OPENROUTER_AUTO_DEFAULT_MODEL
+    return "sonnet"
+
+
 def _legacy_hint_for_model_key(key: str) -> str:
     if key in _LEGACY_GROUP_EQUIVALENTS:
         return _LEGACY_GROUP_EQUIVALENTS[key]
