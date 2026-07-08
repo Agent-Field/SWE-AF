@@ -223,6 +223,23 @@ This is the core factory-control behavior: control agents supervise worker agent
 
 ## Quick Start
 
+### Install into AgentField (`af install`)
+
+Already running an [AgentField](https://github.com/Agent-Field/agentfield) control plane? Install SWE-AF straight from GitHub — no clone, no local Python setup:
+
+```bash
+af install https://github.com/Agent-Field/SWE-AF
+af run swe-planner
+```
+
+`af install` clones the repo, provisions an isolated Python environment, and registers the `swe-planner` node with your control plane. On first `af run` you're prompted for the required secrets — an LLM provider key (`ANTHROPIC_API_KEY` **or** `OPENROUTER_API_KEY`) plus `GH_TOKEN` — which are stored encrypted and reused across every node, so you enter each only once. Then kick off a build:
+
+```bash
+af call swe-planner.build --in '{"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}'
+```
+
+New to AgentField? Install the control plane first with `curl -fsSL https://agentfield.ai/install.sh | bash`, or use the Railway / local options below.
+
 ### Deploy with Railway (fastest)
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/swe-af)
