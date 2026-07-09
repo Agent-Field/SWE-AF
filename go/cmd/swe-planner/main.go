@@ -1,48 +1,27 @@
-// Command swe-planner is the full-pipeline SWE-AF node (Python __main__.py).
-//
-// T0 scaffold: it constructs the agent from env and starts it, registering no
-// reasoners yet. The full reasoner set is wired in Wave 6 (T6.2 -> node
-// package). This stub proves the agent.New + agent.Run wiring compiles and an
-// empty node starts.
+// Command swe-planner is the full-pipeline SWE-AF node (Python __main__.py /
+// app.py). It builds the agent from the environment and registers the full
+// swe-planner surface — 5 orchestrators + 25 role reasoners — then serves until
+// SIGINT/SIGTERM. agent.Run installs its own signal handling, so main passes a
+// plain context.Background() and does not double-handle signals.
 package main
 
 import (
 	"context"
 	"log"
-	"os"
 
-	agent "github.com/Agent-Field/agentfield/sdk/go/agent"
+	"github.com/Agent-Field/SWE-AF/go/internal/node"
 )
 
 func main() {
-	// Env wiring mirrors Python app.py:51-59 (planner defaults).
-	cfg := agent.Config{
-		NodeID:        envOr("NODE_ID", "swe-planner"),
-		Version:       "1.0.0",
-		AgentFieldURL: envOr("AGENTFIELD_SERVER", "http://localhost:8080"),
-		Token:         os.Getenv("AGENTFIELD_API_KEY"),
-		ListenAddress: ":" + envOr("PORT", "8003"),
-	}
-
-	app, err := agent.New(cfg)
+	// Defaults mirror app.py:51-59: NODE_ID "swe-planner", PORT 8003.
+	n, err := node.BuildAgent("swe-planner", "8003", "Autonomous SWE planning pipeline")
 	if err != nil {
-		log.Fatalf("swe-planner: create agent: %v", err)
+		log.Fatalf("swe-planner: build agent: %v", err)
 	}
 
-	// TODO(T6.2): register every reasoner (build/plan/execute/resolve/resume
-	// + the 25 role reasoners) by exact name via the node package.
+	n.RegisterPlanner()
 
-	// agent.Run serves (no CLI args) and blocks until SIGINT/SIGTERM or ctx
-	// cancellation; it installs its own signal handling.
-	if err := app.Run(context.Background()); err != nil {
+	if err := n.App.Run(context.Background()); err != nil {
 		log.Fatalf("swe-planner: run: %v", err)
 	}
-}
-
-// envOr returns the value of key, or def when the env var is unset or empty.
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }
