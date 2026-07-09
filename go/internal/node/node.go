@@ -74,6 +74,12 @@ func (n *Node) RegisteredNames() []string {
 //   - AGENTFIELD_SERVER default "http://localhost:8080"
 //   - AGENTFIELD_API_KEY -> Config.Token (bearer)
 //   - PORT              default defaultPort ("8003" / "8004") -> ListenAddress
+//   - AGENT_CALLBACK_URL -> Config.PublicURL — the base URL the node registers
+//     with the control plane. The Python SDK reads the same env var
+//     (agent_server.py:758) before defaulting to localhost; without it a
+//     containerized node registers http://localhost:<port> and the CP cannot
+//     route execute calls back to it (found by the T7.2 functional tests).
+//     Unset -> the SDK's localhost default, matching Python.
 //   - Version           "1.0.0"
 //   - description       the per-node description string
 //
@@ -92,6 +98,11 @@ func BuildAgent(defaultNodeID, defaultPort, description string) (*Node, error) {
 		AgentFieldURL: server,
 		Token:         token,
 		ListenAddress: ":" + port,
+		// PublicURL: the callback base URL the CP uses to reach this node.
+		// AGENT_CALLBACK_URL mirrors the Python SDK's env var of the same name
+		// (agent_server.py:758); when unset the SDK defaults to
+		// http://localhost:<port>, which is correct only outside containers.
+		PublicURL: os.Getenv("AGENT_CALLBACK_URL"),
 		// The Go SDK sends no node-level description in its registration payload
 		// (unlike the Python Agent(description=...)); AppDescription is the CLI
 		// help string, the closest home for the Python description. It does not
