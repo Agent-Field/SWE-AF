@@ -70,7 +70,7 @@ func (n *Node) registerRoles() {
 	planningDeps := &planning.Deps{
 		Harness:          n.App,
 		App:              n.App,
-		Approvals:        n.approvals,
+		Pauser:           n.App,
 		Hax:              n.hax,
 		NodeID:           n.NodeID,
 		AgentFieldServer: n.AgentFieldServer,
@@ -92,7 +92,7 @@ func (n *Node) registerRoles() {
 	advisorDeps := &advisor.Deps{
 		Harness:          n.App,
 		App:              n.App,
-		Approvals:        n.approvals,
+		Pauser:           n.App,
 		BuildHaxClient:   hitl.BuildHaxClientFromEnv,
 		NodeID:           n.NodeID,
 		AgentFieldServer: n.AgentFieldServer,

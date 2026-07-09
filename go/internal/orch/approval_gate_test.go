@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Agent-Field/agentfield/sdk/go/client"
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
@@ -19,33 +19,29 @@ import (
 
 // --- test doubles ---------------------------------------------------------
 
-// fakeApprovalClient returns a scripted decision per WaitForApproval call, one
-// per revision iteration. RequestApproval is a no-op counter.
-type fakeApprovalClient struct {
-	statuses  []string
-	responses []map[string]any
+// fakePauser returns a scripted decision per Pause call, one per revision
+// iteration. It counts calls; feedback rides on ApprovalResult.Feedback (a
+// top-level field, as the webhook delivers it) rather than inside a response
+// payload.
+type fakePauser struct {
+	decisions []string
+	feedbacks []string
 	idx       int
-	reqCalls  int
-	waitCalls int
+	calls     int
 }
 
-func (f *fakeApprovalClient) RequestApproval(_ context.Context, _, _ string, _ client.RequestApprovalRequest) (*client.RequestApprovalResponse, error) {
-	f.reqCalls++
-	return &client.RequestApprovalResponse{}, nil
-}
-
-func (f *fakeApprovalClient) WaitForApproval(_ context.Context, _, _ string, _ *client.WaitForApprovalOptions) (*client.ApprovalStatusResponse, error) {
+func (f *fakePauser) Pause(_ context.Context, _ agent.PauseOptions) (*agent.ApprovalResult, error) {
 	i := f.idx
-	if i >= len(f.statuses) {
-		i = len(f.statuses) - 1
+	if i >= len(f.decisions) {
+		i = len(f.decisions) - 1
 	}
 	f.idx++
-	f.waitCalls++
-	var resp map[string]any
-	if i < len(f.responses) {
-		resp = f.responses[i]
+	f.calls++
+	var feedback string
+	if i < len(f.feedbacks) {
+		feedback = f.feedbacks[i]
 	}
-	return &client.ApprovalStatusResponse{Status: f.statuses[i], Response: resp}, nil
+	return &agent.ApprovalResult{Decision: f.decisions[i], Feedback: feedback}, nil
 }
 
 // haxStub returns an httptest server answering the create-request POST with a
@@ -75,11 +71,11 @@ func itoa(n int) string {
 }
 
 // wireHax points haxClientProvider at a stub server (short timeout) and returns
-// a restore func. approvalClientProvider is wired to the given fake.
-func wireHax(t *testing.T, server *httptest.Server, approvals hitl.ApprovalClient) func() {
+// a restore func. pauserProvider is wired to the given fake.
+func wireHax(t *testing.T, server *httptest.Server, pauser hitl.Pauser) func() {
 	t.Helper()
 	prevHax := haxClientProvider
-	prevAppr := approvalClientProvider
+	prevPauser := pauserProvider
 	if server != nil {
 		haxClientProvider = func() *hitl.HaxClient {
 			return &hitl.HaxClient{BaseURL: server.URL, APIKey: "k", Timeout: 2 * time.Second}
@@ -87,10 +83,10 @@ func wireHax(t *testing.T, server *httptest.Server, approvals hitl.ApprovalClien
 	} else {
 		haxClientProvider = func() *hitl.HaxClient { return nil }
 	}
-	approvalClientProvider = func(ApprovalRequest) hitl.ApprovalClient { return approvals }
+	pauserProvider = func(ApprovalRequest) hitl.Pauser { return pauser }
 	return func() {
 		haxClientProvider = prevHax
-		approvalClientProvider = prevAppr
+		pauserProvider = prevPauser
 	}
 }
 
@@ -156,7 +152,7 @@ func TestApprovalApprovedProceeds(t *testing.T) {
 	var hits int32
 	server := haxStub(t, &hits)
 	defer server.Close()
-	fake := &fakeApprovalClient{statuses: []string{"approved"}}
+	fake := &fakePauser{decisions: []string{"approved"}}
 	defer wireHax(t, server, fake)()
 
 	app, calls := replanApp()
@@ -176,8 +172,8 @@ func TestApprovalApprovedProceeds(t *testing.T) {
 	if len(*calls) != 0 {
 		t.Fatalf("approve must not replan, got %d calls", len(*calls))
 	}
-	if fake.reqCalls != 1 || fake.waitCalls != 1 {
-		t.Fatalf("expected one pause cycle, got req=%d wait=%d", fake.reqCalls, fake.waitCalls)
+	if fake.calls != 1 {
+		t.Fatalf("expected one pause, got %d", fake.calls)
 	}
 	if hits != 1 {
 		t.Fatalf("expected 1 hax request, got %d", hits)
@@ -190,9 +186,9 @@ func TestApprovalChangesThenApproved(t *testing.T) {
 	var hits int32
 	server := haxStub(t, &hits)
 	defer server.Close()
-	fake := &fakeApprovalClient{
-		statuses:  []string{"request_changes", "approved"},
-		responses: []map[string]any{{"feedback": "please fix X"}, nil},
+	fake := &fakePauser{
+		decisions: []string{"request_changes", "approved"},
+		feedbacks: []string{"please fix X", ""},
 	}
 	defer wireHax(t, server, fake)()
 
@@ -232,9 +228,9 @@ func TestApprovalRevisionLimit(t *testing.T) {
 	var hits int32
 	server := haxStub(t, &hits)
 	defer server.Close()
-	fake := &fakeApprovalClient{
-		statuses:  []string{"request_changes", "request_changes"},
-		responses: []map[string]any{{"feedback": "f0"}, {"feedback": "f1"}},
+	fake := &fakePauser{
+		decisions: []string{"request_changes", "request_changes"},
+		feedbacks: []string{"f0", "f1"},
 	}
 	defer wireHax(t, server, fake)()
 
@@ -269,9 +265,9 @@ func TestApprovalRejected(t *testing.T) {
 	var hits int32
 	server := haxStub(t, &hits)
 	defer server.Close()
-	fake := &fakeApprovalClient{
-		statuses:  []string{"rejected"},
-		responses: []map[string]any{{"feedback": "not good"}},
+	fake := &fakePauser{
+		decisions: []string{"rejected"},
+		feedbacks: []string{"not good"},
 	}
 	defer wireHax(t, server, fake)()
 
@@ -298,7 +294,7 @@ func TestApprovalExpired(t *testing.T) {
 	var hits int32
 	server := haxStub(t, &hits)
 	defer server.Close()
-	fake := &fakeApprovalClient{statuses: []string{"expired"}}
+	fake := &fakePauser{decisions: []string{"expired"}}
 	defer wireHax(t, server, fake)()
 
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
@@ -320,7 +316,7 @@ func TestApprovalExpired(t *testing.T) {
 // no hax client (HAX_API_KEY unset) -> gate skipped, PlanResult unchanged, no
 // hax hit, no approval calls.
 func TestApprovalNoHaxClientSkips(t *testing.T) {
-	fake := &fakeApprovalClient{statuses: []string{"approved"}}
+	fake := &fakePauser{decisions: []string{"approved"}}
 	defer wireHax(t, nil, fake)() // nil server => haxClientProvider returns nil
 
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
@@ -338,24 +334,24 @@ func TestApprovalNoHaxClientSkips(t *testing.T) {
 	if !reflect.DeepEqual(out.PlanResult, plan) {
 		t.Fatal("PlanResult must be unchanged when gate skipped")
 	}
-	if fake.reqCalls != 0 || fake.waitCalls != 0 {
-		t.Fatal("no approval calls when hax disabled")
+	if fake.calls != 0 {
+		t.Fatal("no pause when hax disabled")
 	}
 }
 
-// no approval client wired -> gate skipped even with a hax client.
+// no pauser wired -> gate skipped even with a hax client.
 func TestApprovalNoClientWiredSkips(t *testing.T) {
 	var hits int32
 	server := haxStub(t, &hits)
 	defer server.Close()
 
 	prevHax := haxClientProvider
-	prevAppr := approvalClientProvider
-	defer func() { haxClientProvider = prevHax; approvalClientProvider = prevAppr }()
+	prevPauser := pauserProvider
+	defer func() { haxClientProvider = prevHax; pauserProvider = prevPauser }()
 	haxClientProvider = func() *hitl.HaxClient {
 		return &hitl.HaxClient{BaseURL: server.URL, APIKey: "k", Timeout: time.Second}
 	}
-	approvalClientProvider = nil
+	pauserProvider = nil
 
 	deps := &Deps{App: &mockApp{}, NodeID: "swe-planner"}
 	plan := samplePlan()
@@ -364,10 +360,10 @@ func TestApprovalNoClientWiredSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 	if out.Terminal || !reflect.DeepEqual(out.PlanResult, plan) {
-		t.Fatal("unwired approval client must skip, unchanged plan")
+		t.Fatal("unwired pauser must skip, unchanged plan")
 	}
 	if hits != 0 {
-		t.Fatal("no hax request when approval client unwired")
+		t.Fatal("no hax request when pauser unwired")
 	}
 }
 

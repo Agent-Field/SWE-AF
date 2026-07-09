@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
-	"github.com/Agent-Field/agentfield/sdk/go/client"
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fatal"
@@ -52,17 +51,13 @@ func (r *recNote) Note(_ context.Context, message string, tags ...string) {
 	r.tags = append(r.tags, tags)
 }
 
-// fakeApprovals returns a scripted approval status (used for the ask-user loop).
-type fakeApprovals struct {
-	status *client.ApprovalStatusResponse
+// fakePauser returns a scripted ApprovalResult (used for the ask-user loop).
+type fakePauser struct {
+	result *agent.ApprovalResult
 }
 
-func (f *fakeApprovals) RequestApproval(_ context.Context, _, _ string, _ client.RequestApprovalRequest) (*client.RequestApprovalResponse, error) {
-	return &client.RequestApprovalResponse{}, nil
-}
-
-func (f *fakeApprovals) WaitForApproval(_ context.Context, _, _ string, _ *client.WaitForApprovalOptions) (*client.ApprovalStatusResponse, error) {
-	return f.status, nil
+func (f *fakePauser) Pause(_ context.Context, _ agent.PauseOptions) (*agent.ApprovalResult, error) {
+	return f.result, nil
 }
 
 // haxTestServer returns a *hitl.HaxClient whose CreateRequest hits an httptest
@@ -225,9 +220,9 @@ func TestProductManagerReinvokesOnAskUserForm(t *testing.T) {
 	defer closeSrv()
 	deps, _ := newDeps(h)
 	deps.Hax = hax
-	deps.Approvals = &fakeApprovals{status: &client.ApprovalStatusResponse{
-		Status:   "approved",
-		Response: map[string]any{"values": map[string]any{"answer": "yes"}},
+	deps.Pauser = &fakePauser{result: &agent.ApprovalResult{
+		Decision:    "approved",
+		RawResponse: map[string]any{"values": map[string]any{"answer": "yes"}},
 	}}
 
 	out, err := RunProductManager(context.Background(), deps, map[string]any{"repo_path": t.TempDir()})

@@ -390,7 +390,7 @@ func (d *Deps) runWithAskUser(
 	}
 	return hitl.RunWithAskUser(ctx, invoke, kwargs, hitl.RunWithAskUserParams{
 		App:         d.App,
-		Approvals:   d.Approvals,
+		Pauser:      d.Pauser,
 		Hax:         hax,
 		Budget:      &hitl.AskUserBudget{Remaining: 2},
 		NodeID:      d.NodeID,

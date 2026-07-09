@@ -3,9 +3,9 @@
 // form primitive, the re-invocation wrapper, and the environment-scout helpers.
 //
 // This file ports swe_af/hitl/ask_user.py: it turns an AskUserForm into the hax
-// form-builder payload, drives the poll-based approval flow (design §4.6), and
-// maps the resulting decision back into an AskUserResponse using the same table
-// as the Python _parse_approval_result_to_response.
+// form-builder payload, drives the webhook-resumed pause flow via agent.Pause
+// (design §4.6), and maps the resulting decision back into an AskUserResponse
+// using the same table as the Python _parse_approval_result_to_response.
 package hitl
 
 import (
@@ -15,10 +15,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
+
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
-	"github.com/Agent-Field/agentfield/sdk/go/client"
 )
 
 // App is the minimal slice of *agent.Agent the HITL primitives need: the
@@ -28,15 +28,16 @@ type App interface {
 	Note(ctx context.Context, message string, tags ...string)
 }
 
-// ApprovalClient is the poll-based approval surface the ask-user flow drives.
-// The AgentField Go SDK *client.Client satisfies it; tests supply a fake.
+// Pauser is the pause surface the ask-user flow drives. The AgentField Go SDK
+// *agent.Agent satisfies it via its Pause method; tests supply a fake.
 //
-// RequestApproval transitions the execution to "waiting" server-side (so the UI
-// shows waiting); WaitForApproval polls with backoff until the status leaves
-// "pending". Together they replace Python's app.pause() (design §4.6).
-type ApprovalClient interface {
-	RequestApproval(ctx context.Context, nodeID, executionID string, req client.RequestApprovalRequest) (*client.RequestApprovalResponse, error)
-	WaitForApproval(ctx context.Context, nodeID, executionID string, opts *client.WaitForApprovalOptions) (*client.ApprovalStatusResponse, error)
+// Pause transitions the execution to "waiting" on the control plane and blocks
+// until the approval webhook callback resolves it (or it expires) — the direct
+// port of Python's app.pause() (design §4.6). There is no polling: the SDK
+// registers the pending pause and the agent's /webhooks/approval route resolves
+// it when the human responds.
+type Pauser interface {
+	Pause(ctx context.Context, opts agent.PauseOptions) (*agent.ApprovalResult, error)
 }
 
 // noteSafe fires a note when app is non-nil; a nil app is a no-op so the
@@ -268,19 +269,20 @@ type RequestUserInputParams struct {
 	Metadata       map[string]any
 }
 
-// RequestUserInputAndPause builds a hax form, requests approval (transitioning
-// the execution to "waiting"), polls until the human responds, and maps the
-// outcome to an AskUserResponse. Ports ask_user.py::request_user_input_and_pause
-// onto the poll-based primitive (design §4.6).
+// RequestUserInputAndPause builds a hax form, pauses the execution via
+// agent.Pause (webhook-resumed — the execution transitions to "waiting" and
+// blocks until the approval callback resolves it), and maps the outcome to an
+// AskUserResponse. Ports ask_user.py::request_user_input_and_pause onto the
+// agent.Pause primitive (design §4.6).
 //
 // The workflow is genuinely suspended on the control plane while the form is
 // outstanding; expiry is enforced server-side per ExpiresInHours (surfacing as
-// a decision="expired" -> status="timeout"). A create failure, request failure,
-// or wait failure degrades to a typed status rather than raising.
+// a decision="expired" -> status="timeout"). A create failure or a pause error
+// degrades to a typed status rather than raising.
 func RequestUserInputAndPause(
 	ctx context.Context,
 	app App,
-	approvals ApprovalClient,
+	pauser Pauser,
 	hax *HaxClient,
 	spec schemas.AskUserForm,
 	p RequestUserInputParams,
@@ -320,27 +322,25 @@ func RequestUserInputAndPause(
 	noteSafe(ctx, app, fmt.Sprintf("ask_user: hax form request created (request_id=%s)", created.ID),
 		"ask_user", "hax", "submitted")
 
-	// Transition the execution to "waiting" and record the approval request.
-	if _, err := approvals.RequestApproval(ctx, p.NodeID, p.ExecutionID, client.RequestApprovalRequest{
+	// Pause the execution for approval. agent.Pause transitions it to "waiting"
+	// on the control plane and blocks until the /webhooks/approval callback
+	// resolves it (or it expires) — no polling. The callback URL is derived by
+	// the SDK from the agent's public URL, so unlike the old poll flow we pass
+	// no CallbackURL here (mirrors Python passing only approval_request_id /
+	// approval_request_url / expires_in_hours to app.pause; execution_id is
+	// forwarded when known).
+	result, err := pauser.Pause(ctx, agent.PauseOptions{
 		ApprovalRequestID:  created.ID,
 		ApprovalRequestURL: created.URL,
-		CallbackURL:        p.WebhookURL,
 		ExpiresInHours:     int(expiresHours),
-	}); err != nil {
-		noteSafe(ctx, app, fmt.Sprintf("ask_user: request_approval raised: %v", err),
-			"ask_user", "pause", "error")
-		msg := fmt.Sprintf("pause failed: %v", err)
-		return schemas.AskUserResponse{Status: "error", Values: map[string]any{}, Error: &msg}
-	}
-
-	status, err := approvals.WaitForApproval(ctx, p.NodeID, p.ExecutionID, &client.WaitForApprovalOptions{
-		PollInterval: 5 * time.Second,
-		MaxInterval:  60 * time.Second,
+		ExecutionID:        p.ExecutionID,
 	})
 	if err != nil {
 		// A deadline/cancel is treated as the pause timing out; any other
 		// failure surfaces as an error (mirrors Python's TimeoutError vs
-		// generic-exception split around app.pause).
+		// generic-exception split around app.pause). A plain expiry is NOT an
+		// error: the SDK returns decision="expired", handled below via
+		// parseApprovalResult -> status="timeout".
 		if errors.Is(err, context.DeadlineExceeded) {
 			noteSafe(ctx, app, "ask_user: pause expired without human response",
 				"ask_user", "pause", "timeout")
@@ -352,28 +352,16 @@ func RequestUserInputAndPause(
 		return schemas.AskUserResponse{Status: "error", Values: map[string]any{}, Error: &msg}
 	}
 
-	feedback := feedbackFromResponse(status.Response)
-	resp := parseApprovalResult(status.Status, feedback, status.Response)
+	// feedback = approval_result.feedback or None (empty collapses to nil, as in
+	// the Python _parse_approval_result_to_response).
+	var feedback *string
+	if fb := result.Feedback; fb != "" {
+		feedback = &fb
+	}
+	resp := parseApprovalResult(result.Decision, feedback, result.RawResponse)
 	noteSafe(ctx, app, fmt.Sprintf("ask_user: response received (status=%s, %d value(s))", resp.Status, len(resp.Values)),
 		"ask_user", "hax", "response", resp.Status)
 	return resp
-}
-
-// feedbackFromResponse pulls a free-text feedback string out of the approval
-// response payload, if the control plane included one. Empty strings collapse
-// to nil so the JSON-feedback fallback and error defaulting behave like Python
-// (feedback = ... or None).
-func feedbackFromResponse(raw map[string]any) *string {
-	if raw == nil {
-		return nil
-	}
-	if s, ok := raw["feedback"].(string); ok {
-		if strings.TrimSpace(s) == "" {
-			return nil
-		}
-		return &s
-	}
-	return nil
 }
 
 // FormatPriorUserResponses renders prior_user_responses as a markdown block for

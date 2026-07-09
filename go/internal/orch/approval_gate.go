@@ -5,9 +5,9 @@
 //
 // build.go drives the gate through the ApprovalGate seam (common.go): it calls
 // PlanApprovalGate once, acting on the returned ApprovalOutcome. The gate owns
-// the entire hax flow — request the plan review, pause the execution (poll-based
-// per design §4.6), and on request_changes re-run Architect → Tech Lead →
-// Sprint Planner with the reviewer feedback, bounded by
+// the entire hax flow — request the plan review, pause the execution
+// (agent.Pause, webhook-resumed, design §4.6), and on request_changes re-run
+// Architect → Tech Lead → Sprint Planner with the reviewer feedback, bounded by
 // cfg.max_plan_revision_iterations.
 package orch
 
@@ -18,9 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/Agent-Field/agentfield/sdk/go/client"
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
@@ -28,7 +27,7 @@ import (
 
 // PlanApprovalGate satisfies the ApprovalGate seam (common.go). build.go assigns
 // it to Deps.ApprovalGate; it engages only when a hax client can be built from
-// the environment (HAX_API_KEY set) AND a poll-based approval client is wired.
+// the environment (HAX_API_KEY set) AND a pauser is wired.
 var _ ApprovalGate = PlanApprovalGate
 
 // ---------------------------------------------------------------------------
@@ -39,17 +38,17 @@ var _ ApprovalGate = PlanApprovalGate
 // unset (HITL disabled). Package seam so tests point it at a stub server.
 var haxClientProvider = hitl.BuildHaxClientFromEnv
 
-// approvalClientProvider yields the poll-based approval client the gate drives
-// (RequestApproval + WaitForApproval — the Go replacement for app.pause, design
-// §4.6). Nil until node/register wires it to the SDK *client.Client; when nil
-// (or it returns nil) the gate no-ops and the build proceeds unreviewed, matching
-// the Python block being skipped when the pause substrate is unavailable.
-var approvalClientProvider func(req ApprovalRequest) hitl.ApprovalClient
+// pauserProvider yields the pause surface the gate drives (agent.Pause — the
+// direct port of app.pause, design §4.6; webhook-resumed, no polling). Nil until
+// node/register wires it to the *agent.Agent; when nil (or it returns nil) the
+// gate no-ops and the build proceeds unreviewed, matching the Python block being
+// skipped when the pause substrate is unavailable.
+var pauserProvider func(req ApprovalRequest) hitl.Pauser
 
-// SetApprovalClientProvider wires the poll-based approval client factory. The
-// node-wiring wave calls this once with a closure returning the SDK client.
-func SetApprovalClientProvider(f func(req ApprovalRequest) hitl.ApprovalClient) {
-	approvalClientProvider = f
+// SetPauserProvider wires the pause surface factory. The node-wiring wave calls
+// this once with a closure returning the *agent.Agent.
+func SetPauserProvider(f func(req ApprovalRequest) hitl.Pauser) {
+	pauserProvider = f
 }
 
 // PlanApprovalGate runs the hax plan-approval revision loop. Ports
@@ -58,13 +57,13 @@ func SetApprovalClientProvider(f func(req ApprovalRequest) hitl.ApprovalClient) 
 // a non-terminal outcome carrying the (possibly revised) plan to execute.
 func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome, error) {
 	hax := haxClientProvider()
-	if hax == nil || approvalClientProvider == nil {
-		// HITL disabled (no HAX_API_KEY) or no pause client wired — skip
-		// approval and proceed with the plan unchanged.
+	if hax == nil || pauserProvider == nil {
+		// HITL disabled (no HAX_API_KEY) or no pauser wired — skip approval and
+		// proceed with the plan unchanged.
 		return ApprovalOutcome{Terminal: false, PlanResult: req.PlanResult}, nil
 	}
-	approvals := approvalClientProvider(req)
-	if approvals == nil {
+	pauser := pauserProvider(req)
+	if pauser == nil {
 		return ApprovalOutcome{Terminal: false, PlanResult: req.PlanResult}, nil
 	}
 
@@ -139,7 +138,7 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 			"revision_number": revisionIter,
 		})
 
-		decision, feedback, err := pauseForApproval(ctx, approvals, nodeID, req.ExecutionID, created, webhookURL, expiresHours)
+		decision, feedback, err := pauseForApproval(ctx, pauser, req.ExecutionID, created, expiresHours)
 		if err != nil {
 			return ApprovalOutcome{}, err
 		}
@@ -233,35 +232,30 @@ func createHaxRequestWithTimeout(
 	return created, nil
 }
 
-// pauseForApproval transitions the execution to "waiting" (RequestApproval) and
-// blocks until the human responds (WaitForApproval poll+backoff). Replaces
-// app.pause (design §4.6). Returns the decision string (approved /
-// request_changes / rejected / expired / error) plus any free-text feedback.
+// pauseForApproval pauses the execution for plan approval via agent.Pause: it
+// transitions the execution to "waiting" on the control plane and blocks until
+// the /webhooks/approval callback resolves it (or it expires — decision
+// "expired") — the direct port of app.pause (design §4.6, webhook-resumed, no
+// polling). Returns the decision string (approved / request_changes / rejected /
+// expired / error) plus any free-text feedback. The callback URL is derived by
+// the SDK from the agent's public URL, so no CallbackURL is passed here.
 func pauseForApproval(
 	ctx context.Context,
-	approvals hitl.ApprovalClient,
-	nodeID, executionID string,
+	pauser hitl.Pauser,
+	executionID string,
 	created *hitl.CreatedRequest,
-	webhookURL string,
 	expiresHours int,
 ) (decision string, feedback string, err error) {
-	if _, err = approvals.RequestApproval(ctx, nodeID, executionID, client.RequestApprovalRequest{
+	result, err := pauser.Pause(ctx, agent.PauseOptions{
 		ApprovalRequestID:  created.ID,
 		ApprovalRequestURL: created.URL,
-		CallbackURL:        webhookURL,
 		ExpiresInHours:     expiresHours,
-	}); err != nil {
-		return "", "", err
-	}
-
-	status, err := approvals.WaitForApproval(ctx, nodeID, executionID, &client.WaitForApprovalOptions{
-		PollInterval: 5 * time.Second,
-		MaxInterval:  60 * time.Second,
+		ExecutionID:        executionID,
 	})
 	if err != nil {
 		return "", "", err
 	}
-	return status.Status, feedbackFromResponse(status.Response), nil
+	return result.Decision, result.Feedback, nil
 }
 
 // replanWithFeedback re-runs Architect → Tech Lead loop → Sprint Planner with
@@ -476,18 +470,6 @@ func coerceAnyList(v any) []any {
 	default:
 		return nil
 	}
-}
-
-// feedbackFromResponse extracts a free-text feedback string from the approval
-// response payload (mirrors ask_user.py::feedbackFromResponse). "" when absent.
-func feedbackFromResponse(raw map[string]any) string {
-	if raw == nil {
-		return ""
-	}
-	if s, ok := raw["feedback"].(string); ok {
-		return s
-	}
-	return ""
 }
 
 // runeTruncate returns the first n runes of s (Python-style s[:n]). Used only

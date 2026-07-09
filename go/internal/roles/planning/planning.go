@@ -41,7 +41,7 @@ import (
 type Handler func(ctx context.Context, deps *Deps, input map[string]any) (any, error)
 
 // Deps carries the collaborators a planning handler needs. The concrete
-// *agent.Agent satisfies Harness, App and Approvals; tests supply mocks.
+// *agent.Agent satisfies Harness, App and Pauser; tests supply mocks.
 //
 // Hax is the hax REST client. When nil the ask-user loop is DISABLED (the LLM's
 // ask_user_form is stripped and the current decision proceeds) — matching
@@ -50,7 +50,7 @@ type Handler func(ctx context.Context, deps *Deps, input map[string]any) (any, e
 type Deps struct {
 	Harness          harnessx.HarnessCaller
 	App              hitl.App
-	Approvals        hitl.ApprovalClient
+	Pauser           hitl.Pauser
 	Hax              *hitl.HaxClient
 	NodeID           string
 	AgentFieldServer string
@@ -150,7 +150,7 @@ func RunProductManager(ctx context.Context, deps *Deps, input map[string]any) (a
 		map[string]any{"prior_user_responses": initialPrior},
 		hitl.RunWithAskUserParams{
 			App:         deps.App,
-			Approvals:   deps.Approvals,
+			Pauser:      deps.Pauser,
 			Hax:         deps.Hax,
 			Budget:      &hitl.AskUserBudget{Remaining: 2},
 			WebhookURL:  hitl.ApprovalWebhookURL(deps.AgentFieldServer),
@@ -236,7 +236,7 @@ func RunEnvironmentScout(ctx context.Context, deps *Deps, input map[string]any) 
 		map[string]any{"prior_user_responses": initialPrior},
 		hitl.RunWithAskUserParams{
 			App:         deps.App,
-			Approvals:   deps.Approvals,
+			Pauser:      deps.Pauser,
 			Hax:         deps.Hax,
 			Budget:      &hitl.AskUserBudget{Remaining: 2},
 			WebhookURL:  hitl.ApprovalWebhookURL(deps.AgentFieldServer),

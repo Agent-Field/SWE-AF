@@ -4,9 +4,9 @@
 //
 // node.go owns agent construction (env -> agent.Config, mirroring app.py:51-59 /
 // fast/app.py:24-31) and the cross-cutting seam wiring the orchestrators need:
-// the poll-based approval client provider (orch.SetApprovalClientProvider) built
-// from the SDK *client.Client, and the hax REST client resolved from the
-// environment. register.go owns the per-reasoner registration.
+// the pause-surface provider (orch.SetPauserProvider) backed by the *agent.Agent
+// (which pauses via agent.Pause — webhook-resumed), and the hax REST client
+// resolved from the environment. register.go owns the per-reasoner registration.
 package node
 
 import (
@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
-	"github.com/Agent-Field/agentfield/sdk/go/client"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
@@ -42,12 +41,6 @@ type Node struct {
 	// Bearer (agent.go:593), so the approval client below authenticates the same
 	// way the agent does.
 	Token string
-
-	// approvals is the poll-based approval client the HITL loops drive
-	// (RequestApproval + WaitForApproval — the Go replacement for app.pause,
-	// design §4.6). Built once from the env; the *client.Client satisfies
-	// hitl.ApprovalClient. nil only when the CP base URL is unusable.
-	approvals hitl.ApprovalClient
 
 	// hax is the hax REST client, nil when HAX_API_KEY is unset (HITL disabled,
 	// mirroring build_hax_client_from_env() returning None).
@@ -83,9 +76,9 @@ func (n *Node) RegisteredNames() []string {
 //   - Version           "1.0.0"
 //   - description       the per-node description string
 //
-// It also builds the SDK approval client and wires the orchestrator approval
-// seam (orch.SetApprovalClientProvider) so the plan-approval gate can pause via
-// the control plane. Register the reasoners with RegisterPlanner / RegisterFast.
+// It also wires the orchestrator pause seam (orch.SetPauserProvider) so the
+// plan-approval gate can pause via the control plane. Register the reasoners
+// with RegisterPlanner / RegisterFast.
 func BuildAgent(defaultNodeID, defaultPort, description string) (*Node, error) {
 	nodeID := envOr("NODE_ID", defaultNodeID)
 	server := envOr("AGENTFIELD_SERVER", "http://localhost:8080")
@@ -123,19 +116,13 @@ func BuildAgent(defaultNodeID, defaultPort, description string) (*Node, error) {
 		hax:              hitl.BuildHaxClientFromEnv(),
 	}
 
-	// Build the poll-based approval client (best-effort: a bad base URL leaves
-	// approvals nil, and the approval gate then no-ops rather than failing the
-	// build — the same graceful-degradation the Python gate uses when the pause
-	// substrate is unavailable).
-	if c, cerr := client.New(server, client.WithBearerToken(token)); cerr == nil {
-		n.approvals = c
-	}
-
-	// Wire the orchestrator approval seam once: the plan-approval gate resolves
-	// its pause client through this provider. The request-scoped ApprovalRequest
-	// is ignored — a single process-wide SDK client serves every execution.
-	orch.SetApprovalClientProvider(func(orch.ApprovalRequest) hitl.ApprovalClient {
-		return n.approvals
+	// Wire the orchestrator pause seam once: the plan-approval gate pauses the
+	// execution through this provider. The *agent.Agent satisfies hitl.Pauser
+	// via its Pause method (webhook-resumed — no polling); the request-scoped
+	// ApprovalRequest is ignored, as a single process-wide agent serves every
+	// execution.
+	orch.SetPauserProvider(func(orch.ApprovalRequest) hitl.Pauser {
+		return n.App
 	})
 
 	return n, nil

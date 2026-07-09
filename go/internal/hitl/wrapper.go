@@ -41,7 +41,7 @@ type ReasonerInvoke func(ctx context.Context, kwargs map[string]any) (map[string
 // AskUserBudget). A nil Budget defaults to Remaining=DefaultAskUserBudget.
 type RunWithAskUserParams struct {
 	App            App
-	Approvals      ApprovalClient
+	Pauser         Pauser
 	Hax            *HaxClient
 	Budget         *AskUserBudget
 	MaxIterations  int // default DefaultAskUserMaxIterations
@@ -129,7 +129,7 @@ func RunWithAskUser(
 			"%s: pausing for ask_user_via_form (iteration %d, budget_remaining=%d)", label, iteration, budget.Remaining),
 			"ask_user", "pause", label)
 
-		response := RequestUserInputAndPause(ctx, p.App, p.Approvals, p.Hax, *spec, RequestUserInputParams{
+		response := RequestUserInputAndPause(ctx, p.App, p.Pauser, p.Hax, *spec, RequestUserInputParams{
 			NodeID:         p.NodeID,
 			ExecutionID:    p.ExecutionID,
 			ExpiresInHours: p.ExpiresInHours,

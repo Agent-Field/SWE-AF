@@ -47,10 +47,10 @@ type Deps struct {
 	// handlers remain usable in tests without a live agent.
 	App hitl.App
 
-	// Approvals is the poll-based approval client the ask-user loop drives
-	// (RequestApproval + WaitForApproval). Used only by the HITL-wrapped
-	// reasoners; may be nil when HITL is disabled.
-	Approvals hitl.ApprovalClient
+	// Pauser is the pause surface the ask-user loop drives (agent.Pause —
+	// webhook-resumed). Used only by the HITL-wrapped reasoners; may be nil when
+	// HITL is disabled.
+	Pauser hitl.Pauser
 
 	// BuildHaxClient builds the Hax request client for the HITL-wrapped reasoners,
 	// mirroring build_hax_client_from_env() being called inside each Python
@@ -58,8 +58,9 @@ type Deps struct {
 	// client means HITL is disabled and any ask_user_form is ignored.
 	BuildHaxClient func() *hitl.HaxClient
 
-	// NodeID identifies this node when transitioning an execution to "waiting"
-	// (RequestApproval). Mirrors the Python router node id.
+	// NodeID is the Python router node id, threaded into the ask-user params for
+	// parity. The pause itself is issued via agent.Pause, which resolves the node
+	// from the agent, so NodeID no longer drives the "waiting" transition.
 	NodeID string
 
 	// AgentFieldServer is the control-plane base URL; the approval webhook URL is

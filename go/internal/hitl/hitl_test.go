@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
-	"github.com/Agent-Field/agentfield/sdk/go/client"
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
 )
 
 // ---------------------------------------------------------------------------
@@ -28,31 +28,23 @@ func (s *silentApp) Note(_ context.Context, message string, _ ...string) {
 	s.notes = append(s.notes, message)
 }
 
-// fakeApprovals is an in-memory ApprovalClient.
-type fakeApprovals struct {
-	reqCalls  int
-	reqErr    error
-	lastReq   client.RequestApprovalRequest
-	waitResp  *client.ApprovalStatusResponse
-	waitErr   error
-	waitCalls int
+// fakePauser is an in-memory Pauser standing in for *agent.Agent.Pause. It
+// records the pause count and last options, and returns a scripted result/err,
+// mirroring the webhook-resumed pause (no polling).
+type fakePauser struct {
+	calls    int
+	lastOpts agent.PauseOptions
+	result   *agent.ApprovalResult
+	err      error
 }
 
-func (f *fakeApprovals) RequestApproval(_ context.Context, _, _ string, req client.RequestApprovalRequest) (*client.RequestApprovalResponse, error) {
-	f.reqCalls++
-	f.lastReq = req
-	if f.reqErr != nil {
-		return nil, f.reqErr
+func (f *fakePauser) Pause(_ context.Context, opts agent.PauseOptions) (*agent.ApprovalResult, error) {
+	f.calls++
+	f.lastOpts = opts
+	if f.err != nil {
+		return nil, f.err
 	}
-	return &client.RequestApprovalResponse{ApprovalRequestID: req.ApprovalRequestID, ApprovalRequestURL: req.ApprovalRequestURL}, nil
-}
-
-func (f *fakeApprovals) WaitForApproval(_ context.Context, _, _ string, _ *client.WaitForApprovalOptions) (*client.ApprovalStatusResponse, error) {
-	f.waitCalls++
-	if f.waitErr != nil {
-		return nil, f.waitErr
-	}
-	return f.waitResp, nil
+	return f.result, nil
 }
 
 // newHaxTestServer returns a HaxClient wired to an httptest server that always
@@ -258,41 +250,69 @@ func TestParseFeedbackJSONFallback(t *testing.T) {
 
 func TestRequestUserInputSubmittedPath(t *testing.T) {
 	hax, _ := newHaxTestServer(t, "req-1", "https://hax/r/req-1")
-	approvals := &fakeApprovals{waitResp: &client.ApprovalStatusResponse{
-		Status:   "approved",
-		Response: map[string]any{"values": map[string]any{"x": "yes"}},
+	// decision="approved" with the submitted form values under the webhook's
+	// parsed response (RawResponse["values"]).
+	pauser := &fakePauser{result: &agent.ApprovalResult{
+		Decision:    "approved",
+		RawResponse: map[string]any{"values": map[string]any{"x": "yes"}},
 	}}
 	spec := schemas.AskUserForm{Title: "Question", Fields: []schemas.AskUserFormField{{ID: "x", Type: schemas.FieldTypeInput, Label: "X"}}}
 
-	out := RequestUserInputAndPause(context.Background(), &silentApp{}, approvals, hax, spec, RequestUserInputParams{ExpiresInHours: 1})
+	out := RequestUserInputAndPause(context.Background(), &silentApp{}, pauser, hax, spec, RequestUserInputParams{ExpiresInHours: 1})
 	if out.Status != "submitted" || out.Values["x"] != "yes" {
 		t.Errorf("out = %+v", out)
 	}
-	if approvals.lastReq.ApprovalRequestID != "req-1" || approvals.lastReq.ApprovalRequestURL != "https://hax/r/req-1" {
-		t.Errorf("request-approval got %+v", approvals.lastReq)
+	// The hax-created request id/url are threaded into the pause options (the
+	// SDK derives the callback URL from the agent's public URL, so we assert on
+	// the approval-request identity we do control).
+	if pauser.lastOpts.ApprovalRequestID != "req-1" || pauser.lastOpts.ApprovalRequestURL != "https://hax/r/req-1" {
+		t.Errorf("pause opts got %+v", pauser.lastOpts)
+	}
+	if pauser.lastOpts.ExpiresInHours != 1 {
+		t.Errorf("expires_in_hours = %d, want 1", pauser.lastOpts.ExpiresInHours)
+	}
+}
+
+func TestRequestUserInputRequestChangesIsSubmitted(t *testing.T) {
+	// decision="request_changes" still counts as a filled-out form → submitted,
+	// per the decision→status table.
+	hax, _ := newHaxTestServer(t, "r", "u")
+	pauser := &fakePauser{result: &agent.ApprovalResult{
+		Decision:    "request_changes",
+		RawResponse: map[string]any{"values": map[string]any{"k": "v"}},
+	}}
+	spec := schemas.AskUserForm{Title: "Q", Fields: []schemas.AskUserFormField{{ID: "k", Type: schemas.FieldTypeInput, Label: "K"}}}
+
+	out := RequestUserInputAndPause(context.Background(), &silentApp{}, pauser, hax, spec, RequestUserInputParams{ExpiresInHours: 1})
+	if out.Status != "submitted" || out.Values["k"] != "v" {
+		t.Errorf("out = %+v", out)
 	}
 }
 
 func TestRequestUserInputTimeoutOnExpired(t *testing.T) {
+	// A plain expiry is delivered as decision="expired" (NOT an error) and maps
+	// to status="timeout".
 	hax, _ := newHaxTestServer(t, "r", "u")
-	approvals := &fakeApprovals{waitResp: &client.ApprovalStatusResponse{Status: "expired"}}
+	pauser := &fakePauser{result: &agent.ApprovalResult{Decision: "expired"}}
 	spec := schemas.AskUserForm{Title: "Q", Fields: []schemas.AskUserFormField{{ID: "x", Type: schemas.FieldTypeInput, Label: "X"}}}
 
-	out := RequestUserInputAndPause(context.Background(), &silentApp{}, approvals, hax, spec, RequestUserInputParams{ExpiresInHours: 1})
+	out := RequestUserInputAndPause(context.Background(), &silentApp{}, pauser, hax, spec, RequestUserInputParams{ExpiresInHours: 1})
 	if out.Status != "timeout" {
 		t.Errorf("status = %s", out.Status)
 	}
 }
 
 func TestRequestUserInputCancelledOnRejected(t *testing.T) {
+	// Feedback now rides on ApprovalResult.Feedback (a top-level field the SDK
+	// parses out of the webhook payload), not inside RawResponse.
 	hax, _ := newHaxTestServer(t, "r", "u")
-	approvals := &fakeApprovals{waitResp: &client.ApprovalStatusResponse{
-		Status:   "rejected",
-		Response: map[string]any{"feedback": "user said no"},
+	pauser := &fakePauser{result: &agent.ApprovalResult{
+		Decision: "rejected",
+		Feedback: "user said no",
 	}}
 	spec := schemas.AskUserForm{Title: "Q", Fields: []schemas.AskUserFormField{{ID: "x", Type: schemas.FieldTypeInput, Label: "X"}}}
 
-	out := RequestUserInputAndPause(context.Background(), &silentApp{}, approvals, hax, spec, RequestUserInputParams{ExpiresInHours: 1})
+	out := RequestUserInputAndPause(context.Background(), &silentApp{}, pauser, hax, spec, RequestUserInputParams{ExpiresInHours: 1})
 	if out.Status != "cancelled" {
 		t.Errorf("status = %s", out.Status)
 	}
@@ -301,29 +321,60 @@ func TestRequestUserInputCancelledOnRejected(t *testing.T) {
 	}
 }
 
-func TestRequestUserInputWaitDeadlineIsTimeout(t *testing.T) {
+func TestRequestUserInputErrorDecisionIsError(t *testing.T) {
+	// decision="error" maps to status="error", surfacing the feedback as the
+	// error message.
 	hax, _ := newHaxTestServer(t, "r", "u")
-	approvals := &fakeApprovals{waitErr: context.DeadlineExceeded}
+	pauser := &fakePauser{result: &agent.ApprovalResult{
+		Decision: "error",
+		Feedback: "control plane unreachable",
+	}}
 	spec := schemas.AskUserForm{Title: "Q", Fields: []schemas.AskUserFormField{{ID: "x", Type: schemas.FieldTypeInput, Label: "X"}}}
 
-	out := RequestUserInputAndPause(context.Background(), &silentApp{}, approvals, hax, spec, RequestUserInputParams{})
+	out := RequestUserInputAndPause(context.Background(), &silentApp{}, pauser, hax, spec, RequestUserInputParams{ExpiresInHours: 1})
+	if out.Status != "error" || out.Error == nil || *out.Error != "control plane unreachable" {
+		t.Errorf("out = %+v", out)
+	}
+}
+
+func TestRequestUserInputPauseDeadlineIsTimeout(t *testing.T) {
+	// A context deadline surfaced as a Pause error maps to timeout (mirrors
+	// Python's asyncio.TimeoutError branch).
+	hax, _ := newHaxTestServer(t, "r", "u")
+	pauser := &fakePauser{err: context.DeadlineExceeded}
+	spec := schemas.AskUserForm{Title: "Q", Fields: []schemas.AskUserFormField{{ID: "x", Type: schemas.FieldTypeInput, Label: "X"}}}
+
+	out := RequestUserInputAndPause(context.Background(), &silentApp{}, pauser, hax, spec, RequestUserInputParams{})
 	if out.Status != "timeout" {
 		t.Errorf("status = %s", out.Status)
 	}
 }
 
+func TestRequestUserInputPauseErrorIsError(t *testing.T) {
+	// A non-deadline Pause error (e.g. control plane could not be notified)
+	// surfaces as status="error".
+	hax, _ := newHaxTestServer(t, "r", "u")
+	pauser := &fakePauser{err: errors.New("boom")}
+	spec := schemas.AskUserForm{Title: "Q", Fields: []schemas.AskUserFormField{{ID: "x", Type: schemas.FieldTypeInput, Label: "X"}}}
+
+	out := RequestUserInputAndPause(context.Background(), &silentApp{}, pauser, hax, spec, RequestUserInputParams{})
+	if out.Status != "error" || out.Error == nil || !strings.Contains(*out.Error, "pause failed") {
+		t.Errorf("out = %+v", out)
+	}
+}
+
 func TestRequestUserInputBuildFormErrorIsError(t *testing.T) {
 	hax, _ := newHaxTestServer(t, "r", "u")
-	approvals := &fakeApprovals{}
-	// Slider with no min/max → build error → status error, no hax call.
+	pauser := &fakePauser{}
+	// Slider with no min/max → build error → status error, no pause call.
 	spec := schemas.AskUserForm{Title: "Q", Fields: []schemas.AskUserFormField{{ID: "s", Type: schemas.FieldTypeSlider, Label: "s"}}}
 
-	out := RequestUserInputAndPause(context.Background(), &silentApp{}, approvals, hax, spec, RequestUserInputParams{})
+	out := RequestUserInputAndPause(context.Background(), &silentApp{}, pauser, hax, spec, RequestUserInputParams{})
 	if out.Status != "error" || out.Error == nil || !strings.Contains(*out.Error, "Failed to build form") {
 		t.Errorf("out = %+v", out)
 	}
-	if approvals.reqCalls != 0 {
-		t.Errorf("request-approval should not be called on build error")
+	if pauser.calls != 0 {
+		t.Errorf("pause should not be called on build error")
 	}
 }
 
@@ -419,20 +470,20 @@ func askForm() map[string]any {
 
 func TestWrapperNoAskPassthrough(t *testing.T) {
 	hax, _ := newHaxTestServer(t, "r", "u")
-	approvals := &fakeApprovals{}
+	pauser := &fakePauser{}
 	calls := 0
 	invoke := func(_ context.Context, _ map[string]any) (map[string]any, error) {
 		calls++
 		return map[string]any{"action": "DONE"}, nil
 	}
 	out, err := RunWithAskUser(context.Background(), invoke, map[string]any{}, RunWithAskUserParams{
-		App: &silentApp{}, Approvals: approvals, Hax: hax, Budget: &AskUserBudget{Remaining: 3},
+		App: &silentApp{}, Pauser: pauser, Hax: hax, Budget: &AskUserBudget{Remaining: 3},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["action"] != "DONE" || calls != 1 || approvals.reqCalls != 0 {
-		t.Errorf("out=%v calls=%d reqCalls=%d", out, calls, approvals.reqCalls)
+	if out["action"] != "DONE" || calls != 1 || pauser.calls != 0 {
+		t.Errorf("out=%v calls=%d reqCalls=%d", out, calls, pauser.calls)
 	}
 }
 
@@ -453,27 +504,27 @@ func TestWrapperHaxDisabledClearsField(t *testing.T) {
 
 func TestWrapperBudgetExhaustedClearsField(t *testing.T) {
 	hax, _ := newHaxTestServer(t, "r", "u")
-	approvals := &fakeApprovals{}
+	pauser := &fakePauser{}
 	budget := &AskUserBudget{Remaining: 0}
 	invoke := func(_ context.Context, _ map[string]any) (map[string]any, error) {
 		return map[string]any{"action": "ASKING", "ask_user_form": askForm()}, nil
 	}
 	out, err := RunWithAskUser(context.Background(), invoke, map[string]any{}, RunWithAskUserParams{
-		App: &silentApp{}, Approvals: approvals, Hax: hax, Budget: budget,
+		App: &silentApp{}, Pauser: pauser, Hax: hax, Budget: budget,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out["ask_user_form"] != nil || approvals.reqCalls != 0 || budget.Remaining != 0 {
-		t.Errorf("out=%v reqCalls=%d budget=%d", out, approvals.reqCalls, budget.Remaining)
+	if out["ask_user_form"] != nil || pauser.calls != 0 || budget.Remaining != 0 {
+		t.Errorf("out=%v reqCalls=%d budget=%d", out, pauser.calls, budget.Remaining)
 	}
 }
 
 func TestWrapperOneAskRoundThenNoAsk(t *testing.T) {
 	hax, _ := newHaxTestServer(t, "req-99", "https://hax/r/req-99")
-	approvals := &fakeApprovals{waitResp: &client.ApprovalStatusResponse{
-		Status:   "approved",
-		Response: map[string]any{"values": map[string]any{"x": "answer"}},
+	pauser := &fakePauser{result: &agent.ApprovalResult{
+		Decision:    "approved",
+		RawResponse: map[string]any{"values": map[string]any{"x": "answer"}},
 	}}
 	seq := []map[string]any{
 		{"action": "ASKING", "ask_user_form": askForm()},
@@ -491,7 +542,7 @@ func TestWrapperOneAskRoundThenNoAsk(t *testing.T) {
 	}
 	budget := &AskUserBudget{Remaining: 5}
 	out, err := RunWithAskUser(context.Background(), invoke, map[string]any{"prior_user_responses": []any{}}, RunWithAskUserParams{
-		App: &silentApp{}, Approvals: approvals, Hax: hax, Budget: budget,
+		App: &silentApp{}, Pauser: pauser, Hax: hax, Budget: budget,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -520,8 +571,8 @@ func TestWrapperOneAskRoundThenNoAsk(t *testing.T) {
 
 func TestWrapperBudgetBoundsReinvocationToTwo(t *testing.T) {
 	hax, _ := newHaxTestServer(t, "r", "u")
-	approvals := &fakeApprovals{waitResp: &client.ApprovalStatusResponse{
-		Status: "approved", Response: map[string]any{"values": map[string]any{"x": "y"}},
+	pauser := &fakePauser{result: &agent.ApprovalResult{
+		Decision: "approved", RawResponse: map[string]any{"values": map[string]any{"x": "y"}},
 	}}
 	budget := &AskUserBudget{Remaining: 2}
 	call := 0
@@ -530,13 +581,13 @@ func TestWrapperBudgetBoundsReinvocationToTwo(t *testing.T) {
 		return map[string]any{"action": "ASKING", "ask_user_form": askForm()}, nil
 	}
 	out, err := RunWithAskUser(context.Background(), invoke, map[string]any{}, RunWithAskUserParams{
-		App: &silentApp{}, Approvals: approvals, Hax: hax, Budget: budget, MaxIterations: 10,
+		App: &silentApp{}, Pauser: pauser, Hax: hax, Budget: budget, MaxIterations: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if approvals.reqCalls != 2 {
-		t.Errorf("pauses = %d, want 2 (budget bound)", approvals.reqCalls)
+	if pauser.calls != 2 {
+		t.Errorf("pauses = %d, want 2 (budget bound)", pauser.calls)
 	}
 	if call != 3 {
 		t.Errorf("invoke = %d, want 3 (2 asks + 1 that hits budget=0)", call)
@@ -548,8 +599,8 @@ func TestWrapperBudgetBoundsReinvocationToTwo(t *testing.T) {
 
 func TestWrapperMaxIterationsBound(t *testing.T) {
 	hax, _ := newHaxTestServer(t, "r", "u")
-	approvals := &fakeApprovals{waitResp: &client.ApprovalStatusResponse{
-		Status: "approved", Response: map[string]any{"values": map[string]any{"x": "y"}},
+	pauser := &fakePauser{result: &agent.ApprovalResult{
+		Decision: "approved", RawResponse: map[string]any{"values": map[string]any{"x": "y"}},
 	}}
 	budget := &AskUserBudget{Remaining: 10}
 	call := 0
@@ -558,13 +609,13 @@ func TestWrapperMaxIterationsBound(t *testing.T) {
 		return map[string]any{"action": "ASKING", "ask_user_form": askForm()}, nil
 	}
 	_, err := RunWithAskUser(context.Background(), invoke, map[string]any{}, RunWithAskUserParams{
-		App: &silentApp{}, Approvals: approvals, Hax: hax, Budget: budget, MaxIterations: 3,
+		App: &silentApp{}, Pauser: pauser, Hax: hax, Budget: budget, MaxIterations: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if approvals.reqCalls != 3 {
-		t.Errorf("pauses = %d, want 3 (max_iterations bound)", approvals.reqCalls)
+	if pauser.calls != 3 {
+		t.Errorf("pauses = %d, want 3 (max_iterations bound)", pauser.calls)
 	}
 	if call != 4 {
 		t.Errorf("invoke = %d, want 4", call)
@@ -683,5 +734,5 @@ func TestScopedCredentialsEmpty(t *testing.T) {
 	}
 }
 
-// Ensure the real SDK client satisfies ApprovalClient (compile-time guard).
-var _ ApprovalClient = (*client.Client)(nil)
+// Ensure the real SDK agent satisfies Pauser (compile-time guard).
+var _ Pauser = (*agent.Agent)(nil)

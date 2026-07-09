@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Agent-Field/agentfield/sdk/go/client"
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
@@ -81,22 +81,20 @@ func (c *captureApp) messageWithTag(tag string) string {
 	return ""
 }
 
-// fakeApprovals is an in-memory ApprovalClient.
-type fakeApprovals struct {
-	reqCalls int
-	resp     *client.ApprovalStatusResponse
+// fakePauser is an in-memory Pauser standing in for *agent.Agent.Pause. It
+// counts pauses and defaults to an "approved" decision so the ask-user loop
+// completes when a test does not script a specific result.
+type fakePauser struct {
+	calls  int
+	result *agent.ApprovalResult
 }
 
-func (f *fakeApprovals) RequestApproval(_ context.Context, _, _ string, req client.RequestApprovalRequest) (*client.RequestApprovalResponse, error) {
-	f.reqCalls++
-	return &client.RequestApprovalResponse{ApprovalRequestID: req.ApprovalRequestID}, nil
-}
-
-func (f *fakeApprovals) WaitForApproval(_ context.Context, _, _ string, _ *client.WaitForApprovalOptions) (*client.ApprovalStatusResponse, error) {
-	if f.resp != nil {
-		return f.resp, nil
+func (f *fakePauser) Pause(_ context.Context, _ agent.PauseOptions) (*agent.ApprovalResult, error) {
+	f.calls++
+	if f.result != nil {
+		return f.result, nil
 	}
-	return &client.ApprovalStatusResponse{Status: "approved", Response: map[string]any{"values": map[string]any{}}}, nil
+	return &agent.ApprovalResult{Decision: "approved", RawResponse: map[string]any{"values": map[string]any{}}}, nil
 }
 
 func asMap(t *testing.T, v any) map[string]any {
@@ -332,11 +330,11 @@ func TestRunIssueAdvisorReInvocationBounded(t *testing.T) {
 		return &harness.Result{Parsed: dest}, nil
 	}}
 	haxClient, _ := newHaxServer(t)
-	approvals := &fakeApprovals{}
+	pauser := &fakePauser{}
 	deps := &Deps{
 		Harness:        mh,
 		App:            &captureApp{},
-		Approvals:      approvals,
+		Pauser:         pauser,
 		BuildHaxClient: func() *hitl.HaxClient { return haxClient },
 	}
 
@@ -346,8 +344,8 @@ func TestRunIssueAdvisorReInvocationBounded(t *testing.T) {
 	if mh.calls != 3 {
 		t.Errorf("harness calls = %d, want 3 (budget 2 => 3 invocations)", mh.calls)
 	}
-	if approvals.reqCalls != 2 {
-		t.Errorf("pause count = %d, want 2 (budget bound)", approvals.reqCalls)
+	if pauser.calls != 2 {
+		t.Errorf("pause count = %d, want 2 (budget bound)", pauser.calls)
 	}
 }
 
