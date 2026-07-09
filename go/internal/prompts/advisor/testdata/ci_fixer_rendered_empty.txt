@@ -1,0 +1,16 @@
+## CI Fix Task
+- **Repository path**: `/repo`
+- **PR**: #7 — https://gh/pr/7
+- **Integration branch (push target)**: `integ`
+- **Base branch**: `main`
+- **Attempt**: 1 of 2
+
+### Failing checks
+(none reported — investigate via `gh pr checks` directly)
+
+## Your Task
+1. Diagnose the root cause of each failing check (read code + logs).
+2. Fix the PRODUCTION code — never silence or weaken the failing test (see system prompt for the exhaustive forbidden list).
+3. Re-run the failing tests locally with the same command CI ran.
+4. Commit only the files that belong to the fix and push to `integ`.
+5. Return a `CIFixResult` JSON object with the new commit SHA.

@@ -1,0 +1,68 @@
+## Prior Clarification From User
+
+### Question 1: Drop toml support?
+_Status: submitted_
+
+Values submitted by user:
+- **choice**: yes
+- **note**: toml rarely used
+
+User feedback: go ahead
+
+USE THESE PRIOR ANSWERS. DO NOT RE-ASK THE SAME QUESTIONS. Only emit `ask_user_form` if you need DIFFERENT clarification not already covered above.
+## Budget: Invocation 2/2 (0 remaining)
+**This is your LAST invocation.** If you choose RETRY, the coding loop will run once more. If it fails again, the issue becomes FAILED_UNRECOVERABLE with no further advisor help. Consider ACCEPT_WITH_DEBT if the code is close.
+
+## Current Issue
+- **Name**: parser
+- **Title**: Parser
+- **Description**: Parse config
+- **Acceptance Criteria**:
+  - parses yaml
+- **Dependencies**: ['schema']
+- **Provides**: ['config-api']
+
+## Original Acceptance Criteria (before modifications)
+  - parses yaml
+  - parses toml
+
+## Worktree Path
+`/wt/parser`
+Inspect this directory to see the current state of the code.
+
+## Failure Result
+- **Outcome**: FAILED_RECOVERABLE
+- **Error**: assertion failed
+- **Attempts**: 3
+- **Files changed**: ['parser.py']
+
+**Error context**:
+```
+long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trace long trac
+```
+
+## Iteration History
+- Iter 1: action=code, QA=PASS, Review=REJECTED [BLOCKING] — close but reviewer blocked on naming close but reviewer blocked on naming close but reviewer blocked on naming close but reviewer blocked on naming cl
+- Iter 2: action=fix, QA=FAIL, Review=REJECTED — regressed
+
+## Previous Adaptations (DO NOT REPEAT)
+- **RETRY_MODIFIED**: dropped toml
+  Dropped: ['parses toml']
+
+## DAG Context
+- Completed issues: ['schema']
+- Failed issues: ['legacy']
+- PRD summary: A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config service. A config ser
+- PRD: `/plan/prd.md`
+- Architecture: `/plan/arch.md`
+- Issues: `/plan/issues`
+
+## Split Depth Warning
+This issue was already split from 'big-config'. **Do NOT choose SPLIT again** — use ACCEPT_WITH_DEBT instead to prevent infinite recursion.
+
+## Your Task
+1. Read the iteration history and failure details above.
+2. Inspect the worktree to see the current state of the code.
+3. Diagnose why the coding loop failed.
+4. Choose the least disruptive action that moves the project forward.
+5. Return an IssueAdvisorDecision JSON object.

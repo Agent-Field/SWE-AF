@@ -1,0 +1,45 @@
+## PR Resolve Task
+- **Repository path**: `/repo`
+- **PR**: #42 — https://gh/pr/42
+- **Head branch (push target)**: `feature`
+- **Base branch**: `main`
+- **Merge state**: `conflict`
+
+### User-requested change (primary instruction)
+Make it faster
+
+### Conflicted files (unresolved merge markers)
+- `app.py`
+- `config.py`
+
+A `git merge origin/main` is currently in progress. Resolve every conflict, stage the files, and complete the merge with `git commit --no-edit` BEFORE moving on to CI / review comments.
+
+### Failing CI checks
+#### tests  (workflow: ci.yml)  [failure]
+Details: https://ci/9
+Log tail (last failing output):
+```
+FAIL test_x
+```
+
+### Review comments to address
+Each comment was pre-classified as actionable. Triage each one: if it asks for a change you agree with, make it; if not, mark `addressed=false` with a one-line reason. Preserve `comment_id` and `thread_id` verbatim in your output — the orchestrator uses them to reply and resolve the thread.
+
+#### Comment 101 (thread T1)
+`app.py:12` — @alice: rename this
+(https://gh/c/101)
+
+#### Comment 102 (thread n/a)
+@bob: general note
+
+### Additional context
+Keep API stable.
+
+## Your Task
+1. Apply the user-requested change described above. This is the PRIMARY instruction for this run; CI fixes and review comments below are secondary work to fold in along the way.
+2. Complete any in-progress merge from base.
+3. Fix every failing CI check by changing PRODUCTION code (no silenced tests).
+4. Address every actionable review comment, recording each one in `addressed_comments` (true/false + brief note).
+5. Re-run failing tests locally to confirm they pass.
+6. Commit + `git push origin feature` — do NOT create a new PR.
+7. Return a `PRResolveResult` JSON object.

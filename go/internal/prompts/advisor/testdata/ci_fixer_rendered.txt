@@ -1,0 +1,32 @@
+## CI Fix Task
+- **Repository path**: `/repo`
+- **PR**: #42 — https://gh/pr/42
+- **Integration branch (push target)**: `integ`
+- **Base branch**: `main`
+- **Attempt**: 2 of 3
+- **Original build goal**: Add feature X
+
+### Issues delivered by this PR (for context)
+- **auth**: added auth
+
+### Previous CI-fix attempts on this PR
+- Attempt 1: bumped dep (commit abcdef1)
+
+The failures below are what is STILL red after those attempts. Re-read the new log tails carefully — the root cause may be different from what was previously suspected.
+
+### Failing checks
+#### unit-tests  (workflow: ci.yml)  [failure]
+Details: https://ci/1
+Log tail (last failing output):
+```
+E   assert 1 == 2
+```
+#### lint
+(No log captured. Run `gh run view <run-id> --log-failed` to fetch it.)
+
+## Your Task
+1. Diagnose the root cause of each failing check (read code + logs).
+2. Fix the PRODUCTION code — never silence or weaken the failing test (see system prompt for the exhaustive forbidden list).
+3. Re-run the failing tests locally with the same command CI ran.
+4. Commit only the files that belong to the fix and push to `integ`.
+5. Return a `CIFixResult` JSON object with the new commit SHA.

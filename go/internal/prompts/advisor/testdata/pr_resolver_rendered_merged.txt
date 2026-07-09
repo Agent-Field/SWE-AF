@@ -1,0 +1,22 @@
+## PR Resolve Task
+- **Repository path**: `/repo`
+- **PR**: #8 — https://gh/pr/8
+- **Head branch (push target)**: `feature`
+- **Base branch**: `main`
+- **Merge state**: `merged`
+
+The orchestrator already merged `origin/main` into the head branch with no conflicts — that commit is already on HEAD. You do not need to redo it; proceed to CI + comments.
+
+### Failing CI checks
+(none — CI is green or hasn't run yet.)
+
+### Review comments to address
+(none flagged actionable.)
+
+## Your Task
+1. Complete any in-progress merge from base.
+2. Fix every failing CI check by changing PRODUCTION code (no silenced tests).
+3. Address every actionable review comment, recording each one in `addressed_comments` (true/false + brief note).
+4. Re-run failing tests locally to confirm they pass.
+5. Commit + `git push origin feature` — do NOT create a new PR.
+6. Return a `PRResolveResult` JSON object.

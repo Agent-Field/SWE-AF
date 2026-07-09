@@ -1,0 +1,53 @@
+## Workspace Repositories
+
+This task spans multiple repositories. Each repository is listed below with its role and local path:
+
+- **api** (role: primary): `/ws/api`
+- **lib** (role: dependency): `/ws/lib`
+
+## Failed Issue
+- **Name**: add-auth
+- **Title**: Add auth
+- **Description**: Implement JWT auth
+- **Acceptance Criteria**:
+  - login works
+  - logout works
+- **Dependencies**: ['db-schema']
+- **Provides**: ['auth-api']
+- **Files to create**: ['auth.py']
+- **Files to modify**: ['app.py', 'config.py']
+
+## Failure Details (Attempt 2)
+**Error message**: ModuleNotFoundError: No module named 'jwt'
+
+**Full error context**:
+```
+Traceback...
+  line 5
+```
+
+## Previous Retry Guidance (what was already tried)
+Previously tried bcrypt; too slow.
+
+## Previous Error: ImportError: jwt
+
+## Upstream Failure Notes
+- upstream db not ready
+- flaky test
+
+## Project Context
+### PRD Summary
+Build an auth service.
+### Architecture Summary
+FastAPI + Postgres.
+### Reference Docs
+- PRD: `/plan/prd.md`
+- Architecture: `/plan/arch.md`
+
+## Your Task
+1. Read the error context carefully.
+2. Inspect relevant files in the codebase to understand the failure.
+3. Diagnose the root cause.
+4. Decide whether a retry with different guidance could succeed.
+5. If yes, provide specific, actionable guidance in `modified_context`.
+6. Return a RetryAdvice JSON object.
