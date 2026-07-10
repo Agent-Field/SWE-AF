@@ -249,11 +249,16 @@ func WatchPRChecks(ctx context.Context, repoPath string, prNumber int, waitSecon
 	sawAnyCheck := false
 	sawAnyForSHA := false // only meaningful when expectedSHA != ""
 
-	// Field set selected so we can both classify checks AND identify which
-	// commit they belong to. Older `gh` versions don't expose `headSha` for
-	// PR-level checks; the loop falls back to PR-level filtering when the
-	// field is missing on every row.
-	const fields = "bucket,state,name,workflow,link,headSha"
+	// Field set for classifying checks. `gh pr checks --json` does NOT expose a
+	// per-check commit SHA (its schema is bucket,completedAt,description,event,
+	// link,name,startedAt,state,workflow) — requesting an unknown field like
+	// `headSha` makes `gh` reject the WHOLE call ("Unknown JSON field"), which
+	// previously turned every watch into status="error". We therefore request
+	// only valid fields; headSHAOf() consequently returns "" for every check, so
+	// SHA anchoring degrades to PR-level verdicts via the shaUnsupported path
+	// below (the intended fallback). Per-check SHA anchoring is not achievable
+	// through `gh pr checks`.
+	const fields = "bucket,state,name,workflow,link"
 
 	for {
 		// Honor cancellation promptly.
@@ -285,12 +290,22 @@ func WatchPRChecks(ctx context.Context, repoPath string, prNumber int, waitSecon
 				lastChecks = parsed
 			}
 			if len(lastChecks) == 0 {
-				return schemas.CIWatchResult{
-					Status:         "error",
-					PRNumber:       prNumber,
-					ElapsedSeconds: elapsed(),
-					Summary:        "`gh pr checks` failed: " + firstN(stderr, 300),
+				// `gh pr checks` exits non-zero both for genuine errors AND for
+				// the benign "no checks reported on the '<branch>' branch" case —
+				// a PR whose repo has no CI workflows configured. That benign case
+				// is precisely the no_checks signal, NOT an error: treat it as
+				// "no checks seen this poll" and keep polling so the no_checks
+				// verdict fires after the wait cap. Only a real error (auth,
+				// network, unknown flag) aborts the watch.
+				if !isNoChecksReported(stderr) {
+					return schemas.CIWatchResult{
+						Status:         "error",
+						PRNumber:       prNumber,
+						ElapsedSeconds: elapsed(),
+						Summary:        "`gh pr checks` failed: " + firstN(stderr, 300),
+					}
 				}
+				lastChecks = nil // benign: fall through to the no_checks/wait logic
 			}
 		} else {
 			parsed, err := parseChecks(proc.Stdout)
@@ -411,6 +426,14 @@ func WatchPRChecks(ctx context.Context, repoPath string, prNumber int, waitSecon
 
 		sleepFn(ctx, pollSeconds)
 	}
+}
+
+// isNoChecksReported reports whether a `gh pr checks` stderr is the benign
+// "no checks reported on the '<branch>' branch" message (a PR with no CI
+// configured), as opposed to a genuine failure. gh emits this with a non-zero
+// exit code, so callers must special-case it to reach the no_checks verdict.
+func isNoChecksReported(stderr string) bool {
+	return strings.Contains(strings.ToLower(stderr), "no checks reported")
 }
 
 // firstN returns the first n runes of s (mirrors Python's s[:n] semantics).

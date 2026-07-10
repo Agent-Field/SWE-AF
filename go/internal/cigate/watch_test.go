@@ -280,6 +280,47 @@ func TestNoChecksWhenPRHasNoCI(t *testing.T) {
 	}
 }
 
+// Contract: `gh pr checks` on a PR whose repo has NO CI workflows exits
+// NON-ZERO with an EMPTY stdout and a "no checks reported on the '<branch>'
+// branch" stderr — the real gh behavior (verified against gh 2.76.2), NOT an
+// empty JSON array with a zero exit. The watcher must treat that as the
+// no_checks signal after the wait cap, not status="error".
+//
+// Regression test: the pre-fix watcher returned status="error" here (it aborted
+// on any non-zero exit with an empty body), so a workflow-less repo could never
+// reach the no_checks verdict.
+func TestNoChecksWhenGhReportsNoChecksReported(t *testing.T) {
+	r := &scriptedRunner{}
+	for i := 0; i < 5; i++ {
+		r.checksQueue = append(r.checksQueue, completed(
+			"", "no checks reported on the 'feature/foo' branch", 1))
+	}
+	clock := 0.0
+	r.onCall = func() { clock += 200.0 }
+	defer install(t, r, &clock)()
+
+	res := WatchPRChecks(context.Background(), "/tmp/repo", 7, 300, 50, "")
+	if res.Status != "no_checks" {
+		t.Fatalf("expected no_checks for a repo with no CI, got %+v", res)
+	}
+}
+
+// Contract: a GENUINE `gh pr checks` failure (non-zero exit, empty body, and a
+// stderr that is NOT the benign "no checks reported" message) must still surface
+// as status="error" — the benign-case handling must not swallow real failures.
+func TestGenuineGhErrorStillReported(t *testing.T) {
+	r := &scriptedRunner{}
+	r.checksQueue = append(r.checksQueue, completed(
+		"", "could not determine base repo; authentication failed", 1))
+	clock := 0.0
+	defer install(t, r, &clock)()
+
+	res := WatchPRChecks(context.Background(), "/tmp/repo", 9, 600, 10, "")
+	if res.Status != "error" {
+		t.Fatalf("expected error for a genuine gh failure, got %+v", res)
+	}
+}
+
 // Contract: non-zero exit but valid JSON body => body is truth (failed).
 func TestFailedChecksWithNonzeroExitStillParsed(t *testing.T) {
 	r := &scriptedRunner{}
