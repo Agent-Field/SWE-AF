@@ -49,6 +49,12 @@ services:
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      # Go direct-LLM path (run_qa_synthesizer via the SDK ai.DefaultConfig
+      # client). An OPENAI/OPENROUTER key enables it; AI_BASE_URL/AI_MODEL
+      # override the endpoint/default model. No key -> deterministic fallback.
+      - AI_BASE_URL=${AI_BASE_URL:-}
+      - AI_MODEL=${AI_MODEL:-}
       # build-db lives in the Python stack; reachable over the shared network.
       - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}
     ports:
@@ -76,6 +82,10 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      # Go direct-LLM path (run_qa_synthesizer via the SDK ai.DefaultConfig
+      # client) — endpoint/default-model overrides; keys are shared above.
+      - AI_BASE_URL=${AI_BASE_URL:-}
+      - AI_MODEL=${AI_MODEL:-}
       - OPENCODE_MODEL=${OPENCODE_MODEL:-}
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}

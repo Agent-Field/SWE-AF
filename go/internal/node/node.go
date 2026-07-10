@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
+	"github.com/Agent-Field/agentfield/sdk/go/ai"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
@@ -103,6 +104,13 @@ func BuildAgent(defaultNodeID, defaultPort, description string) (*Node, error) {
 		CLIConfig: &agent.CLIConfig{AppDescription: description},
 	}
 
+	// Enable the direct-LLM path (run_qa_synthesizer, the Go equivalent of
+	// Python's router.ai) when the environment supplies a usable AI config. An
+	// absent or invalid key leaves AIConfig nil so the agent still constructs and
+	// the synthesizer falls back deterministically — without this the LLM branch
+	// was unreachable (agent.AI returns "AI not configured").
+	cfg.AIConfig = resolveAIConfig()
+
 	app, err := agent.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create agent %q: %w", nodeID, err)
@@ -145,6 +153,17 @@ func newCallFn(app *agent.Agent) func(context.Context, string, map[string]any) (
 		}
 		return envelope.UnwrapCallResult(raw, label)
 	}
+}
+
+// resolveAIConfig returns ai.DefaultConfig() when it validates (an OPENAI_API_KEY
+// or OPENROUTER_API_KEY is set), else nil. Returning nil — rather than a broken
+// config — keeps node startup working with no key: the QA-synthesizer LLM branch
+// is simply disabled and its deterministic fallback runs instead.
+func resolveAIConfig() *ai.Config {
+	if c := ai.DefaultConfig(); c.Validate() == nil {
+		return c
+	}
+	return nil
 }
 
 // envOr returns the value of key, or def when the env var is unset or empty.

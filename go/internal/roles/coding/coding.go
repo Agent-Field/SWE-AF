@@ -28,6 +28,7 @@ package coding
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Agent-Field/agentfield/sdk/go/ai"
 
@@ -427,7 +428,7 @@ func RunQASynthesizer(ctx context.Context, deps *Deps, input map[string]any) (an
 
 	resp, aiErr := deps.AI.AI(ctx, taskPrompt,
 		ai.WithSystem(prompts.QASynthesizerSystemPrompt),
-		ai.WithModel(in.Model),
+		ai.WithModel(mapSynthModel(in.Model)),
 		ai.WithSchema(schemas.QASynthesisResult{}),
 	)
 	if aiErr != nil {
@@ -470,6 +471,33 @@ func RunQASynthesizer(ctx context.Context, deps *Deps, input map[string]any) (an
 		Stuck:       false,
 		IterationID: in.IterationID,
 	}, nil
+}
+
+// mapSynthModel maps the short role model alias (haiku/sonnet/opus, the coding
+// loop's cfg.QASynthesizerModel() default is "haiku") to a provider-qualified
+// model id when the direct-LLM client targets OpenRouter — its OpenAI-compatible
+// endpoint has no "haiku" model, so an unmapped alias 400s. Ids already carrying
+// a "/" (already provider-qualified) pass through unchanged, and when the client
+// is not OpenRouter (OpenAI-compatible or no key configured) the alias is left
+// as-is. The OpenRouter decision is re-derived from the same env ai.DefaultConfig
+// reads, matching the AIConfig wired onto the agent in node.BuildAgent.
+func mapSynthModel(model string) string {
+	if strings.Contains(model, "/") {
+		return model
+	}
+	if !ai.DefaultConfig().IsOpenRouter() {
+		return model
+	}
+	switch model {
+	case "haiku":
+		return "anthropic/claude-haiku-4.5"
+	case "sonnet":
+		return "anthropic/claude-sonnet-4.5"
+	case "opus":
+		return "anthropic/claude-opus-4.1"
+	default:
+		return model
+	}
 }
 
 // parseSynthesis mirrors Python's `result.parsed is not None`: a synthesis is
