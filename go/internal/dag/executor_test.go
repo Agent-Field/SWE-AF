@@ -193,7 +193,7 @@ func TestSingleIssueCompletes(t *testing.T) {
 	plan := makePlan([]map[string]any{issue("a")}, [][]string{{"a"}})
 	cfg := testCfg(t, nil)
 
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", cfg)
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", cfg)
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestLevelBarrierWaitsForAll(t *testing.T) {
 		[]map[string]any{issue("a"), issue("b"), issue("c", "a", "b")},
 		[][]string{{"a", "b"}, {"c"}},
 	)
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", testCfg(t, nil))
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", testCfg(t, nil))
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestConcurrencyBounded(t *testing.T) {
 	cfg := testCfg(t, map[string]any{"max_concurrent_issues": 3})
 	dagState := initDAGState(makePlan(issues, [][]string{level}), "/repo", nil, "")
 
-	lr := executeLevel(context.Background(), issues, nil, dagState, cfg, 0, m.fn, "swe-planner", nil, nil)
+	lr := executeLevel(context.Background(), issues, nil, dagState, cfg, 0, m.fn, "swe-planner-go", nil, nil)
 	if len(lr.Completed) != 6 {
 		t.Fatalf("expected 6 completed, got %d", len(lr.Completed))
 	}
@@ -294,7 +294,7 @@ func TestUnlimitedConcurrencyWhenZero(t *testing.T) {
 	}
 	cfg := testCfg(t, map[string]any{"max_concurrent_issues": 0})
 	dagState := initDAGState(makePlan(issues, [][]string{level}), "/repo", nil, "")
-	executeLevel(context.Background(), issues, nil, dagState, cfg, 0, m.fn, "swe-planner", nil, nil)
+	executeLevel(context.Background(), issues, nil, dagState, cfg, 0, m.fn, "swe-planner-go", nil, nil)
 	if got := atomic.LoadInt32(&m.maxActive); got != 4 {
 		t.Fatalf("expected all 4 concurrent (unlimited), got maxActive=%d", got)
 	}
@@ -321,7 +321,7 @@ func TestAdvisorTimeoutFailsNotHang(t *testing.T) {
 	done := make(chan struct{})
 	var state *schemas.DAGState
 	go func() {
-		s, _ := RunDAG(context.Background(), makePlan([]map[string]any{issue("a")}, [][]string{{"a"}}), "/repo", m.fn, "swe-planner", cfg)
+		s, _ := RunDAG(context.Background(), makePlan([]map[string]any{issue("a")}, [][]string{{"a"}}), "/repo", m.fn, "swe-planner-go", cfg)
 		state = s
 		close(done)
 	}()
@@ -345,7 +345,7 @@ func TestCheckpointWrittenAndRoundTrips(t *testing.T) {
 	plan["artifacts_dir"] = dir
 	m := newMock()
 
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", testCfg(t, nil))
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", testCfg(t, nil))
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestSplitGateCreatesSubIssuesRemovesParent(t *testing.T) {
 		}, nil
 	})
 	plan := makePlan([]map[string]any{issue("a")}, [][]string{{"a"}})
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", testCfg(t, nil))
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", testCfg(t, nil))
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestReplanModifyDAGResetsLevel0(t *testing.T) {
 	})
 	cfg := testCfg(t, map[string]any{"enable_issue_advisor": false})
 	plan := makePlan([]map[string]any{issue("a")}, [][]string{{"a"}})
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", cfg)
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", cfg)
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -539,7 +539,7 @@ func TestReplanContinueSkipsDownstream(t *testing.T) {
 		[]map[string]any{issue("a"), issue("b", "a")},
 		[][]string{{"a"}, {"b"}},
 	)
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", cfg)
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", cfg)
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestLevelFailureThresholdAborts(t *testing.T) {
 		[]map[string]any{issue("a"), issue("b"), issue("c", "a")},
 		[][]string{{"a", "b"}, {"c"}},
 	)
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", cfg)
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", cfg)
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -606,7 +606,7 @@ func TestDebtNotesInjectedDownstream(t *testing.T) {
 		[]map[string]any{issue("a"), issue("b", "a")},
 		[][]string{{"a"}, {"b"}},
 	)
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", testCfg(t, nil))
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", testCfg(t, nil))
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestCleanupAwaitedBeforeAdvance(t *testing.T) {
 		[][]string{{"a"}, {"b"}},
 	)
 	git := map[string]any{"integration_branch": "integ/main", "original_branch": "main", "mode": "existing"}
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", testCfg(t, nil), WithGitConfig(git))
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", testCfg(t, nil), WithGitConfig(git))
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -684,7 +684,7 @@ func makeManifest() map[string]any {
 func TestMultiRepoGitInitPerRepo(t *testing.T) {
 	m := newMock()
 	plan := makePlan(nil, nil) // no issues -> exercises init only
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", testCfg(t, nil),
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", testCfg(t, nil),
 		WithWorkspaceManifest(makeManifest()))
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
@@ -713,7 +713,7 @@ func TestMultiRepoGitInitPerRepo(t *testing.T) {
 func TestWorkspaceManifestNoneSingleRepo(t *testing.T) {
 	m := newMock()
 	plan := makePlan(nil, nil)
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", testCfg(t, nil))
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", testCfg(t, nil))
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -738,7 +738,7 @@ func TestRepoNameBackfilledFromTargetRepo(t *testing.T) {
 	iss := issue("feat")
 	iss["target_repo"] = "myrepo"
 	dagState := initDAGState(makePlan([]map[string]any{iss}, [][]string{{"feat"}}), "/repo", nil, "")
-	lr := executeLevel(context.Background(), []map[string]any{iss}, nil, dagState, testCfg(t, nil), 0, m.fn, "swe-planner", nil, nil)
+	lr := executeLevel(context.Background(), []map[string]any{iss}, nil, dagState, testCfg(t, nil), 0, m.fn, "swe-planner-go", nil, nil)
 	if len(lr.Completed) != 1 || lr.Completed[0].RepoName != "myrepo" {
 		t.Fatalf("repo_name not backfilled: %+v", lr.Completed)
 	}
@@ -760,7 +760,7 @@ func TestMergeGateSingleRepo(t *testing.T) {
 	})
 	plan := makePlan([]map[string]any{issue("a")}, [][]string{{"a"}})
 	git := map[string]any{"integration_branch": "integ/main", "original_branch": "main", "mode": "existing"}
-	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner", testCfg(t, nil), WithGitConfig(git))
+	state, err := RunDAG(context.Background(), plan, "/repo", m.fn, "swe-planner-go", testCfg(t, nil), WithGitConfig(git))
 	if err != nil {
 		t.Fatalf("RunDAG: %v", err)
 	}
@@ -790,7 +790,7 @@ func TestContextCancellationStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before running
 	plan := makePlan([]map[string]any{issue("a")}, [][]string{{"a"}})
-	_, err := RunDAG(ctx, plan, "/repo", m.fn, "swe-planner", testCfg(t, nil))
+	_, err := RunDAG(ctx, plan, "/repo", m.fn, "swe-planner-go", testCfg(t, nil))
 	if err == nil {
 		t.Fatal("expected cancellation error, got nil")
 	}

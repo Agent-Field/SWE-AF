@@ -24,11 +24,11 @@ lint:
 	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run || \
 		echo "golangci-lint not installed; skipping (install: https://golangci-lint.run)"
 
-# Run the full-pipeline node (swe-planner, default port 8003).
+# Run the full-pipeline node (swe-planner-go, default port 8005).
 run-planner:
 	go run ./cmd/swe-planner
 
-# Run the fast-mode node (swe-fast, default port 8004).
+# Run the fast-mode node (swe-fast-go, default port 8006).
 run-fast:
 	go run ./cmd/swe-fast
 
@@ -39,7 +39,7 @@ run-fast:
 # AgentField SDK ref are overridable:
 #   make docker-build IMAGE=myrepo/swe-af-go:dev AGENTFIELD_SDK_REF=<sha>
 IMAGE ?= swe-af-go:latest
-AGENTFIELD_SDK_REF ?= 26a479ef6852788a36dc85cdd2cf2867f52a173e
+AGENTFIELD_SDK_REF ?= 2323edf06d8935f462cb54fd6e4ac7b3e7a5b66a
 
 # Build the multi-stage Go image from the repo root.
 docker-build:

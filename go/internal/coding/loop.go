@@ -30,7 +30,7 @@ import (
 )
 
 // CallFn dispatches to an AI agent (coder, reviewer, QA, synthesizer) by target
-// (e.g. "swe-planner.run_coder") with the same keyword args Python passes. The
+// (e.g. "swe-planner-go.run_coder") with the same keyword args Python passes. The
 // DAG executor supplies a closure over agent.Call + envelope.UnwrapCallResult;
 // tests supply a scripted function. A returned *fatal.FatalHarnessError is
 // propagated (never swallowed into a fallback).

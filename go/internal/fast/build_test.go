@@ -8,7 +8,7 @@ import (
 
 func buildDeps(fn func(ctx context.Context, target string, kwargs map[string]any) (map[string]any, error)) (*Deps, *callScripter) {
 	s := &callScripter{fn: fn}
-	return &Deps{Call: s.call, Note: &noteRecorder{}, NodeID: "swe-fast"}, s
+	return &Deps{Call: s.call, Note: &noteRecorder{}, NodeID: "swe-fast-go"}, s
 }
 
 var (
@@ -68,11 +68,11 @@ func TestBuild_SuccessAndStageOrder(t *testing.T) {
 
 	// Stage order via CallFn: git_init → plan → execute → verify → finalize.
 	want := []string{
-		"swe-fast.run_git_init",
-		"swe-fast.fast_plan_tasks",
-		"swe-fast.fast_execute_tasks",
-		"swe-fast.fast_verify",
-		"swe-fast.run_repo_finalize",
+		"swe-fast-go.run_git_init",
+		"swe-fast-go.fast_plan_tasks",
+		"swe-fast-go.fast_execute_tasks",
+		"swe-fast-go.fast_verify",
+		"swe-fast-go.run_repo_finalize",
 	}
 	got := s.targets()
 	if len(got) < len(want) {
@@ -85,7 +85,7 @@ func TestBuild_SuccessAndStageOrder(t *testing.T) {
 	}
 	// No PR stage since remote_url is empty.
 	for _, tgt := range got {
-		if tgt == "swe-fast.run_github_pr" {
+		if tgt == "swe-fast-go.run_github_pr" {
 			t.Error("run_github_pr should not be called when remote_url is empty")
 		}
 	}

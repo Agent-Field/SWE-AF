@@ -87,7 +87,7 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 	userID := strings.TrimSpace(os.Getenv("AGENTFIELD_APPROVAL_USER_ID"))
 	nodeID := deps.NodeID
 	if nodeID == "" {
-		nodeID = "swe-planner"
+		nodeID = "swe-planner-go"
 	}
 
 	for revisionIter := 0; revisionIter <= maxRev; revisionIter++ {

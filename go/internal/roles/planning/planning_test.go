@@ -74,7 +74,7 @@ func haxTestServer(t *testing.T) (*hitl.HaxClient, func()) {
 // newDeps builds Deps with a recording note channel and no HITL (Hax nil).
 func newDeps(h *fakeHarness) (*Deps, *recNote) {
 	notes := &recNote{}
-	return &Deps{Harness: h, App: notes, NodeID: "swe-planner"}, notes
+	return &Deps{Harness: h, App: notes, NodeID: "swe-planner-go"}, notes
 }
 
 func keys(m map[string]any) map[string]bool {

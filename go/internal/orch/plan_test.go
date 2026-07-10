@@ -145,7 +145,7 @@ func planApp(sprint map[string]any) (*Deps, *planMock) {
 		"run_sprint_planner":  constResp(sprint),
 		"run_issue_writer":    constResp(map[string]any{"success": true, "path": "/tmp/x.md"}),
 	}}
-	return &Deps{App: m, NodeID: "swe-planner"}, m
+	return &Deps{App: m, NodeID: "swe-planner-go"}, m
 }
 
 func runPlan(t *testing.T, deps *Deps, repoPath string, extra map[string]any) (map[string]any, error) {
@@ -433,7 +433,7 @@ func TestPlanOpenRouterOnlyDefaults(t *testing.T) {
 		"run_sprint_planner":  constResp(sprintResult(issue("my-issue", nil, []any{"thing.py"}))),
 		"run_issue_writer":    constResp(map[string]any{"success": true}),
 	}}
-	deps := &Deps{App: m, NodeID: "swe-planner"}
+	deps := &Deps{App: m, NodeID: "swe-planner-go"}
 
 	// Omit ai_provider/*_model so env resolution runs.
 	if _, err := Plan(context.Background(), deps, map[string]any{

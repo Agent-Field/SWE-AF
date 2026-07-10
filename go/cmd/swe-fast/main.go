@@ -13,10 +13,13 @@ import (
 )
 
 func main() {
-	// Defaults mirror fast/app.py:24-31: NODE_ID "swe-fast", PORT 8004.
+	// Defaults: NODE_ID "swe-fast-go", PORT 8006 — a distinct identity from the
+	// Python swe-fast node (fast/app.py:24-31) so the Go port runs as an opt-in
+	// sibling alongside Python against one control plane. NODE_ID / PORT env
+	// vars still override.
 	n, err := node.BuildAgent(
-		"swe-fast",
-		"8004",
+		"swe-fast-go",
+		"8006",
 		"Speed-optimized SWE agent — single-pass planning, sequential execution",
 	)
 	if err != nil {

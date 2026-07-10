@@ -13,8 +13,11 @@ import (
 )
 
 func main() {
-	// Defaults mirror app.py:51-59: NODE_ID "swe-planner", PORT 8003.
-	n, err := node.BuildAgent("swe-planner", "8003", "Autonomous SWE planning pipeline")
+	// Defaults: NODE_ID "swe-planner-go", PORT 8005 — a distinct identity from
+	// the Python swe-planner node (app.py:51-59) so the Go port runs as an
+	// opt-in sibling alongside Python against one control plane. NODE_ID / PORT
+	// env vars still override.
+	n, err := node.BuildAgent("swe-planner-go", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		log.Fatalf("swe-planner: build agent: %v", err)
 	}

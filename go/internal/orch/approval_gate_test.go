@@ -156,7 +156,7 @@ func TestApprovalApprovedProceeds(t *testing.T) {
 	defer wireHax(t, server, fake)()
 
 	app, calls := replanApp()
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 	plan := samplePlan()
 
 	out, err := PlanApprovalGate(context.Background(), req(deps, testCfg(t, 2), plan, t.TempDir()))
@@ -193,7 +193,7 @@ func TestApprovalChangesThenApproved(t *testing.T) {
 	defer wireHax(t, server, fake)()
 
 	app, calls := replanApp()
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 
 	out, err := PlanApprovalGate(context.Background(), req(deps, testCfg(t, 2), samplePlan(), t.TempDir()))
 	if err != nil {
@@ -235,7 +235,7 @@ func TestApprovalRevisionLimit(t *testing.T) {
 	defer wireHax(t, server, fake)()
 
 	app, _ := replanApp()
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 
 	out, err := PlanApprovalGate(context.Background(), req(deps, testCfg(t, 1), samplePlan(), t.TempDir()))
 	if err != nil {
@@ -274,7 +274,7 @@ func TestApprovalRejected(t *testing.T) {
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
 		t.Fatal("rejected must not replan")
 		return nil, nil
-	}}, NodeID: "swe-planner"}
+	}}, NodeID: "swe-planner-go"}
 
 	out, err := PlanApprovalGate(context.Background(), req(deps, testCfg(t, 2), samplePlan(), t.TempDir()))
 	if err != nil {
@@ -299,7 +299,7 @@ func TestApprovalExpired(t *testing.T) {
 
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
-	}}, NodeID: "swe-planner"}
+	}}, NodeID: "swe-planner-go"}
 
 	out, err := PlanApprovalGate(context.Background(), req(deps, testCfg(t, 2), samplePlan(), t.TempDir()))
 	if err != nil {
@@ -321,7 +321,7 @@ func TestApprovalNoHaxClientSkips(t *testing.T) {
 
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
-	}}, NodeID: "swe-planner"}
+	}}, NodeID: "swe-planner-go"}
 	plan := samplePlan()
 
 	out, err := PlanApprovalGate(context.Background(), req(deps, testCfg(t, 2), plan, t.TempDir()))
@@ -353,7 +353,7 @@ func TestApprovalNoClientWiredSkips(t *testing.T) {
 	}
 	pauserProvider = nil
 
-	deps := &Deps{App: &mockApp{}, NodeID: "swe-planner"}
+	deps := &Deps{App: &mockApp{}, NodeID: "swe-planner-go"}
 	plan := samplePlan()
 	out, err := PlanApprovalGate(context.Background(), req(deps, testCfg(t, 2), plan, t.TempDir()))
 	if err != nil {

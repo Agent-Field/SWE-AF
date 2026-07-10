@@ -31,7 +31,7 @@ import (
 // Registration surface (consumed by T6.2)
 // ---------------------------------------------------------------------------
 
-// CallFn dispatches to a reasoner by target (e.g. "swe-fast.run_coder") with the
+// CallFn dispatches to a reasoner by target (e.g. "swe-fast-go.run_coder") with the
 // same keyword args Python passes to app.call. The wiring task supplies a
 // closure over agent.Call + envelope.UnwrapCallResult (so the returned map is
 // already unwrapped); tests supply a scripted function. It is structurally
@@ -62,8 +62,11 @@ func Handlers() map[string]Handler {
 	}
 }
 
-// defaultNodeID mirrors Python's NODE_ID = os.getenv("NODE_ID", "swe-fast").
-const defaultNodeID = "swe-fast"
+// defaultNodeID is the Go fast node's default identity when NODE_ID is unset.
+// The Go port registers as "swe-fast-go" (an opt-in sibling of the Python
+// swe-fast node) so both can run against one control plane; Python's
+// module-level default is os.getenv("NODE_ID", "swe-fast").
+const defaultNodeID = "swe-fast-go"
 
 // ---------------------------------------------------------------------------
 // Shared collaborators
@@ -72,8 +75,8 @@ const defaultNodeID = "swe-fast"
 // Deps carries the seams every fast reasoner needs. Harness drives the
 // structured-output subprocess (fast_plan_tasks); Call is the app.call seam used
 // by fast_execute_tasks, fast_verify and the build orchestrator; Note is the
-// observability channel; NodeID is the target prefix (default "swe-fast") used
-// when composing app.call targets — mirroring Python's f"{NODE_ID}.<reasoner>".
+// observability channel; NodeID is the target prefix (default "swe-fast-go")
+// used when composing app.call targets — mirroring Python's f"{NODE_ID}.<reasoner>".
 type Deps struct {
 	Harness harnessx.HarnessCaller
 	Call    CallFn
@@ -81,8 +84,8 @@ type Deps struct {
 	NodeID  string
 }
 
-// nodeID returns the configured node id, defaulting to "swe-fast" exactly as the
-// Python module-level NODE_ID default does.
+// nodeID returns the configured node id, defaulting to "swe-fast-go" (the Go
+// port's opt-in-sibling identity) when NodeID is unset.
 func (d *Deps) nodeID() string {
 	if d != nil && d.NodeID != "" {
 		return d.NodeID

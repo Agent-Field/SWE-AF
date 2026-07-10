@@ -7,8 +7,8 @@
 //
 // Layout (design §1.3):
 //
-//	cmd/swe-planner   full-pipeline node entry point (node id "swe-planner")
-//	cmd/swe-fast      fast-mode node entry point   (node id "swe-fast")
+//	cmd/swe-planner   full-pipeline node entry point (node id "swe-planner-go")
+//	cmd/swe-fast      fast-mode node entry point   (node id "swe-fast-go")
 //	internal/afx      small AgentField SDK ergonomics (input binding, notes)
 //	internal/...      schemas, config, prompts, roles, execution engine, etc.
 //

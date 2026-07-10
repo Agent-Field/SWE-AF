@@ -12,7 +12,7 @@ import (
 // resume_build with a missing checkpoint -> the exact Python error message.
 func TestResumeMissingCheckpoint(t *testing.T) {
 	repo := t.TempDir()
-	deps := &Deps{App: &mockApp{}, NodeID: "swe-planner"}
+	deps := &Deps{App: &mockApp{}, NodeID: "swe-planner-go"}
 
 	_, err := ResumeBuildHandler(context.Background(), deps, map[string]any{
 		"repo_path": repo,
@@ -54,7 +54,7 @@ func TestResumeReconstructsPlanAndCallsExecute(t *testing.T) {
 		gotInput = input
 		return rawEnvelope, nil
 	}}
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 
 	out, err := ResumeBuildHandler(context.Background(), deps, map[string]any{
 		"repo_path":  repo,
@@ -69,7 +69,7 @@ func TestResumeReconstructsPlanAndCallsExecute(t *testing.T) {
 	if !reflect.DeepEqual(out, rawEnvelope) {
 		t.Fatalf("resume must return the raw execute envelope, got %v", out)
 	}
-	if gotTarget != "swe-planner.execute" {
+	if gotTarget != "swe-planner-go.execute" {
 		t.Fatalf("target = %q", gotTarget)
 	}
 	if gotInput["resume"] != true {
@@ -125,7 +125,7 @@ func TestResumeArtifactsDirDefault(t *testing.T) {
 		gotInput = input
 		return map[string]any{"status": "succeeded"}, nil
 	}}
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 
 	if _, err := ResumeBuildHandler(context.Background(), deps, map[string]any{"repo_path": repo}); err != nil {
 		t.Fatal(err)

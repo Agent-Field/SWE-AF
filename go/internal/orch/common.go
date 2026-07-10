@@ -48,7 +48,7 @@ type Handler func(ctx context.Context, deps *Deps, input map[string]any) (any, e
 // Deps carries the collaborators an orchestrator handler needs.
 //
 //   - App: the control-plane-routed call + note surface (a *agent.Agent).
-//   - NodeID: the node id calls are addressed to (NODE_ID, default "swe-planner").
+//   - NodeID: the node id calls are addressed to (NODE_ID, default "swe-planner-go").
 //   - AgentFieldServer / Token / HTTPClient: reach the CP status endpoint for the
 //     ReasonerFailed carrier (empty-build guard) and the approval webhook base.
 //   - CIGate: the post-PR CI watch/fix gate seam. Owned by the ci-gate task
@@ -127,11 +127,13 @@ func (d *Deps) CallRaw(ctx context.Context, name string, kwargs map[string]any) 
 	return d.App.Call(ctx, d.target(name), kwargs)
 }
 
-// target renders the fully-qualified "<NodeID>.<name>" call target.
+// target renders the fully-qualified "<NodeID>.<name>" call target. At runtime
+// NodeID is always set (BuildAgent default "swe-planner-go" or the NODE_ID env);
+// the fallback only guards zero-value Deps in tests.
 func (d *Deps) target(name string) string {
 	nodeID := d.NodeID
 	if nodeID == "" {
-		nodeID = "swe-planner"
+		nodeID = "swe-planner-go"
 	}
 	return nodeID + "." + name
 }

@@ -57,7 +57,7 @@ func TestBuildEmptyGuardReportsFailed(t *testing.T) {
 	app := &mockApp{handler: buildHandler(emptyExec, func(map[string]any) map[string]any {
 		return map[string]any{"passed": false, "criteria_results": []any{}, "summary": "nope"}
 	})}
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 
 	out, err := Build(context.Background(), deps, map[string]any{
 		"goal":      "do a thing",
@@ -109,7 +109,7 @@ func TestBuildPartialNotEmpty(t *testing.T) {
 	app := &mockApp{handler: buildHandler(exec, func(map[string]any) map[string]any {
 		return map[string]any{"passed": false, "criteria_results": []any{}, "summary": "partial"}
 	})}
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 
 	out, err := Build(context.Background(), deps, map[string]any{
 		"goal":      "thing",
@@ -146,7 +146,7 @@ func TestBuildVerifiedSuccess(t *testing.T) {
 	app := &mockApp{handler: buildHandler(exec, func(map[string]any) map[string]any {
 		return map[string]any{"passed": true, "criteria_results": []any{}, "summary": "ok"}
 	})}
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 	out, err := Build(context.Background(), deps, map[string]any{
 		"goal": "thing", "repo_path": t.TempDir(),
 		"config": map[string]any{"git_init_max_retries": 1},
@@ -164,7 +164,7 @@ func TestBuildRequiresRepoPathOrURL(t *testing.T) {
 	defer withExecCtx("r", "e")()
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
-	}}, NodeID: "swe-planner"}
+	}}, NodeID: "swe-planner-go"}
 	_, err := Build(context.Background(), deps, map[string]any{"goal": "x"})
 	if err == nil || !strings.Contains(err.Error(), "Either repo_path or repo_url") {
 		t.Fatalf("expected repo_path/url error, got %v", err)
@@ -203,7 +203,7 @@ func TestBuildIsolationConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			deps := &Deps{App: app, NodeID: "swe-planner"}
+			deps := &Deps{App: app, NodeID: "swe-planner-go"}
 			_, _ = Build(context.Background(), deps, map[string]any{
 				"goal": "g", "repo_path": t.TempDir(),
 				"config": map[string]any{"git_init_max_retries": 1},

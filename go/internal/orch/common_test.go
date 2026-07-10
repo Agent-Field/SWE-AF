@@ -85,9 +85,9 @@ func TestNewCallFnUnwrapsResult(t *testing.T) {
 			"result":       map[string]any{"x": float64(1)},
 		}, nil
 	}}
-	d := &Deps{App: app, NodeID: "swe-planner"}
+	d := &Deps{App: app, NodeID: "swe-planner-go"}
 	fn := d.NewCallFn()
-	out, err := fn(context.Background(), "swe-planner.run_coder", nil)
+	out, err := fn(context.Background(), "swe-planner-go.run_coder", nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestCallPropagatesFailureEnvelope(t *testing.T) {
 	app := &mockApp{handler: func(_ context.Context, _ string, _ map[string]any) (map[string]any, error) {
 		return map[string]any{"status": "failed", "error_message": "boom"}, nil
 	}}
-	d := &Deps{App: app, NodeID: "swe-planner"}
+	d := &Deps{App: app, NodeID: "swe-planner-go"}
 	if _, err := d.Call(context.Background(), "execute", nil, "execute"); err == nil {
 		t.Fatal("expected error from failed envelope")
 	}
@@ -111,7 +111,7 @@ func TestCallRawReturnsEnvelope(t *testing.T) {
 	app := &mockApp{handler: func(_ context.Context, _ string, _ map[string]any) (map[string]any, error) {
 		return env, nil
 	}}
-	d := &Deps{App: app, NodeID: "swe-planner"}
+	d := &Deps{App: app, NodeID: "swe-planner-go"}
 	raw, err := d.CallRaw(context.Background(), "run_git_init", nil)
 	if err != nil {
 		t.Fatal(err)

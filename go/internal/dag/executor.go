@@ -11,7 +11,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
-// CallFn dispatches to a reasoner by target (e.g. "swe-planner.run_merger") with
+// CallFn dispatches to a reasoner by target (e.g. "swe-planner-go.run_merger") with
 // the same keyword args Python passes. Callers supply a closure over agent.Call
 // + envelope.UnwrapCallResult (so results arrive already unwrapped); a returned
 // *fatal.FatalHarnessError is honoured throughout. Alias of coding.CallFn so the
@@ -126,7 +126,7 @@ func RunDAG(
 		cfg = def
 	}
 	if nodeID == "" {
-		nodeID = "swe-planner"
+		nodeID = "swe-planner-go"
 	}
 
 	dagState := initDAGState(planResult, repoPath, o.gitConfig, o.buildID)

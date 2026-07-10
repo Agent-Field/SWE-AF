@@ -146,7 +146,7 @@ func TestAttemptBaseMergeConflictListsUnmergedFiles(t *testing.T) {
 func TestResolveMissingRequiredArgsRaises(t *testing.T) {
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
-	}}, NodeID: "swe-planner"}
+	}}, NodeID: "swe-planner-go"}
 
 	cases := []map[string]any{
 		{"pr_url": "", "pr_number": 1, "repo_url": "https://github.com/o/r.git", "head_branch": "feature/x"},
@@ -226,7 +226,7 @@ func TestResolveCallsResolverAndPostsThreads(t *testing.T) {
 	gateCalled := false
 	deps := &Deps{
 		App:    app,
-		NodeID: "swe-planner",
+		NodeID: "swe-planner-go",
 		CIGate: func(_ context.Context, req CIGateRequest) (map[string]any, error) {
 			gateCalled = true
 			gateReq = req
@@ -411,7 +411,7 @@ func TestResolvePushesWhenAgentCommittedButDidntPush(t *testing.T) {
 	}}
 	deps := &Deps{
 		App:    app,
-		NodeID: "swe-planner",
+		NodeID: "swe-planner-go",
 		CIGate: func(context.Context, CIGateRequest) (map[string]any, error) {
 			return map[string]any{"final_status": "passed"}, nil
 		},
@@ -467,7 +467,7 @@ func TestResolveCommitterIdentityFromEnv(t *testing.T) {
 		}
 		return map[string]any{}, nil
 	}}
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 
 	_, err := ResolveHandler(context.Background(), deps, map[string]any{
 		"pr_url":      "https://github.com/o/r/pull/3",
@@ -506,7 +506,7 @@ func TestResolveCommitterIdentityDefaults(t *testing.T) {
 		}
 		return map[string]any{}, nil
 	}}
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 
 	_, err := ResolveHandler(context.Background(), deps, map[string]any{
 		"pr_url":      "https://github.com/o/r/pull/4",
@@ -568,7 +568,7 @@ func TestResolveSkipsCIGateWhenCheckCIFalse(t *testing.T) {
 	gateCalled := false
 	deps := &Deps{
 		App:    app,
-		NodeID: "swe-planner",
+		NodeID: "swe-planner-go",
 		CIGate: func(context.Context, CIGateRequest) (map[string]any, error) {
 			gateCalled = true
 			return map[string]any{"final_status": "passed"}, nil
@@ -618,7 +618,7 @@ func TestResolveFailureSuccessFalse(t *testing.T) {
 		}
 		return map[string]any{}, nil
 	}}
-	deps := &Deps{App: app, NodeID: "swe-planner"}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
 
 	out, err := ResolveHandler(context.Background(), deps, map[string]any{
 		"pr_url":      "https://github.com/o/r/pull/6",

@@ -63,10 +63,10 @@ func (n *Node) RegisteredNames() []string {
 // BuildAgent constructs the SWE-AF agent from the environment exactly as the
 // Python entry points do (app.py:51-59 / fast/app.py:24-31):
 //
-//   - NODE_ID           default defaultNodeID ("swe-planner" / "swe-fast")
+//   - NODE_ID           default defaultNodeID ("swe-planner-go" / "swe-fast-go")
 //   - AGENTFIELD_SERVER default "http://localhost:8080"
 //   - AGENTFIELD_API_KEY -> Config.Token (bearer)
-//   - PORT              default defaultPort ("8003" / "8004") -> ListenAddress
+//   - PORT              default defaultPort ("8005" / "8006") -> ListenAddress
 //   - AGENT_CALLBACK_URL -> Config.PublicURL — the base URL the node registers
 //     with the control plane. The Python SDK reads the same env var
 //     (agent_server.py:758) before defaulting to localhost; without it a

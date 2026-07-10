@@ -9,7 +9,7 @@ import (
 
 func verifyDeps(fn func(ctx context.Context, target string, kwargs map[string]any) (map[string]any, error)) (*Deps, *callScripter) {
 	s := &callScripter{fn: fn}
-	return &Deps{Call: s.call, Note: &noteRecorder{}, NodeID: "swe-fast"}, s
+	return &Deps{Call: s.call, Note: &noteRecorder{}, NodeID: "swe-fast-go"}, s
 }
 
 var verifyInput = map[string]any{
@@ -54,7 +54,7 @@ func TestFastVerify_Success(t *testing.T) {
 		}
 	}
 	// task_results split into completed/failed before forwarding.
-	if got := s.calls[0].target; got != "swe-fast.run_verifier" {
+	if got := s.calls[0].target; got != "swe-fast-go.run_verifier" {
 		t.Errorf("target = %q, want swe-fast.run_verifier", got)
 	}
 	ci := s.calls[0].kwargs["completed_issues"].([]map[string]any)

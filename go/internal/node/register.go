@@ -14,10 +14,13 @@ package node
 //     those role names, backed by the full-pipeline role handlers (fast.Wrappers
 //     is the identity delegation map that documents this).
 //
-// Tags: role reasoners carry ["swe-planner"] on BOTH nodes because in Python
-// they are registered through the swe-planner-tagged AgentRouter; the four
-// fast-node reasoners carry ["swe-fast"] (from fast_router). The five
-// orchestrators carry ["swe-planner"] to group them with the node in the
+// Tags: the Go port registers under a distinct identity from the Python node
+// (swe-planner-go / swe-fast-go) so both stacks can run against one control
+// plane. Role reasoners carry ["swe-planner-go"] on BOTH nodes — mirroring the
+// Python structure where they are registered through the swe-planner-tagged
+// AgentRouter, but grouped under the Go node's -go identity. The four fast-node
+// reasoners carry ["swe-fast-go"] (Python: fast_router tags=["swe-fast"]). The
+// five orchestrators carry ["swe-planner-go"] to group them with the node in the
 // control-plane UI (design §8).
 
 import (
@@ -38,8 +41,8 @@ import (
 )
 
 const (
-	tagPlanner = "swe-planner"
-	tagFast    = "swe-fast"
+	tagPlanner = "swe-planner-go"
+	tagFast    = "swe-fast-go"
 )
 
 // RegisterPlanner registers the full swe-planner surface: 25 role reasoners +
@@ -63,7 +66,7 @@ func (n *Node) RegisterFast() {
 
 // registerRoles wires the 25 execution/planning role reasoners, each backed by
 // its package handler and threaded with the Deps built from the agent. All are
-// tagged ["swe-planner"] (they come from the swe-planner router in Python).
+// tagged ["swe-planner-go"] (Python groups them under the swe-planner router).
 func (n *Node) registerRoles() {
 	tag := agent.WithReasonerTags(tagPlanner)
 

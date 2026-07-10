@@ -150,11 +150,15 @@ COPY --from=builder /out/swe-fast /usr/local/bin/swe-fast
 # (without this, Docker creates it as root read-only on fresh deployments).
 RUN mkdir -p /workspaces && chmod 777 /workspaces
 
-EXPOSE 8003
+EXPOSE 8005
 
-ENV PORT=8003 \
+# Defaults register the Go planner as "swe-planner-go" on :8005 — a distinct
+# identity from the Python swe-planner node (:8003) so both stacks can run
+# against one control plane. The swe-fast service overrides NODE_ID/PORT to
+# swe-fast-go/:8006 via compose.
+ENV PORT=8005 \
     AGENTFIELD_SERVER=http://control-plane:8080 \
-    NODE_ID=swe-planner
+    NODE_ID=swe-planner-go
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
