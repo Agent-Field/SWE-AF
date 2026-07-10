@@ -29,3 +29,46 @@ jobs:
         run: make check
         env:
           AGENTFIELD_SERVER: http://localhost:9999
+
+  go:
+    runs-on: ubuntu-latest
+    env:
+      # Reproduce go/Dockerfile's sparse SDK clone; keep in sync with its AGENTFIELD_SDK_REF.
+      AGENTFIELD_SDK_REF: 45311737c29881017523068d97e102988647f252
+      AGENTFIELD_REPO: https://github.com/Agent-Field/agentfield.git
+      GOWORK: off
+    steps:
+      - name: Checkout SWE-AF
+        uses: actions/checkout@v4
+        with:
+          path: SWE-AF
+      - name: Sparse-clone AgentField SDK at pinned ref
+        run: |
+          set -euo pipefail
+          git init -q agentfield
+          cd agentfield
+          git remote add origin "${AGENTFIELD_REPO}"
+          git sparse-checkout init --cone
+          git sparse-checkout set sdk/go
+          git fetch --depth 1 origin "${AGENTFIELD_SDK_REF}"
+          git checkout -q FETCH_HEAD
+          test -f sdk/go/go.mod
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: SWE-AF/go/go.sum
+      - name: gofmt
+        working-directory: SWE-AF/go
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+      - name: Build
+        working-directory: SWE-AF/go
+        run: go build ./...
+      - name: Vet
+        working-directory: SWE-AF/go
+        run: go vet ./...
+      - name: Test (race)
+        working-directory: SWE-AF/go
+        run: go test -race -count=1 ./...
