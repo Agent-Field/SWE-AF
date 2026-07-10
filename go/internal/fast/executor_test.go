@@ -41,14 +41,15 @@ func TestFastExecuteTasks_CompletedOutcome(t *testing.T) {
 		t.Errorf("task_name = %v, want sample-task", tr["task_name"])
 	}
 	// run_coder must be the call target, args forwarded.
-	if got := s.calls[0].target; got != "swe-fast-go.run_coder" {
+	rec := s.snapshot()
+	if got := rec[0].target; got != "swe-fast-go.run_coder" {
 		t.Errorf("target = %q, want swe-fast.run_coder", got)
 	}
-	if s.calls[0].kwargs["worktree_path"] != "/tmp/repo" {
-		t.Errorf("worktree_path = %v, want /tmp/repo", s.calls[0].kwargs["worktree_path"])
+	if rec[0].kwargs["worktree_path"] != "/tmp/repo" {
+		t.Errorf("worktree_path = %v, want /tmp/repo", rec[0].kwargs["worktree_path"])
 	}
-	if s.calls[0].kwargs["iteration_id"] != "sample-task" {
-		t.Errorf("iteration_id = %v, want sample-task", s.calls[0].kwargs["iteration_id"])
+	if rec[0].kwargs["iteration_id"] != "sample-task" {
+		t.Errorf("iteration_id = %v, want sample-task", rec[0].kwargs["iteration_id"])
 	}
 }
 
@@ -161,8 +162,8 @@ func TestFastExecuteTasks_EmptyTasks(t *testing.T) {
 	if !ok || len(tr) != 0 {
 		t.Errorf("task_results = %v, want [] (non-null empty)", m["task_results"])
 	}
-	if len(s.calls) != 0 {
-		t.Errorf("expected no coder calls for empty task list, got %d", len(s.calls))
+	if n := s.count(); n != 0 {
+		t.Errorf("expected no coder calls for empty task list, got %d", n)
 	}
 }
 

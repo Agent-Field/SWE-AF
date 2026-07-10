@@ -23,10 +23,10 @@ import (
 // instead asserts the underlying CP contract directly, which is what the design
 // says to do when the guard cannot be triggered cheaply:
 //
-//   1. status=failed + result + error persist TOGETHER (the §11(b) assertion:
-//      a failed record carries a non-null result AND an error simultaneously);
-//   2. a subsequent resultless status=failed (the SDK's re-post) leaves the
-//      result and error intact — the non-clobber behaviour §4.5 relies on.
+//  1. status=failed + result + error persist TOGETHER (the §11(b) assertion:
+//     a failed record carries a non-null result AND an error simultaneously);
+//  2. a subsequent resultless status=failed (the SDK's re-post) leaves the
+//     result and error intact — the non-clobber behaviour §4.5 relies on.
 func TestReasonerFailedStatusContract(t *testing.T) {
 	requireStack(t)
 

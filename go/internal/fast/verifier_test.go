@@ -54,10 +54,11 @@ func TestFastVerify_Success(t *testing.T) {
 		}
 	}
 	// task_results split into completed/failed before forwarding.
-	if got := s.calls[0].target; got != "swe-fast-go.run_verifier" {
+	rec := s.snapshot()
+	if got := rec[0].target; got != "swe-fast-go.run_verifier" {
 		t.Errorf("target = %q, want swe-fast.run_verifier", got)
 	}
-	ci := s.calls[0].kwargs["completed_issues"].([]map[string]any)
+	ci := rec[0].kwargs["completed_issues"].([]map[string]any)
 	if len(ci) != 1 || ci[0]["issue_name"] != "init" {
 		t.Errorf("completed_issues = %v, want one 'init'", ci)
 	}
@@ -109,11 +110,12 @@ func TestFastVerify_EmptyTaskResults(t *testing.T) {
 	if asMap(t, out)["passed"] != true {
 		t.Error("passed = false, want true")
 	}
-	if len(s.calls) != 1 {
-		t.Fatalf("run_verifier called %d times, want 1", len(s.calls))
+	if n := s.count(); n != 1 {
+		t.Fatalf("run_verifier called %d times, want 1", n)
 	}
-	ci := s.calls[0].kwargs["completed_issues"].([]map[string]any)
-	fi := s.calls[0].kwargs["failed_issues"].([]map[string]any)
+	vrec := s.snapshot()
+	ci := vrec[0].kwargs["completed_issues"].([]map[string]any)
+	fi := vrec[0].kwargs["failed_issues"].([]map[string]any)
 	if len(ci) != 0 || len(fi) != 0 {
 		t.Errorf("completed/failed = %v/%v, want empty", ci, fi)
 	}

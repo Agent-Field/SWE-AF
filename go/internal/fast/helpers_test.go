@@ -3,6 +3,7 @@ package fast
 import (
 	"context"
 	"encoding/json"
+	"sync"
 
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 )
@@ -77,24 +78,47 @@ type callRecord struct {
 	kwargs map[string]any
 }
 
-// callScripter records CallFn invocations and dispatches to a scripted fn.
+// callScripter records CallFn invocations and dispatches to a scripted fn. The
+// executor invokes call() from worker goroutines, and callWithTimeout can leak a
+// still-running worker past a timeout (executor.go), so the append and every
+// read of calls are guarded by mu to keep `go test -race` clean.
 type callScripter struct {
+	mu    sync.Mutex
 	calls []callRecord
 	fn    func(ctx context.Context, target string, kwargs map[string]any) (map[string]any, error)
 }
 
 func (c *callScripter) call(ctx context.Context, target string, kwargs map[string]any) (map[string]any, error) {
+	c.mu.Lock()
 	c.calls = append(c.calls, callRecord{target: target, kwargs: kwargs})
+	c.mu.Unlock()
 	return c.fn(ctx, target, kwargs)
 }
 
 // targets returns the ordered list of call targets, for order assertions.
 func (c *callScripter) targets() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	out := make([]string, len(c.calls))
 	for i, r := range c.calls {
 		out[i] = r.target
 	}
 	return out
+}
+
+// snapshot returns a copy of the recorded calls under lock — the safe way for
+// assertions to read individual records without racing a leaked worker.
+func (c *callScripter) snapshot() []callRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]callRecord(nil), c.calls...)
+}
+
+// count returns the number of recorded calls under lock.
+func (c *callScripter) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.calls)
 }
 
 // byTargetSuffix dispatches based on a substring match of the target, mirroring

@@ -3,6 +3,7 @@ package orch
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
@@ -12,7 +13,11 @@ import (
 
 // --- mock App -------------------------------------------------------------
 
+// mockApp is shared across concurrent Build() goroutines by
+// TestBuildIsolationConcurrent, so its note recording is guarded by mu to keep
+// `go test -race` clean.
 type mockApp struct {
+	mu      sync.Mutex
 	handler func(ctx context.Context, target string, input map[string]any) (map[string]any, error)
 	notes   []string
 }
@@ -22,7 +27,9 @@ func (m *mockApp) Call(ctx context.Context, target string, input map[string]any)
 }
 
 func (m *mockApp) Note(ctx context.Context, message string, tags ...string) {
+	m.mu.Lock()
 	m.notes = append(m.notes, message)
+	m.mu.Unlock()
 }
 
 // withExecCtx overrides the execution-context seam for a test.

@@ -12,8 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	prompts "github.com/Agent-Field/SWE-AF/go/internal/prompts/advisor"
 	"github.com/Agent-Field/SWE-AF/go/internal/harnessx"
+	prompts "github.com/Agent-Field/SWE-AF/go/internal/prompts/advisor"
 	"github.com/Agent-Field/SWE-AF/go/internal/runtimex"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
