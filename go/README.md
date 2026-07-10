@@ -8,12 +8,28 @@ is untouched; this port lives entirely under `go/`.
 
 Two binaries:
 
-| Binary            | Node ID       | Default port | Role                              |
-|-------------------|---------------|--------------|-----------------------------------|
-| `swe-planner`     | `swe-planner` | `8003`       | Full pipeline (plan → DAG → PR)   |
-| `swe-fast`        | `swe-fast`    | `8004`       | Fast mode (lighter-weight path)   |
+| Binary            | Node ID          | Default port | Role                              |
+|-------------------|------------------|--------------|-----------------------------------|
+| `swe-planner`     | `swe-planner-go` | `8005`       | Full pipeline (plan → DAG → PR)   |
+| `swe-fast`        | `swe-fast-go`    | `8006`       | Fast mode (lighter-weight path)   |
 
 Module path: `github.com/Agent-Field/SWE-AF/go`.
+
+## Opt-in alongside Python
+
+The Python node is the **default**: `swe-planner` on `:8003` (and `swe-fast` on
+`:8004`), unchanged. This Go port registers **separately** under distinct
+identities — `swe-planner-go` on `:8005` and `swe-fast-go` on `:8006` — so both
+stacks can run against **one** control plane at the same time. Nothing is
+replaced; callers **opt in** by targeting the `-go` reasoner path, e.g.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner-go.build \
+  -H 'Content-Type: application/json' \
+  -d '{"input":{"goal":"...","repo_url":"https://github.com/you/repo"}}'
+```
+
+`NODE_ID` / `PORT` still override the defaults if you want different ids/ports.
 
 ## Depending on the AgentField Go SDK
 
@@ -46,8 +62,8 @@ make build          # go build ./...
 make vet            # go vet ./...
 make test           # go test ./...
 make check          # vet + test
-make run-planner    # run the full-pipeline node (swe-planner, :8003)
-make run-fast       # run the fast-mode node   (swe-fast, :8004)
+make run-planner    # run the full-pipeline node (swe-planner-go, :8005)
+make run-fast       # run the fast-mode node   (swe-fast-go, :8006)
 ```
 
 `make run-planner` / `make run-fast` need a control plane reachable at
@@ -90,34 +106,36 @@ SDK**; an unchanged ref restores the cached clone (same rationale as the
 docker-pip cache-busting rule: the constraint string itself must change to
 invalidate the layer).
 
-### Full stack via compose
+### Compose: opt-in add-on to the Python stack
 
-`docker-compose.go.yml` (at the repo root) mirrors the Python
-`docker-compose.yml` but builds both services from `go/Dockerfile`. The Python
-compose is left untouched, so both stacks can run independently.
+`docker-compose.go.yml` (at the repo root) is an **add-on**, not a standalone
+stack. It defines only the two Go nodes and joins the Python stack's compose
+network as an external reference, sharing the control plane and `workspaces`
+volume the Python stack brings up. The Python `docker-compose.yml` is left
+untouched. Start the Python stack first, then layer the Go nodes:
 
 ```bash
-# from go/
+docker compose up -d                          # Python stack (control plane + Python nodes)
+docker compose -f docker-compose.go.yml up -d # adds the Go nodes
+
+# or, from go/ (Python stack must already be up)
 make docker-up      # docker compose -f ../docker-compose.go.yml up --build
 make docker-down
-
-# or from the repo root
-docker compose -f docker-compose.go.yml up --build
 ```
 
-Brings up:
+Adds:
 
-| Service         | Port   | Notes                                        |
-|-----------------|--------|----------------------------------------------|
-| `control-plane` | `8080` | AgentField control plane (SQLite local mode) |
-| `build-db`      | —      | Ephemeral Postgres for integration checks    |
-| `swe-agent`     | `8003` | `swe-planner` full pipeline                   |
-| `swe-fast`      | `8004` | `swe-fast` fast mode (runs the `swe-fast` binary) |
+| Service        | Port   | Node id          | Notes                                  |
+|----------------|--------|------------------|----------------------------------------|
+| `swe-agent-go` | `8005` | `swe-planner-go` | full pipeline                          |
+| `swe-fast-go`  | `8006` | `swe-fast-go`    | fast mode (runs the `swe-fast` binary) |
 
-Health: `curl -f http://localhost:8003/health` and `:8004/health`.
-
-Volumes: `agentfield-data` (control-plane state), `workspaces` (cloned repos /
-build output).
+The control plane (`:8080`), `build-db`, and the `workspaces` volume come from
+the Python stack — the Go add-on joins them via the external `swe-af_default`
+network and `swe-af_workspaces` volume (this assumes the Python stack was
+brought up with the default project name `swe-af`; see the compose file header
+for the override). Health: `curl -f http://localhost:8005/health` and
+`:8006/health`.
 
 ## Environment variables
 
@@ -136,8 +154,8 @@ list; the load-bearing ones:
 | `SWE_CODEX_AUTH_MODE`                                     | `auto` \| `chatgpt` \| `api_key` (codex CLI auth)     |
 | `OPENCODE_ENABLE_EXA` + `EXA_API_KEY`                     | Optional web search for the open runtime             |
 | `AGENTFIELD_SERVER`                                       | Control-plane URL (default `http://localhost:8080`)  |
-| `NODE_ID`                                                 | Node ID (`swe-planner` / `swe-fast`)                 |
-| `PORT`                                                    | Listen port (`8003` / `8004`)                        |
+| `NODE_ID`                                                 | Node ID (`swe-planner-go` / `swe-fast-go`)           |
+| `PORT`                                                    | Listen port (`8005` / `8006`)                        |
 
 ## Deployment: no `af install`
 
