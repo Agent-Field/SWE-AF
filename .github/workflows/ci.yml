@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Reproduce go/Dockerfile's sparse SDK clone; keep in sync with its AGENTFIELD_SDK_REF.
-      AGENTFIELD_SDK_REF: 45311737c29881017523068d97e102988647f252
+      AGENTFIELD_SDK_REF: 55ad55f3159234bcc354a4bc37abeaf616b252ca
       AGENTFIELD_REPO: https://github.com/Agent-Field/agentfield.git
       GOWORK: off
     steps:
