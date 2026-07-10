@@ -20,6 +20,8 @@ import (
 	"sync"
 
 	"github.com/invopop/jsonschema"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
 // schemaCache memoizes the reflected JSON-schema map per concrete type T so the
@@ -70,6 +72,13 @@ func schemaFor[T any]() map[string]any {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return map[string]any{}
 	}
+
+	// Make the reflected schema faithful to the source Pydantic model: the SDK
+	// now validates harness output against this map, so invopop's all-fields
+	// `required`, `additionalProperties:false`, and non-null Optional subschemas
+	// would OVER-reject valid output. (Enums are added on the enum types via
+	// JSONSchemaExtend, already present in `m`.)
+	m = schemas.MakePydanticFaithful(m, t.Name())
 
 	schemaCache.Store(t, m)
 	return m

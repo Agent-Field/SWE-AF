@@ -8,6 +8,57 @@
 // missing key must be seeded to match Python output.
 package schemas
 
+import "github.com/invopop/jsonschema"
+
+// JSONSchemaExtend makes the reflected schema emit an `enum` constraint for
+// every field of this enum type, matching the Python Literal/Enum value set.
+// Without it the invopop reflector emits a bare `{"type":"string"}` and the
+// SDK's JSON-schema validation (which now enforces the reflected schema) would
+// accept any string — including invalid actions the Python pydantic model
+// rejects. The value lists are byte-identical to the Go consts below (and the
+// Python enums they port).
+func (AdvisorAction) JSONSchemaExtend(s *jsonschema.Schema) {
+	s.Enum = []any{
+		string(AdvisorActionRetryModified),
+		string(AdvisorActionRetryApproach),
+		string(AdvisorActionSplit),
+		string(AdvisorActionAcceptWithDebt),
+		string(AdvisorActionEscalateToReplan),
+	}
+}
+
+// JSONSchemaExtend emits the IssueOutcome enum constraint.
+func (IssueOutcome) JSONSchemaExtend(s *jsonschema.Schema) {
+	s.Enum = []any{
+		string(IssueOutcomeCompleted),
+		string(IssueOutcomeCompletedWithDebt),
+		string(IssueOutcomeFailedRetryable),
+		string(IssueOutcomeFailedUnrecoverable),
+		string(IssueOutcomeFailedNeedsSplit),
+		string(IssueOutcomeFailedEscalated),
+		string(IssueOutcomeSkipped),
+	}
+}
+
+// JSONSchemaExtend emits the ReplanAction enum constraint.
+func (ReplanAction) JSONSchemaExtend(s *jsonschema.Schema) {
+	s.Enum = []any{
+		string(ReplanActionContinue),
+		string(ReplanActionModifyDAG),
+		string(ReplanActionReduceScope),
+		string(ReplanActionAbort),
+	}
+}
+
+// JSONSchemaExtend emits the QASynthesisAction enum constraint.
+func (QASynthesisAction) JSONSchemaExtend(s *jsonschema.Schema) {
+	s.Enum = []any{
+		string(QASynthesisActionFix),
+		string(QASynthesisActionApprove),
+		string(QASynthesisActionBlock),
+	}
+}
+
 // AdvisorAction is what the Issue Advisor decided to do after a coding loop
 // failure. Ported verbatim from execution/schemas.py::AdvisorAction.
 type AdvisorAction string
