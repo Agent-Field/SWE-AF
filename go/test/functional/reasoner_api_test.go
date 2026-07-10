@@ -25,8 +25,8 @@ var ciWatchResultKeys = []string{
 // returned result carries exactly the CIWatchResult key set.
 //
 // This exercises the full HTTP surface end to end: CP sync execute -> node
-// dispatch -> reasoner -> result serialization -> CP envelope. Both swe-planner
-// and swe-fast register run_ci_watcher (it is one of the 25 shared roles), so
+// dispatch -> reasoner -> result serialization -> CP envelope. Both swe-planner-go
+// and swe-fast-go register run_ci_watcher (it is one of the 25 shared roles), so
 // hitting both is the "one more deterministic reasoner" coverage.
 func TestDeterministicReasonerKeySets(t *testing.T) {
 	requireStack(t)

@@ -2,20 +2,21 @@
 
 // Package functional holds the black-box / functional parity tests for the
 // SWE-AF Go port (design §11(b), work-breakdown T7.2). They exercise the *live*
-// stack — a control-plane plus the two Go nodes (swe-planner :8003, swe-fast
-// :8004) — brought up via docker-compose.go.yml, and assert the byte-level
-// parity contracts that the Python→Go port must preserve:
+// stack — a control-plane plus the two Go nodes (swe-planner-go :8005,
+// swe-fast-go :8006) — brought up via the self-contained compose.functional.yml,
+// and assert the byte-level parity contracts that the Python→Go port must
+// preserve:
 //
 //   - /health on both nodes returns 200 (TestHealth);
 //   - each node registers EXACTLY its expected reasoner-name set — the parity
-//     checklist: 30 on swe-planner, 29 on swe-fast (TestRegistrationParity);
+//     checklist: 30 on swe-planner-go, 29 on swe-fast-go (TestRegistrationParity);
 //   - a deterministic (no-LLM) reasoner call returns the exact pydantic
 //     model_dump() key set — CIWatchResult (TestDeterministicReasonerKeySets);
 //   - the control-plane status contract that the ReasonerFailed carrier
 //     (design §4.5) depends on: status=failed + result + error persist together,
 //     and a resultless failed re-post does not clobber the result
 //     (TestReasonerFailedStatusContract);
-//   - (env-gated, default-skipped) a real minimal swe-planner.build returns the
+//   - (env-gated, default-skipped) a real minimal swe-planner-go.build returns the
 //     BuildResult key set and the control-plane DAG contains child executions
 //     for the expected role reasoners (TestBuildLLMAndDAGParity).
 //
@@ -46,13 +47,17 @@ import (
 )
 
 const (
-	composeFile = "docker-compose.go.yml"
+	// composeFile is the self-contained functional stack (control-plane + both
+	// Go nodes). It is distinct from the production docker-compose.go.yml, which
+	// is an opt-in add-on with no control plane of its own. Path is relative to
+	// the repo root (compose runs there).
+	composeFile = "go/test/functional/compose.functional.yml"
 
-	// composeOverride remaps the HOST port bindings to 18080/18003/18004 so the
+	// composeOverride remaps the HOST port bindings to 18080/18005/18006 so the
 	// functional stack can run alongside anything already bound to
-	// 8080/8003/8004 on the host (a host control-plane, the Python compose
-	// stack, unrelated projects). Container ports and service-to-service URLs
-	// are untouched. Path is relative to the repo root (compose runs there).
+	// 8080/8005/8006 on the host (a host control-plane, the Go add-on nodes,
+	// unrelated projects). Container ports and service-to-service URLs are
+	// untouched. Path is relative to the repo root (compose runs there).
 	composeOverride = "go/test/functional/compose.override.functional.yml"
 
 	// composeProject isolates this stack's containers/volumes/network from any
@@ -60,11 +65,11 @@ const (
 	composeProject = "swe-af-go-functional"
 
 	cpBaseURL      = "http://localhost:18080"
-	plannerBaseURL = "http://localhost:18003"
-	fastBaseURL    = "http://localhost:18004"
+	plannerBaseURL = "http://localhost:18005"
+	fastBaseURL    = "http://localhost:18006"
 
-	plannerNodeID = "swe-planner"
-	fastNodeID    = "swe-fast"
+	plannerNodeID = "swe-planner-go"
+	fastNodeID    = "swe-fast-go"
 
 	// Generous ceilings: the Go images are multi-stage builds that clone the
 	// AgentField SDK, so a cold `up --build` can take several minutes.

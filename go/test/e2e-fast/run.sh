@@ -21,7 +21,7 @@ RUN_DIR="$HERE/runs/$TS"
 SHIM="$RUN_DIR/shim"
 STATE="$RUN_DIR/state"
 CP_PORT=18080
-PLANNER_PORT=18003
+PLANNER_PORT=18005
 CP_URL="http://localhost:$CP_PORT"
 PLANNER_URL="http://localhost:$PLANNER_PORT"
 GH_OWNER="AbirAbbas"
@@ -122,13 +122,15 @@ git clone --quiet "https://x-access-token:${GH_TOKEN_VAL}@github.com/${REPO_FULL
 ok "repo reset to clean seed commit"
 
 # ---------------------------------------------------------------------------
-# 5. Start swe-planner (:18003) with the claude shim on PATH
+# 5. Start swe-planner (:18005) with the claude shim on PATH. NODE_ID exercises
+#    the new default identity (swe-planner-go) so the POST below opts in via the
+#    -go reasoner path.
 # ---------------------------------------------------------------------------
 log "starting swe-planner on :$PLANNER_PORT (shim=$SHIM)"
 PATH="$SHIM:$PATH" \
   AGENTFIELD_SERVER="$CP_URL" \
   AGENT_CALLBACK_URL="$PLANNER_URL" \
-  NODE_ID="swe-planner" \
+  NODE_ID="swe-planner-go" \
   PORT="$PLANNER_PORT" \
   GH_TOKEN="$GH_TOKEN_VAL" \
   SWE_MOCK_SCENARIO="$RUN_DIR/scenario.json" \
@@ -143,7 +145,7 @@ done
 curl -sf --connect-timeout 3 -m 8 "$PLANNER_URL/health" >/dev/null 2>&1 || { err "planner did not come up (see $RUN_DIR/planner.log)"; exit 1; }
 # Wait until the CP knows the planner's reasoners.
 for i in $(seq 1 30); do
-  RC="$(curl -s --connect-timeout 3 -m 30 "$CP_URL/api/v1/nodes/swe-planner" | grep -c run_coder || true)"
+  RC="$(curl -s --connect-timeout 3 -m 30 "$CP_URL/api/v1/nodes/swe-planner-go" | grep -c run_coder || true)"
   [[ "$RC" -ge 1 ]] && break
   sleep 1
 done
@@ -161,8 +163,8 @@ read -r -d '' BODY <<JSON
 "config":{"runtime":"claude_code","check_ci":true,"ci_wait_seconds":25,"ci_poll_seconds":5,"ci_startup_grace_seconds":5,"max_verify_fix_cycles":1}}}
 JSON
 
-log "POST /api/v1/execute/async/swe-planner.build"
-RESP="$(curl -s --connect-timeout 3 -m 30 -X POST "$CP_URL/api/v1/execute/async/swe-planner.build" \
+log "POST /api/v1/execute/async/swe-planner-go.build"
+RESP="$(curl -s --connect-timeout 3 -m 30 -X POST "$CP_URL/api/v1/execute/async/swe-planner-go.build" \
   -H 'Content-Type: application/json' -d "$BODY")"
 EXEC_ID="$(printf '%s' "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("execution_id",""))' 2>/dev/null)"
 WF_ID="$(printf '%s' "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("workflow_id",""))' 2>/dev/null)"

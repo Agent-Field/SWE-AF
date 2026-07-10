@@ -21,7 +21,7 @@ var buildResultKeys = []string{
 	"summary", "pr_results", "ci_gate_results", "pr_url",
 }
 
-// expectedPlanDAGReasoners are the role reasoners a swe-planner.build MUST fan
+// expectedPlanDAGReasoners are the role reasoners a swe-planner-go.build MUST fan
 // out to during planning, as child executions in the control-plane DAG (design
 // constraint #2, §11(b) DAG parity). Issue-writer runs per issue.
 var expectedPlanDAGReasoners = []string{
@@ -32,7 +32,7 @@ var expectedPlanDAGReasoners = []string{
 	"run_issue_writer",
 }
 
-// TestBuildLLMAndDAGParity runs a real, minimal swe-planner.build end to end and
+// TestBuildLLMAndDAGParity runs a real, minimal swe-planner-go.build end to end and
 // asserts (a) the BuildResult key set and (b) that the control-plane execution
 // DAG contains child executions for the expected planning role reasoners.
 //

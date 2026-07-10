@@ -11,7 +11,7 @@ import (
 // T7.1 acceptance). By the time TestMain returns, readiness has already been
 // polled, so this is a direct single-shot assertion.
 //
-// Contract: GET :8003/health -> 200 ; GET :8004/health -> 200.
+// Contract: GET :8005/health -> 200 ; GET :8006/health -> 200.
 func TestHealth(t *testing.T) {
 	requireStack(t)
 
@@ -19,8 +19,8 @@ func TestHealth(t *testing.T) {
 		name string
 		url  string
 	}{
-		{"swe-planner", plannerBaseURL + "/health"},
-		{"swe-fast", fastBaseURL + "/health"},
+		{"swe-planner-go", plannerBaseURL + "/health"},
+		{"swe-fast-go", fastBaseURL + "/health"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
