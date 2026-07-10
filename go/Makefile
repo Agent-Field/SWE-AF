@@ -47,7 +47,10 @@ docker-build:
 		--build-arg AGENTFIELD_SDK_REF=$(AGENTFIELD_SDK_REF) \
 		-t $(IMAGE) ..
 
-# Bring up the Go-node stack (control-plane + swe-agent:8003 + swe-fast:8004).
+# Bring up the Go nodes (swe-agent-go:8005 + swe-fast-go:8006) as an ADD-ON to
+# the Python stack. Start the Python stack first (`docker compose up` — it owns
+# the control plane + shared network); this add-on joins that network as an
+# external reference.
 docker-up:
 	docker compose -f ../docker-compose.go.yml up --build
 

@@ -1,74 +1,65 @@
-# Go-node stack — mirror of docker-compose.yml but building the Go binaries from
-# go/Dockerfile instead of the Python image. The Python docker-compose.yml is
-# left untouched so both stacks can be brought up independently.
+# SWE-AF Go nodes — opt-in ADD-ON to the Python stack.
 #
-#   docker compose -f docker-compose.go.yml up
+# The Python docker-compose.yml is the DEFAULT stack (control plane + the Python
+# swe-planner/swe-fast nodes) and is left 100% untouched. This file adds ONLY
+# the two Go nodes, registered under DISTINCT identities so both stacks can run
+# against one control plane simultaneously:
 #
-# The build context is the SWE-AF repo root (so the go/ module is available) and
-# the Dockerfile clones the AgentField Go SDK at a pinned ref (override with
-# --build-arg AGENTFIELD_SDK_REF=<sha>). Env pass-through matches the Python
-# compose exactly (env_file: .env plus the explicit overrides below).
+#     swe-agent-go  ->  node id "swe-planner-go", :8005
+#     swe-fast-go   ->  node id "swe-fast-go",    :8006
+#
+# Run story (two commands, Python stack first):
+#
+#     docker compose up -d                           # Python stack + control plane
+#     docker compose -f docker-compose.go.yml up -d  # adds the Go nodes
+#
+# This is a SEPARATE compose project (name: swe-af-go) that joins the Python
+# stack's network as an EXTERNAL reference, so AGENTFIELD_SERVER=
+# http://control-plane:8080 resolves and the Go nodes share the Python stack's
+# `workspaces` volume and `build-db` over that network. Because control-plane
+# and build-db live in the Python project, there is no `depends_on` on them —
+# bring the Python stack up first.
+#
+# Caveat: the external network/volume names below (swe-af_default,
+# swe-af_workspaces) are the Python project's default-project-name resources.
+# They assume the Python stack was brought up with `docker compose up` from this
+# directory (project name "swe-af"). If you set COMPOSE_PROJECT_NAME for the
+# Python stack, override the external `name:` fields below to match.
+#
+# The Go image is built from go/Dockerfile (build context = repo root so the go/
+# module is in context); it clones the AgentField Go SDK at a pinned ref
+# (override with --build-arg AGENTFIELD_SDK_REF=<sha>).
+#
+# Opt in per request via the -go reasoner path, e.g.
+#     POST /api/v1/execute/async/swe-planner-go.build
+name: swe-af-go
+
 services:
-  control-plane:
-    image: agentfield/control-plane:latest
-    ports:
-      - "8080:8080"
-    environment:
-      - AGENTFIELD_HTTP_ADDR=0.0.0.0:8080
-      - AGENTFIELD_STORAGE_MODE=local
-    volumes:
-      - agentfield-data:/data
-
-  # Ephemeral Postgres for build-time integration checks. Repo-agnostic: it
-  # ships an empty database and the *target repo's own* integration global-setup
-  # migrates it, so the factory needs no schema knowledge. Tests that hard-require
-  # a DB (e.g. REQUIRE_TEST_DB=1 …) can connect via DATABASE_URL_TEST instead of
-  # failing at the connection layer (pg-pool ECONNREFUSED) and cascading.
-  #
-  # The data is intentionally throwaway (no volume). One shared DB means
-  # DB-dependent builds should run one at a time; per-build databases would be
-  # the next step if concurrent DB builds are needed.
-  build-db:
-    image: postgres:16
-    environment:
-      - POSTGRES_USER=${BUILD_DB_USER:-builder}
-      - POSTGRES_PASSWORD=${BUILD_DB_PASSWORD:-builder}
-      - POSTGRES_DB=${BUILD_DB_NAME:-buildtest}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${BUILD_DB_USER:-builder} -d ${BUILD_DB_NAME:-buildtest}"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-
-  swe-agent:
+  swe-agent-go:
     build:
       context: .
       dockerfile: go/Dockerfile
     env_file: .env
     environment:
       - AGENTFIELD_SERVER=http://control-plane:8080
-      - NODE_ID=swe-planner
-      - PORT=8003
-      - AGENT_CALLBACK_URL=http://swe-agent:8003
+      - NODE_ID=swe-planner-go
+      - PORT=8005
+      - AGENT_CALLBACK_URL=http://swe-agent-go:8005
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # build-db lives in the Python stack; reachable over the shared network.
       - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}
     ports:
-      - "8003:8003"
+      - "8005:8005"
     volumes:
       - workspaces:/workspaces
       - ${HOME}/.codex:/root/.codex
-    depends_on:
-      control-plane:
-        condition: service_started
-      build-db:
-        condition: service_healthy
     deploy:
-      replicas: 1  # Scale with: docker compose -f docker-compose.go.yml up --scale swe-agent=3
+      replicas: 1  # Scale with: docker compose -f docker-compose.go.yml up --scale swe-agent-go=3
 
-  swe-fast:
+  swe-fast-go:
     build:
       context: .
       dockerfile: go/Dockerfile
@@ -76,9 +67,9 @@ services:
     env_file: .env
     environment:
       - AGENTFIELD_SERVER=http://control-plane:8080
-      - NODE_ID=swe-fast
-      - PORT=8004
-      - AGENT_CALLBACK_URL=http://swe-fast:8004
+      - NODE_ID=swe-fast-go
+      - PORT=8006
+      - AGENT_CALLBACK_URL=http://swe-fast-go:8006
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
       - GH_TOKEN=${GH_TOKEN}
@@ -89,18 +80,24 @@ services:
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
+      # build-db lives in the Python stack; reachable over the shared network.
       - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}
     ports:
-      - "8004:8004"
+      - "8006:8006"
     volumes:
       - workspaces:/workspaces
       - ${HOME}/.codex:/root/.codex
-    depends_on:
-      control-plane:
-        condition: service_started
-      build-db:
-        condition: service_healthy
 
+# Join the Python stack's default network so control-plane / build-db resolve by
+# service name. External => Compose does not create it; the Python stack must be
+# up first (see header caveat on the project-scoped name).
+networks:
+  default:
+    external: true
+    name: swe-af_default
+
+# Share the Python stack's workspaces volume (cloned repos / build output).
 volumes:
-  agentfield-data:
   workspaces:
+    external: true
+    name: swe-af_workspaces
