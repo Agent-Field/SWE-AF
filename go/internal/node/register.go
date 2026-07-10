@@ -123,7 +123,6 @@ func (n *Node) registerOrchestrators() {
 		App:              n.App,
 		NodeID:           n.NodeID,
 		AgentFieldServer: n.AgentFieldServer,
-		Token:            n.Token,
 		CIGate:           orch.RunCIGate,
 		ApprovalGate:     orch.PlanApprovalGate,
 	}

@@ -2,13 +2,10 @@ package orch
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
-
-	"github.com/Agent-Field/SWE-AF/go/internal/reasonerfail"
 )
 
 // --- mock App -------------------------------------------------------------
@@ -137,31 +134,5 @@ func TestDumpToMapNilStaysNil(t *testing.T) {
 	var mp *struct{}
 	if got := dumpToMap(mp); got != nil {
 		t.Fatalf("dumpToMap(nil ptr) should be nil, got %v", got)
-	}
-}
-
-func TestPosterConfigSeam(t *testing.T) {
-	d := &Deps{AgentFieldServer: "http://cp:8080", Token: "tok"}
-	pc := d.PosterConfig()
-	if pc.AgentFieldURL != "http://cp:8080" || pc.Token != "tok" {
-		t.Fatalf("PosterConfig mismatch: %+v", pc)
-	}
-}
-
-// sanity: postFailedFn seam is overridable and returns the message error.
-func TestPostFailedSeamOverridable(t *testing.T) {
-	prev := postFailedFn
-	defer func() { postFailedFn = prev }()
-	var got any
-	postFailedFn = func(_ context.Context, _ reasonerfail.PosterConfig, result any, message string) error {
-		got = result
-		return errors.New(message)
-	}
-	err := postFailedFn(context.Background(), reasonerfail.PosterConfig{}, map[string]any{"a": 1}, "msg")
-	if err == nil || err.Error() != "msg" {
-		t.Fatalf("expected msg error, got %v", err)
-	}
-	if got == nil {
-		t.Fatal("result not captured")
 	}
 }

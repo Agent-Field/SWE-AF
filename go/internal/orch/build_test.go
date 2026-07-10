@@ -2,12 +2,13 @@ package orch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/Agent-Field/SWE-AF/go/internal/reasonerfail"
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
 )
 
 // buildHandler routes mock reasoner responses by target suffix. Overridable
@@ -41,18 +42,11 @@ func emptyExec(map[string]any) map[string]any {
 }
 
 // TestBuildEmptyGuardReportsFailed maps to test_empty_build_guard.py: a build
-// that ships nothing and fails verification must invoke the ReasonerFailed
-// carrier with the BuildResult and return an error.
+// that ships nothing and fails verification must return the SDK's result-carrying
+// &agent.ReasonerFailed (Message = the failure summary, Result = the BuildResult
+// map) so the async handler records status=failed while preserving the outcome.
 func TestBuildEmptyGuardReportsFailed(t *testing.T) {
 	defer withExecCtx("run-1", "exec-1")()
-
-	prevPost := postFailedFn
-	defer func() { postFailedFn = prevPost }()
-	var captured any
-	postFailedFn = func(_ context.Context, _ reasonerfail.PosterConfig, result any, message string) error {
-		captured = result
-		return fmt.Errorf("%s", message)
-	}
 
 	app := &mockApp{handler: buildHandler(emptyExec, func(map[string]any) map[string]any {
 		return map[string]any{"passed": false, "criteria_results": []any{}, "summary": "nope"}
@@ -67,20 +61,24 @@ func TestBuildEmptyGuardReportsFailed(t *testing.T) {
 	if err == nil {
 		t.Fatal("empty build must return an error")
 	}
-	if err.Error() != "Build failed: 0/0 issues completed, no branches merged" {
-		t.Fatalf("error message = %q", err.Error())
+	var rf *agent.ReasonerFailed
+	if !errors.As(err, &rf) {
+		t.Fatalf("error must be *agent.ReasonerFailed, got %T: %v", err, err)
 	}
-	res, ok := captured.(map[string]any)
+	if rf.Message != "Build failed: 0/0 issues completed, no branches merged" {
+		t.Fatalf("ReasonerFailed.Message = %q", rf.Message)
+	}
+	res, ok := rf.Result.(map[string]any)
 	if !ok {
-		t.Fatalf("carrier result not a map: %T", captured)
+		t.Fatalf("ReasonerFailed.Result not a map: %T", rf.Result)
 	}
 	if asBool(res["success"]) {
-		t.Fatal("carrier result success should be false")
+		t.Fatal("carried result success should be false")
 	}
 	if _, has := res["dag_state"]; !has {
-		t.Fatal("carrier result must carry dag_state")
+		t.Fatal("carried result must carry dag_state")
 	}
-	// Build also returns the same BuildResult map.
+	// Build also returns the same BuildResult map as the value.
 	if m, ok := out.(map[string]any); !ok || asBool(m["success"]) {
 		t.Fatalf("build return should be a BuildResult map with success=false, got %T", out)
 	}
@@ -90,13 +88,6 @@ func TestBuildEmptyGuardReportsFailed(t *testing.T) {
 // is NOT empty even when verification fails — it returns normally (no error).
 func TestBuildPartialNotEmpty(t *testing.T) {
 	defer withExecCtx("run-2", "exec-2")()
-
-	prevPost := postFailedFn
-	defer func() { postFailedFn = prevPost }()
-	postFailedFn = func(context.Context, reasonerfail.PosterConfig, any, string) error {
-		t.Fatal("ReasonerFailed carrier must NOT fire for a partial build")
-		return nil
-	}
 
 	exec := func(map[string]any) map[string]any {
 		return map[string]any{
@@ -128,12 +119,6 @@ func TestBuildPartialNotEmpty(t *testing.T) {
 // TestBuildVerifiedSuccess: verification passes → success true, no carrier.
 func TestBuildVerifiedSuccess(t *testing.T) {
 	defer withExecCtx("run-3", "exec-3")()
-	prevPost := postFailedFn
-	defer func() { postFailedFn = prevPost }()
-	postFailedFn = func(context.Context, reasonerfail.PosterConfig, any, string) error {
-		t.Fatal("carrier must not fire for a verified build")
-		return nil
-	}
 
 	exec := func(map[string]any) map[string]any {
 		return map[string]any{
@@ -175,9 +160,6 @@ func TestBuildRequiresRepoPathOrURL(t *testing.T) {
 // build_ids (no shared mutable state). Maps to test_build_isolation.py intent.
 func TestBuildIsolationConcurrent(t *testing.T) {
 	defer withExecCtx("run", "exec")()
-	prevPost := postFailedFn
-	defer func() { postFailedFn = prevPost }()
-	postFailedFn = func(context.Context, reasonerfail.PosterConfig, any, string) error { return nil }
 
 	var mu sync.Mutex
 	buildIDs := map[string]bool{}

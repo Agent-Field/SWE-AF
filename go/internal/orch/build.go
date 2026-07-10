@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
+
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
@@ -466,9 +468,18 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	buildResultMap := dumpToMap(buildResult)
 
 	// Empty-build guard: nothing shipped AND verification failed → report failed.
+	// Return the SDK's result-carrying &agent.ReasonerFailed so the async handler
+	// records status=failed while preserving the BuildResult on the execution
+	// record (it posts result + error in a single 5×-retried status update). The
+	// result is attached only when it is a JSON object (a non-nil map), mirroring
+	// the JSON-object guard of the retired reasonerfail.buildBody.
 	if isEmptyBuild(success, everCompleted, everMerged) {
 		msg := fmt.Sprintf("Build failed: 0/%d issues completed, no branches merged", total)
-		return buildResultMap, postFailedFn(ctx, deps.PosterConfig(), buildResultMap, msg)
+		rf := &agent.ReasonerFailed{Message: msg}
+		if buildResultMap != nil {
+			rf.Result = buildResultMap
+		}
+		return buildResultMap, rf
 	}
 
 	return buildResultMap, nil

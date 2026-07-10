@@ -11,22 +11,22 @@ import (
 )
 
 // TestReasonerFailedStatusContract verifies the control-plane persistence
-// contract that the ReasonerFailed carrier (design §4.5) is built on, WITHOUT
-// spending an LLM call. The carrier replicates Python's
-// `ReasonerFailed(message, result=...)` by POSTing status=failed + result to
-// the CP status endpoint and then returning a plain error; the SDK's own
-// resultless failed re-post must NOT clobber the carried result.
+// contract that the SDK's native &agent.ReasonerFailed relies on, WITHOUT
+// spending an LLM call. When build returns &agent.ReasonerFailed{Message, Result},
+// the SDK async handler POSTs status=failed together with result + error_details
+// (a single, 5×-retried status update); the CP must persist the result alongside
+// the failed terminal status, and any later resultless failed status must NOT
+// clobber it.
 //
 // The real empty-build trigger (orch/build.go `_is_empty_build`) needs a full
 // plan → execute cycle and therefore an LLM; that path is covered by the
 // env-gated TestBuildLLMAndDAGParity and skipped here (see below). This test
-// instead asserts the underlying CP contract directly, which is what the design
-// says to do when the guard cannot be triggered cheaply:
+// instead asserts the underlying CP contract directly:
 //
 //  1. status=failed + result + error persist TOGETHER (the §11(b) assertion:
 //     a failed record carries a non-null result AND an error simultaneously);
-//  2. a subsequent resultless status=failed (the SDK's re-post) leaves the
-//     result and error intact — the non-clobber behaviour §4.5 relies on.
+//  2. a subsequent resultless status=failed leaves the result and error intact —
+//     the non-clobber behaviour the failed-with-result outcome relies on.
 func TestReasonerFailedStatusContract(t *testing.T) {
 	requireStack(t)
 

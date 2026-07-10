@@ -15,7 +15,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -26,7 +25,6 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/coding"
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
-	"github.com/Agent-Field/SWE-AF/go/internal/reasonerfail"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
@@ -49,8 +47,10 @@ type Handler func(ctx context.Context, deps *Deps, input map[string]any) (any, e
 //
 //   - App: the control-plane-routed call + note surface (a *agent.Agent).
 //   - NodeID: the node id calls are addressed to (NODE_ID, default "swe-planner-go").
-//   - AgentFieldServer / Token / HTTPClient: reach the CP status endpoint for the
-//     ReasonerFailed carrier (empty-build guard) and the approval webhook base.
+//   - AgentFieldServer: the control-plane base URL — the approval webhook base.
+//     (The empty-build failure carrier no longer POSTs here: build returns the
+//     SDK's &agent.ReasonerFailed and the async handler posts status=failed +
+//     result on its own.)
 //   - CIGate: the post-PR CI watch/fix gate seam. Owned by the ci-gate task
 //     (cigate_loop.go). When nil, build skips the CI gate (parity with the
 //     Python gate being a no-op when check_ci is false / no PR number).
@@ -61,8 +61,6 @@ type Deps struct {
 	App              App
 	NodeID           string
 	AgentFieldServer string
-	Token            string
-	HTTPClient       *http.Client
 	CIGate           CIGateRunner
 	ApprovalGate     ApprovalGate
 }
@@ -74,10 +72,6 @@ type Deps struct {
 // executionContextFrom is a seam over agent.ExecutionContextFrom so tests can
 // inject a run_id / execution_id (the SDK's context key is unexported).
 var executionContextFrom = agent.ExecutionContextFrom
-
-// postFailedFn is the ReasonerFailed carrier seam. Production posts status=failed
-// plus the structured result to the control plane; tests capture the result.
-var postFailedFn = reasonerfail.PostFailedWithResult
 
 // sleepFn bounds the git-init retry backoff; tests stub it to a no-op.
 var sleepFn = func(ctx context.Context, d time.Duration) {
@@ -160,16 +154,6 @@ func (d *Deps) NewCallFn() coding.CallFn {
 func (d *Deps) NewNoteFn(ctx context.Context) coding.NoteFn {
 	return func(msg string, tags []string) {
 		d.Note(ctx, msg, tags...)
-	}
-}
-
-// PosterConfig builds the reasonerfail.PosterConfig from the Deps — the seam the
-// empty-build guard uses to POST status=failed + result to the control plane.
-func (d *Deps) PosterConfig() reasonerfail.PosterConfig {
-	return reasonerfail.PosterConfig{
-		AgentFieldURL: d.AgentFieldServer,
-		Token:         d.Token,
-		HTTPClient:    d.HTTPClient,
 	}
 }
 
