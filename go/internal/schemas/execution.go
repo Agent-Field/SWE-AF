@@ -240,6 +240,29 @@ type DAGState struct {
 	WorkspaceManifest map[string]any `json:"workspace_manifest"` // Serialised WorkspaceManifest
 }
 
+// MarshalJSON normalises nil slices to empty slices before serialising, so the
+// ~12 list fields never emit as null. Python's pydantic DAGState rejects a
+// present-but-null value on every list field (all_issues, levels,
+// completed_issues, failed_issues, skipped_issues, in_flight_issues,
+// replan_history, pending/merged/unmerged_branches, merge_results,
+// integration_test_results, accumulated_debt, adaptation_history), while the
+// dict|None workspace_manifest legitimately stays null (EmptyForNilSlices leaves
+// maps untouched).
+//
+// This single override covers every DAGState serialisation point: the
+// checkpoint.json write (dag/checkpoint.go saveCheckpoint), the BuildResult
+// dag_state embedding, and the replanner context — a value receiver so it fires
+// whether a DAGState or *DAGState is marshalled. The alias strips the method set
+// (both MarshalJSON and the seeding UnmarshalJSON) to avoid recursion.
+func (s DAGState) MarshalJSON() ([]byte, error) {
+	// s is already a copy (value receiver); normalise its nil slices in place.
+	// nil↔empty is behaviourally identical in Go, so the shallow copy's shared
+	// backing arrays are unaffected in any observable way.
+	EmptyForNilSlices(&s)
+	type alias DAGState
+	return json.Marshal(alias(s))
+}
+
 // GitInitResult is the result of git initialization.
 type GitInitResult struct {
 	Mode                string `json:"mode"`                  // "fresh" or "existing"

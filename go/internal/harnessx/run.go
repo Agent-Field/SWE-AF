@@ -9,6 +9,7 @@ import (
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fatal"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
+	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
 // runIDFromContext extracts the build's run ID from the reasoner execution
@@ -74,9 +75,14 @@ func Run[T any](ctx context.Context, app HarnessCaller, prompt string, opts harn
 	// Result so it can apply its own deterministic fallback. Not an error.
 	if result == nil || result.Parsed == nil {
 		seeded := seedDefaults[T]()
+		schemas.EmptyForNilSlices(&seeded)
 		return &seeded, result, nil
 	}
 
+	// Normalise nil slices to empty slices on the parsed result so every role
+	// result serialises its list fields as [] (pydantic parity) — matching the
+	// checkpoint/DAGState normalisation. Maps and nil pointers are left null.
+	schemas.EmptyForNilSlices(&dest)
 	return &dest, result, nil
 }
 
