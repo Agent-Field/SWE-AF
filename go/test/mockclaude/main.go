@@ -20,6 +20,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
 // roleMatch maps a distinctive substring of a role's system prompt to a role id.
@@ -93,6 +95,12 @@ func main() {
 	role := detectRole(systemPrompt)
 
 	value := dispatch(role, prompt, cwd, sc)
+
+	// Normalise nil slices to [] so the marshalled output is valid against the
+	// SDK's (now-enforced) JSON-schema validation: a nil slice marshals to null,
+	// which fails a `type: array` field. Nil pointers/maps stay null — the
+	// pydantic-faithful schema (schemas.MakePydanticFaithful) accepts those.
+	schemas.EmptyForNilSlices(value)
 
 	// Write the schema-valid JSON to the harness output file.
 	outPath := outputPathFrom(prompt)
