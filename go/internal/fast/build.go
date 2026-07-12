@@ -350,7 +350,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		remoteURL = getString(gitConfig, "remote_url", "")
 	}
 	if remoteURL != "" && cfg.EnableGithubPR {
-		deps.note(ctx, "Fast build: draft PR", "fast_build", "github_pr")
+		deps.note(ctx, "Fast build: GitHub PR", "fast_build", "github_pr")
 		baseBranch := cfg.GithubPRBase
 		if baseBranch == "" && gitConfig != nil {
 			baseBranch = getString(gitConfig, "remote_default_branch", "")

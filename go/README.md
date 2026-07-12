@@ -141,28 +141,39 @@ for the override). Health: `curl -f http://localhost:8005/health` and
 
 Both nodes are configured entirely through the environment. The compose file
 loads `.env` (`env_file: .env`) and adds the per-service overrides. See
-[`.env.example`](../.env.example) at the repo root for the full, documented
-list; the load-bearing ones:
+[`.env.example`](../.env.example) at the repo root for the documented common
+set; the load-bearing ones:
 
 | Variable                                                  | Purpose                                              |
 |-----------------------------------------------------------|------------------------------------------------------|
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`           | Claude runtime (`claude_code`)                       |
 | `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`| Open runtimes (`open_code` / `codex`)                |
-| `GH_TOKEN`                                                | GitHub PAT (`repo` scope) for draft PRs              |
+| `GH_TOKEN`                                                | GitHub PAT (`repo` scope) for PRs                    |
 | `SWE_DEFAULT_RUNTIME`                                     | `claude_code` \| `open_code` \| `codex` (default `claude_code`) |
 | `SWE_DEFAULT_MODEL`                                       | Default model when the request config omits `models` |
 | `SWE_CODEX_AUTH_MODE`                                     | `auto` \| `chatgpt` \| `api_key` (codex CLI auth)     |
 | `OPENCODE_ENABLE_EXA` + `EXA_API_KEY`                     | Optional web search for the open runtime             |
 | `AGENTFIELD_SERVER`                                       | Control-plane URL (default `http://localhost:8080`)  |
+| `AGENT_CALLBACK_URL`                                      | Public URL the control plane calls the node back on. **Required for any containerized/remote deploy that isn't this compose file** (compose sets it per service) — without it the CP gets `504 agent_unreachable` |
 | `NODE_ID`                                                 | Node ID (`swe-planner-go` / `swe-fast-go`)           |
 | `PORT`                                                    | Listen port (`8005` / `8006`)                        |
 
-## Deployment: no `af install`
+Advanced knobs (HITL/approvals: `HAX_API_KEY`, `HAX_SDK_URL`, `HAX_SENDER_NAME`,
+`HAX_SENDER_KEY`, `AGENTFIELD_APPROVAL_USER_ID`; git identity for the resolve
+flow: `SWE_AF_GIT_EMAIL`, `SWE_AF_GIT_NAME`; auth: `AGENTFIELD_API_KEY`) are
+read from the environment as well — grep `os.Getenv` under `internal/` for the
+authoritative set. The per-request build config JSON (`runtime`, `models`,
+budget/iteration knobs) is byte-identical to the Python node's — see the root
+[README](../README.md) and `.env.example` for the schema and examples.
 
-`af install` (the AgentField package installer) is **Python-only** — it reads
-`agentfield-package.yaml` and launches the node via a Python entrypoint, which
-cannot start a Go binary. The `agentfield-package.yaml` manifest is retained for
-metadata (node id, default port, healthcheck, required env), but the Go nodes
-deploy via **Docker image / compose / binary**, not `af install`. Adding Go
-support to the CP installer is a separate control-plane feature and is out of
-scope for the port.
+## Deployment: no `af install` (yet)
+
+`af install <this repo>` installs the **Python** node: the only
+`agentfield-package.yaml` in this repository is the root one, which declares
+the Python entrypoint (`python -m swe_af`, node id `swe-planner`). There is no
+Go manifest, so the Go nodes deploy via **Docker image / compose / binary**.
+The upstream AgentField installer does support Go nodes (`language: go` +
+`entrypoint.build`), and a subdirectory selector (`af install <repo> --path go`)
+is in flight — once both are released, shipping a `go/agentfield-package.yaml`
+would make the Go node installable the same way. Until then: compose add-on or
+bare binary.

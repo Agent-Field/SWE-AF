@@ -1,9 +1,10 @@
 # SWE-AF Go port — functional (black-box) parity tests
 
 These tests exercise the **live** stack — the AgentField control-plane plus the
-two Go nodes (`swe-planner` on `:8003`, `swe-fast` on `:8004`) — brought up via
-`docker-compose.go.yml`, and assert the byte-level parity contracts the
-Python→Go port must preserve (design `§11(b)`, work-breakdown `T7.2`).
+two Go nodes (`swe-planner-go` on `:8005`, `swe-fast-go` on `:8006`) — brought
+up via the self-contained `compose.functional.yml`, and assert the byte-level
+parity contracts the Python→Go port must preserve (design `§11(b)`,
+work-breakdown `T7.2`).
 
 They are isolated behind the `functional` build tag, so the unit CI job
 (`go test ./...`) never touches them. They run only when you ask for them.
@@ -12,8 +13,8 @@ They are isolated behind the `functional` build tag, so the unit CI job
 
 | Test | Contract |
 |---|---|
-| `TestHealth` | `GET /health` on `:8003` and `:8004` returns `200`. |
-| `TestRegistrationParity` | `swe-planner` registers **exactly** 30 reasoners and `swe-fast` **exactly** 29 — the parity checklist (name-set equality, no missing/extra). Names come from the Python registration surface, not from the Go `register.go`. |
+| `TestHealth` | `GET /health` on both Go nodes returns `200`. |
+| `TestRegistrationParity` | `swe-planner-go` registers **exactly** 30 reasoners and `swe-fast-go` **exactly** 29 — the parity checklist (name-set equality, no missing/extra). Names come from the Python registration surface, not from the Go `register.go`. |
 | `TestDeterministicReasonerKeySets` | `run_ci_watcher` (the only no-LLM reasoner) on **both** nodes, called against a nonexistent repo path (deterministic — `gh pr checks` fails immediately), returns a result whose key set is exactly the Python `CIWatchResult.model_dump()` set: `status, pr_number, elapsed_seconds, failed_checks, summary`. |
 | `TestReasonerFailedStatusContract` | The control-plane persistence contract the ReasonerFailed carrier (design `§4.5`) relies on: `status=failed` + `result` + `error` persist **together**, and a resultless `failed` re-post (what the SDK sends) does **not** clobber the carried result. |
 | `TestEmptyBuildGuardViaBuild` | **Always skipped** — triggering the real empty-build guard needs an LLM plan/execute cycle; its CP contract is covered by `TestReasonerFailedStatusContract`, end-to-end by the gated build test below. |
@@ -23,9 +24,14 @@ They are isolated behind the `functional` build tag, so the unit CI job
 
 ```
 docker compose -p swe-af-go-functional \
-  -f docker-compose.go.yml -f go/test/functional/compose.override.functional.yml \
+  -f go/test/functional/compose.functional.yml \
+  -f go/test/functional/compose.override.functional.yml \
   up -d --build
 ```
+
+(`compose.functional.yml` is a self-contained stack — control-plane + both Go
+nodes — distinct from the production `docker-compose.go.yml`, which is an
+add-on to the Python stack and has no control plane of its own.)
 
 **once**, waits for both nodes to be healthy and registered, runs every test
 against that shared stack, then `docker compose ... down -v` (volumes removed).
@@ -34,9 +40,9 @@ message**; if Docker is available but `up` fails, the suite **fails** (that is
 a real breakage, not an environmental skip).
 
 The override file remaps only the **host** port bindings — control-plane
-`:18080`, swe-planner `:18003`, swe-fast `:18004` — so the functional stack can
-run alongside anything already occupying `8080/8003/8004` on the host (a host
-control-plane, the Python compose stack, unrelated projects). Container ports
+`:18080`, swe-planner-go `:18005`, swe-fast-go `:18006` — so the functional
+stack can run alongside anything already occupying `8080/8005/8006` on the host
+(a host control-plane, the Go add-on nodes, unrelated projects). Container ports
 and every service-to-service URL are unchanged. The dedicated compose project
 name likewise isolates its containers/volumes/network from the regular
 `swe-af` project.

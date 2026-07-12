@@ -78,7 +78,8 @@ type githubPRInput struct {
 	AIProvider        string           `json:"ai_provider"`
 }
 
-// RunGitHubPR pushes the integration branch and creates a draft PR on GitHub.
+// RunGitHubPR pushes the integration branch and creates a PR (opened ready
+// for review — the github_pr prompt forbids --draft) on GitHub.
 // Returns a GitHubPRResult dict.
 func RunGitHubPR(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	in, err := afx.Bind[githubPRInput](input)
@@ -86,7 +87,7 @@ func RunGitHubPR(ctx context.Context, deps *Deps, input map[string]any) (any, er
 		return nil, err
 	}
 
-	deps.App.Note(ctx, fmt.Sprintf("GitHub PR: pushing %s and creating draft PR",
+	deps.App.Note(ctx, fmt.Sprintf("GitHub PR: pushing %s and creating PR",
 		in.IntegrationBranch), "github_pr", "start")
 
 	taskPrompt := gitprompts.GitHubPRTaskPrompt(gitprompts.GitHubPROptions{
