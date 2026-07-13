@@ -39,7 +39,7 @@ run-fast:
 # AgentField SDK ref are overridable:
 #   make docker-build IMAGE=myrepo/swe-af-go:dev AGENTFIELD_SDK_REF=<sha>
 IMAGE ?= swe-af-go:latest
-AGENTFIELD_SDK_REF ?= a99510564f31ea11e8cc24bcbc983acff578a700
+AGENTFIELD_SDK_REF ?= 795bdd57b4dec884cfe93e16783e8f4bfb2a2a7f
 
 # Build the multi-stage Go image from the repo root.
 docker-build:
