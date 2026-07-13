@@ -38,7 +38,7 @@ normal versioned `require` is impossible. The port depends on the SDK
 (`github.com/Agent-Field/agentfield/sdk/go`) two ways:
 
 - **Dev — Go workspace.** A `go.work` at the shared parent of both repos
-  (`/home/abir/af/swe/go.work`) lists `./SWE-AF/go` and `./agentfield/sdk/go`,
+  (`<workspace>/go.work`) lists `./SWE-AF/go` and `./agentfield/sdk/go`,
   so edits to the SDK are picked up live with zero `go.mod` churn. It is not
   committed (it spans two repos). With the workspace present, `go build ./...`
   just works.

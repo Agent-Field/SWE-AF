@@ -24,7 +24,7 @@
 | Harness incremental `schema_mode` has **no Go equivalent**; Go runner only does single-shot + `SchemaMaxRetries` + `BuildFollowupPrompt` | `harness/runner.go`, no `SchemaMode` | Do not port incremental. Document as known difference (§10). **Superseded (`feat/go-sdk-parity`):** `harness.Options.SchemaMode` now exists; SWE-AF keeps the `single` default (§10). |
 | Go codex provider parses `codex exec --json` JSONL natively; structured output uses the same file-write protocol (`BuildPromptSuffix`) as all providers | `harness/codex.go`, `harness/schema.go:36` | The Python `codex_harness_patch` is **not needed** in Go (§9). |
 | Client approval: `RequestApproval` (POST `/api/v1/agents/{node}/executions/{id}/request-approval`, sets execution → `waiting`) + poll-based `WaitForApproval` (GET `/approval-status`). **No `Agent.Pause()`, no PauseManager, no `/webhooks/approval` route.** | `client/approval.go:61-127` | HITL is poll-based (§4.6). `waiting` status is set server-side by `request-approval`, so the UI shows waiting. **Superseded (`feat/go-sdk-parity`):** `agent.Pause()` + `PauseManager` + `/webhooks/approval` now exist; HITL uses `agent.Pause` (§4.6). |
-| hax REST: `POST {HAX_SDK_URL}/api/v1/requests`, header `Authorization: Bearer {HAX_API_KEY}`, camelCase body (`type,payload,title,description,webhookUrl,expiresInSeconds,metadata,userId,publicKey`), response `{id,url,type,status,...}` | `/home/abir/af/hax-sdk/sdks/python/hax/client.py:325`, `http.py:52`, `models/request.py` | Go HITL calls hax HTTP directly (§4.6); no hax-Go-SDK needed. Omit `publicKey` → hax returns plaintext values (§4.6 note). |
+| hax REST: `POST {HAX_SDK_URL}/api/v1/requests`, header `Authorization: Bearer {HAX_API_KEY}`, camelCase body (`type,payload,title,description,webhookUrl,expiresInSeconds,metadata,userId,publicKey`), response `{id,url,type,status,...}` | `<hax-sdk>/sdks/python/hax/client.py:325`, `http.py:52`, `models/request.py` | Go HITL calls hax HTTP directly (§4.6); no hax-Go-SDK needed. Omit `publicKey` → hax returns plaintext values (§4.6 note). |
 
 ---
 
@@ -43,7 +43,7 @@ Justification (vs. a sibling repo, vs. root-level go.mod):
 
 Because there are **no `sdk/go/vX.Y.Z` tags**, a normal `require ... vX.Y.Z` is impossible. Decision:
 
-- **Dev:** a **Go workspace** at `/home/abir/af/swe/go.work` listing `./SWE-AF/go` and `./agentfield/sdk/go`. Zero `go.mod` churn; edits to the SDK are picked up live. `go.work` is git-ignored in each repo (it spans repos).
+- **Dev:** a **Go workspace** at `<workspace>/go.work` listing `./SWE-AF/go` and `./agentfield/sdk/go`. Zero `go.mod` churn; edits to the SDK are picked up live. `go.work` is git-ignored in each repo (it spans repos).
 - **CI / Docker:** a **`replace` directive** in `SWE-AF/go/go.mod`:
   ```
   require github.com/Agent-Field/agentfield/sdk/go v0.0.0-00010101000000-000000000000
@@ -88,7 +88,7 @@ go/
     node/           # shared *agent.Agent wiring, NodeID, register() functions
 ```
 
-| Python file (abs under `/home/abir/af/swe/SWE-AF/`) | LOC | Go package / file(s) |
+| Python file (abs under `SWE-AF/`) | LOC | Go package / file(s) |
 |---|---|---|
 | `swe_af/app.py` | 2149 | `orch/build.go`, `orch/plan.go`, `orch/execute.go`, `orch/resolve.go`, `orch/resume.go`, `orch/cigate_loop.go` (`_run_ci_gate`), `orch/approval_gate.go` (hax plan-approval `:355-471,:759-838`), `orch/clone_repos.go` (`_clone_repos`), plus `node/node.go` (Agent construction). |
 | `swe_af/__main__.py`, `swe_af/fast/__main__.py` | 5/4 | `cmd/swe-planner/main.go`, `cmd/swe-fast/main.go` |
@@ -219,7 +219,7 @@ Python uses `app.pause()` (webhook-resumed). Go has no `Agent.Pause()`; use the 
 > **Superseded (SDK parity, `feat/go-sdk-parity`):** the Go SDK now has `agent.Pause()` (webhook-resumed: `PauseManager` + `/webhooks/approval` route), matching Python's `app.pause()`. `hitl.RequestUserInputAndPause` and `orch/approval_gate.go` now call `pauser.Pause(...)` through a small `hitl.Pauser` seam (satisfied by `*agent.Agent`); steps 3–4 below collapse into a single `Pause` call, and the poll-latency / lost-webhook-resume caveat no longer applies. Merge is gated on the agentfield SDK PR landing + the `AGENTFIELD_SDK_REF` bump in `go/Dockerfile`.
 
 **Ask-user flow (`hitl.RequestUserInputAndPause`), mirroring `ask_user.py:432`:**
-1. Build the hax form payload from `AskUserForm` (port `build_form_builder` + `FormBuilder.to_payload()` — read `/home/abir/af/hax-sdk/sdks/python/hax/form_builder.py` to replicate the exact payload JSON: `{title,description,submitLabel,fields:[{id,type,label,description,required,placeholder,defaultValue,options,min,max,step}]}` in camelCase — confirm keys against `form_builder.py`).
+1. Build the hax form payload from `AskUserForm` (port `build_form_builder` + `FormBuilder.to_payload()` — read `<hax-sdk>/sdks/python/hax/form_builder.py` to replicate the exact payload JSON: `{title,description,submitLabel,fields:[{id,type,label,description,required,placeholder,defaultValue,options,min,max,step}]}` in camelCase — confirm keys against `form_builder.py`).
 2. `POST {HAX_SDK_URL}/api/v1/requests` with `Authorization: Bearer {HAX_API_KEY}`, body `{type:"form-builder", payload, title, description, expiresInSeconds, webhookUrl, userId, metadata}` — **omit `publicKey`** so hax returns plaintext values (see note). Wrap in `context.WithTimeout(ctx, 120s)` (mirrors `HAX_CREATE_REQUEST_TIMEOUT_SECONDS`). Response → `{id, url}`.
 3. `client.RequestApproval(ctx, nodeID, execID, RequestApprovalRequest{ApprovalRequestID:id, ApprovalRequestURL:url, CallbackURL:webhookURL, ExpiresInHours:expires})` — this transitions the execution to **`waiting`** server-side (so the UI shows waiting, satisfying that requirement) and records the approval request. `nodeID`=`NODE_ID`, `execID`=`ExecutionContextFrom(ctx).ExecutionID`.
 4. `client.WaitForApproval(ctx, nodeID, execID, &WaitForApprovalOptions{PollInterval:5s, MaxInterval:60s})` — blocks (poll+backoff) until status ≠ `pending`. Returns `ApprovalStatusResponse{Status, Response}`.

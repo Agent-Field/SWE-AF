@@ -1,6 +1,6 @@
 # SWE-AF (Python) → Go Port: Complete Codebase Inventory
 
-Repo: `/home/abir/af/swe/SWE-AF` @ `02da7d2` (main). Total `swe_af/` source: **16,346 lines** across 61 files. Package: `swe-af 0.1.0`, Python >= 3.12, deps: `agentfield>=0.1.96`, `pydantic>=2.0`, `claude-agent-sdk==0.1.20` (pinned for a streaming bug: "Unknown message type: rate_limit_event"), `hax-sdk>=0.2.4`, `python-dotenv>=1.0` (`pyproject.toml:5-17`).
+Repo: `SWE-AF` @ `02da7d2` (main). Total `swe_af/` source: **16,346 lines** across 61 files. Package: `swe-af 0.1.0`, Python >= 3.12, deps: `agentfield>=0.1.96`, `pydantic>=2.0`, `claude-agent-sdk==0.1.20` (pinned for a streaming bug: "Unknown message type: rate_limit_event"), `hax-sdk>=0.2.4`, `python-dotenv>=1.0` (`pyproject.toml:5-17`).
 
 ---
 

@@ -1,6 +1,6 @@
 # SWE-AF Go Port — Parallel Work Breakdown
 
-Companion to `design-go-port.md` (design authority) + the two research reports + Python source. Every task references the design doc by section (§) and the Python source it ports. **All Go paths are under `/home/abir/af/swe/SWE-AF/go/`.**
+Companion to `design-go-port.md` (design authority) + the two research reports + Python source. Every task references the design doc by section (§) and the Python source it ports. **All Go paths are under `SWE-AF/go/`.**
 
 ## Rules for every task
 - **File ownership is exclusive within a wave.** No two concurrent tasks touch the same file. Package boundaries = ownership boundaries (design §1.3 uses package-per-concern precisely so waves are disjoint).
@@ -14,7 +14,7 @@ Companion to `design-go-port.md` (design authority) + the two research reports +
 ## Wave 0 — Scaffold (1 task, blocking everything)
 
 ### T0 — Module scaffold
-- **Owns:** `go/go.mod`, `go/Makefile`, `go/cmd/swe-planner/main.go` (stub), `go/cmd/swe-fast/main.go` (stub), `go/internal/afx/bind.go`, `go/internal/afx/note.go`, `go/doc.go`, `/home/abir/af/swe/go.work` (dev workspace).
+- **Owns:** `go/go.mod`, `go/Makefile`, `go/cmd/swe-planner/main.go` (stub), `go/cmd/swe-fast/main.go` (stub), `go/internal/afx/bind.go`, `go/internal/afx/note.go`, `go/doc.go`, `<workspace>/go.work` (dev workspace).
 - **Depends:** none.
 - **Spec:** Create module `github.com/Agent-Field/SWE-AF/go` (design §1.1). Add `require`+`replace` for `github.com/Agent-Field/agentfield/sdk/go` → `../agentfield/sdk/go` (§1.2); add `github.com/invopop/jsonschema` and `golang.org/x/sync`. Create `go.work` at repo-parent listing `./SWE-AF/go` and `./agentfield/sdk/go`. `main.go` stubs: read env → `agent.Config`, call `agent.New`, `agent.Run(ctx)` — verify against `sdk/go/agent/agent.go:524-605` for exact Config field names (design §12.1). `afx.Bind[T](input map[string]any) (T, error)` = marshal→unmarshal (§8). `afx` note helpers if `app.Note` needs base-URL reconciliation (§4.4). Makefile targets `build/vet/test/check/run-planner/run-fast` (§10).
 - **Acceptance:** `go build ./...` compiles (empty node that registers nothing and starts). `go vet ./...` clean.
@@ -87,7 +87,7 @@ Companion to `design-go-port.md` (design authority) + the two research reports +
 ### T2.4 — hitl core (ask_user + wrapper + hax REST + scout)
 - **Owns:** `go/internal/hitl/ask_user.go`, `go/internal/hitl/wrapper.go`, `go/internal/hitl/hax_client.go`, `go/internal/hitl/scout.go`, `go/internal/hitl/services.go` (detect helpers), `hitl_test.go`. (credentials_store.go already owned by T1.4 — disjoint.)
 - **Depends:** T1.1 (schemas: AskUser/Scout/Services), T1.5 pattern (approval via SDK client), T1.4 present.
-- **Spec:** Port `ask_user.py` + `wrapper.py` (design §4.6). `hax_client.go`: `POST {HAX_SDK_URL}/api/v1/requests` (Bearer HAX_API_KEY, camelCase body, 120s timeout) → `{id,url}`; **read `/home/abir/af/hax-sdk/sdks/python/hax/form_builder.py` to replicate `to_payload()` JSON exactly** (design §12.3). `RequestUserInputAndPause` = build payload → hax create → `client.RequestApproval` (sets `waiting`) → `client.WaitForApproval` (poll) → map to `AskUserResponse` (verbatim decision→status table). `RunWithAskUser` budget-bounded (=2) re-invocation, strips form. `services.go`: `DetectServicesFromRepo`, `KnownServiceSummaryForPrompt`. `build_hax_client_from_env` (nil when HAX_API_KEY unset), `approval_webhook_url`.
+- **Spec:** Port `ask_user.py` + `wrapper.py` (design §4.6). `hax_client.go`: `POST {HAX_SDK_URL}/api/v1/requests` (Bearer HAX_API_KEY, camelCase body, 120s timeout) → `{id,url}`; **read `<hax-sdk>/sdks/python/hax/form_builder.py` to replicate `to_payload()` JSON exactly** (design §12.3). `RequestUserInputAndPause` = build payload → hax create → `client.RequestApproval` (sets `waiting`) → `client.WaitForApproval` (poll) → map to `AskUserResponse` (verbatim decision→status table). `RunWithAskUser` budget-bounded (=2) re-invocation, strips form. `services.go`: `DetectServicesFromRepo`, `KnownServiceSummaryForPrompt`. `build_hax_client_from_env` (nil when HAX_API_KEY unset), `approval_webhook_url`.
   - **Superseded (`feat/go-sdk-parity`):** the `client.RequestApproval` + poll-based `client.WaitForApproval` step is replaced by a single `agent.Pause(...)` call (webhook-resumed) behind a `hitl.Pauser` seam. `RequestUserInputAndPause` = build payload → hax create → `pauser.Pause(ApprovalRequestID,ApprovalRequestURL,ExpiresInHours,ExecutionID)` → map to `AskUserResponse` (same table). Merge-gated on the SDK PR + Dockerfile `AGENTFIELD_SDK_REF` bump.
 - **Validation contract (maps to `test_ask_user.py`, `test_environment_scout.py`, `test_hax_create_request_timeout.py`):** decision `approved/request_changes`→`submitted`, `rejected`→`cancelled`, `expired`→`timeout`; values extracted from `Response.values`/`response.values`/feedback-JSON; budget bounds re-invocation to 2; HAX_API_KEY unset → disabled (nil client); create-request timeout → error surfaces. Mock hax HTTP + SDK approval client.
 - **Size:** ~700 lines.

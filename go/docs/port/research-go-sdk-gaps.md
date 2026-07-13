@@ -1,6 +1,6 @@
 # SWE-AF → Go Port: AgentField Go SDK Capability Map & Gap Analysis
 
-**Scope:** `/home/abir/af/swe/SWE-AF` (Python node, `swe-planner`) → `/home/abir/af/swe/agentfield/sdk/go` (latest main).
+**Scope:** `SWE-AF` (Python node, `swe-planner`) → `the sibling `agentfield/sdk/go` checkout` (latest main).
 
 ## 0. Go SDK package map
 

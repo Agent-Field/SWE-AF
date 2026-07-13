@@ -22,5 +22,5 @@ require (
 // No sdk/go/vX.Y.Z submodule tags exist, so a normal versioned require is
 // impossible. Dev uses the go.work workspace; CI/Docker place the agentfield
 // repo as a sibling checkout at a pinned SHA and rely on this replace
-// (design §1.2). Path is two levels up from SWE-AF/go: ../.. -> /home/abir/af/swe.
+// (design §1.2). Path is two levels up from SWE-AF/go: ../.. -> the shared parent of both checkouts.
 replace github.com/Agent-Field/agentfield/sdk/go => ../../agentfield/sdk/go
