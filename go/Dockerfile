@@ -22,7 +22,7 @@ FROM golang:1.23-bookworm AS builder
 
 # Pinned AgentField SDK ref. Default = agentfield origin/main HEAD at port time
 # (v0.1.107-rc.1). Changing this string invalidates the clone layer below.
-ARG AGENTFIELD_SDK_REF=55ad55f3159234bcc354a4bc37abeaf616b252ca
+ARG AGENTFIELD_SDK_REF=795bdd57b4dec884cfe93e16783e8f4bfb2a2a7f
 ARG AGENTFIELD_REPO=https://github.com/Agent-Field/agentfield.git
 
 WORKDIR /src
