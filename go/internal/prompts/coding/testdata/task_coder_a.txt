@@ -1,0 +1,64 @@
+## Workspace Repositories
+
+This task spans multiple repositories. Each repository is listed below with its role and local path:
+
+- **api** (role: primary): `/ws/api`
+- **web** (role: dependency): `/ws/web`
+
+## Target Repository
+- **Name**: api
+- **Role**: primary
+- **Path**: `/ws/api`
+- **Branch**: main
+## Issue to Implement
+- **Name**: lexer
+- **Title**: Build the lexer
+- **Acceptance Criteria**:
+  - [ ] tokenizes ints
+  - [ ] handles whitespace
+- **Dependencies**: ['grammar', 'types']
+- **Provides**: ['Lexer', 'Token']
+- **Files to create**: ['src/lexer.rs']
+- **Files to modify**: ['src/lib.rs']
+- **Testing Strategy**: unit tests per token type
+- **Testing Guidance (from sprint planner)**: test each token
+
+## Project Context
+### Key Files
+- PRD: `/a/prd.md` (read for full requirements)
+- Architecture: `/a/arch.md` (read for design decisions)
+- Issue files: `/a/issues/` (read your issue file for full details)
+
+## Codebase Conventions (from prior issues)
+- snake_case
+- tabs
+
+## Known Failure Patterns (avoid these)
+- **nil deref** (auth): missing check
+
+## Dependency Interfaces (completed upstream issues)
+- **grammar**: defines AST
+  - `AST`
+  - `Node`
+
+## Common Bug Patterns in This Build
+- off-by-one (seen 3x in ['lexer', 'parser'])
+
+## Upstream Failure Notes
+- upstream types changed
+
+## Git Context
+- Integration branch: `integration/build-1`
+- Working in worktree: `/ws/api/wt`
+
+## Working Directory
+`/ws/api/wt`
+
+## Iteration: 3
+
+## Feedback from Previous Iteration
+Address ALL of the following issues from the review:
+
+Fix the nil deref in lexer.rs:42
+
+Fix the issues above, then re-commit. Focus on the specific problems identified — do not rewrite code that is already correct.

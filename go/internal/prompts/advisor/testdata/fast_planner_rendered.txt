@@ -1,0 +1,20 @@
+## Goal
+Build a TODO app
+
+## Repository
+/repo
+
+## Additional Context
+Use SQLite.
+
+## Constraints
+
+- Produce at most 5 tasks.
+- Each task must be completable by a single autonomous coding agent.
+- Tasks should be ordered so that later tasks can depend on earlier ones,
+  but avoid unnecessary sequencing — keep as much work independent as possible.
+
+## Your Output
+
+Decompose the goal into a flat task list. Return only valid JSON matching the
+FastPlanResult schema. Do not include any text outside the JSON object.

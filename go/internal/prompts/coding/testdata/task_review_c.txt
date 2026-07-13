@@ -1,0 +1,27 @@
+## Issue Under Review
+- **Name**: cfg
+- **Title**: Config tweak
+- **Description**: (not available)
+- **Acceptance Criteria**:
+  - flag works
+
+## QA Status: QA has NOT run. You are the sole quality gate. Also validate test adequacy.
+
+## Coder's Self-Reported Test Results
+- **tests_passed**: not reported
+The coder did not report test results. Run the test suite yourself.
+
+## Coder's Changes
+- **Summary**: s
+
+## Working Directory
+`/ws/api`
+
+## Your Task
+1. Read ALL changed files carefully.
+2. If tests_passed is false or unknown, run the test suite. Otherwise trust the coder's results.
+3. Check each acceptance criterion is met.
+4. Look for security issues, crashes, data loss, wrong logic.
+5. Classify issues by severity (BLOCKING, SHOULD_FIX, SUGGESTION).
+6. Report: approved (bool), blocking (bool), summary, and debt_items.
+7. Only set blocking=true for security/crash/data-loss/wrong-algorithm.

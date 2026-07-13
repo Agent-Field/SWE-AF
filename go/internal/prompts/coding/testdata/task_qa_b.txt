@@ -1,0 +1,18 @@
+## Issue Under Test
+- **Name**: cfg
+- **Title**: Config tweak
+- **Acceptance Criteria**:
+  - flag works
+
+## Coder's Changes
+- **Summary**: x
+
+## Working Directory
+`/ws/api`
+
+## Your Task
+1. Review the changed files and acceptance criteria.
+2. **Coverage check**: for each AC, verify a test exists. List uncovered ACs in `coverage_gaps`.
+3. Write tests for any uncovered ACs, then add edge cases (empty, None, boundaries, error paths).
+4. Run all relevant tests.
+5. Report results: passed (bool) and a detailed summary including specific test names, file paths, and error messages for any failures. Populate `test_failures` with structured failure details.

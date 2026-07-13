@@ -1,0 +1,21 @@
+## Issue to Implement
+- **Name**: cfg
+- **Title**: Config tweak
+- **Acceptance Criteria**:
+  - [ ] flag works
+
+## Codebase Conventions (from prior issues)
+- **style**: gofmt
+
+## Working Directory
+`/ws/api`
+
+## Iteration: 1
+
+## Your Task
+1. Explore the codebase to understand patterns and context.
+2. Implement the solution per the acceptance criteria.
+3. Write or update tests per the Testing Strategy/guidance.
+4. Run tests and report results (tests_passed, test_summary).
+5. Commit your changes.
+6. Report codebase_learnings and agent_retro in your output.

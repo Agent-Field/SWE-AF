@@ -1,0 +1,21 @@
+## Issue to Write
+- **Name**: cfg
+- **Title**: Config
+- **Description**: (not available)
+
+## PRD Summary
+P
+
+## Architecture Summary
+A
+
+## Output Location
+Write the issue file to: `/a/issues/issue-00-cfg.md`
+
+## Your Task
+1. Read the architecture document for the relevant section and interface details.
+2. Read the PRD for requirements context.
+3. Write a lean issue-*.md file (~30-50 lines) at the specified location.
+4. Reference architecture sections by name — do NOT copy implementation code.
+5. Include Interface Contracts with key signatures only (3-5 lines max).
+6. Return a JSON object with `issue_name`, `issue_file_path`, and `success` (boolean).

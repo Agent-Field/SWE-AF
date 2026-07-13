@@ -1,0 +1,49 @@
+## Workspace Repositories
+
+This task spans multiple repositories. Each repository is listed below with its role and local path:
+
+- **api** (role: primary): `/ws/api`
+- **web** (role: dependency): `/ws/web`
+
+## Target Repository: `api`
+## Issue Under Review
+- **Name**: lexer
+- **Title**: Build the lexer
+- **Description**: A lexer for the language
+- **Acceptance Criteria**:
+  - tokenizes ints
+  - handles whitespace
+
+## Review Focus (from sprint planner)
+edge cases
+
+## QA Status: QA has NOT run. You are the sole quality gate. Also validate test adequacy.
+
+## Coder's Self-Reported Test Results
+- **tests_passed**: False
+- **test_summary**: 2 failed
+The coder reports tests DID NOT pass. Run the test suite yourself to assess failures.
+
+## Reference Docs
+- PRD: `/a/prd.md`
+- Architecture: `/a/arch.md`
+
+## Coder's Changes
+- **Summary**: s
+- **Files changed**:
+  - `a.rs`
+
+## Known Bug Patterns (watch for these)
+- off-by-one (seen 3x in ['lexer', 'parser'])
+
+## Working Directory
+`/ws/api/wt`
+
+## Your Task
+1. Read ALL changed files carefully.
+2. If tests_passed is false or unknown, run the test suite. Otherwise trust the coder's results.
+3. Check each acceptance criterion is met.
+4. Look for security issues, crashes, data loss, wrong logic.
+5. Classify issues by severity (BLOCKING, SHOULD_FIX, SUGGESTION).
+6. Report: approved (bool), blocking (bool), summary, and debt_items.
+7. Only set blocking=true for security/crash/data-loss/wrong-algorithm.

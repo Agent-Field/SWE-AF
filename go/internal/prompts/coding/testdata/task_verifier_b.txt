@@ -1,0 +1,29 @@
+## Product Requirements Document
+**Description**: X
+
+### Acceptance Criteria (ALL must pass for overall PASS)
+(none specified)
+
+## Reference Paths
+- Artifacts: 
+
+## Completed Issues
+(none)
+
+## Failed Issues
+(none)
+
+## Skipped Issues
+(none)
+
+## Your Task
+1. Read the PRD and architecture documents for full context.
+2. For each acceptance criterion, identify the responsible issue(s).
+3. Inspect the code changes made by completed issues.
+4. Run any existing tests relevant to the criteria.
+5. For each criterion, record whether it passes or fails with specific evidence.
+6. Return a VerificationResult JSON object with:
+   - `passed`: true only if ALL acceptance criteria pass
+   - `criteria_results`: list of CriterionResult for each criterion
+   - `summary`: overall assessment
+   - `suggested_fixes`: list of actionable fixes for any failures

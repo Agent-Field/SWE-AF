@@ -1,0 +1,73 @@
+## Prior Clarification From User
+
+### Question 1: Abort?
+_Status: submitted_
+
+Values submitted by user:
+- **decision**: continue
+
+USE THESE PRIOR ANSWERS. DO NOT RE-ASK THE SAME QUESTIONS. Only emit `ask_user_form` if you need DIFFERENT clarification not already covered above.
+## Original Plan Summary
+Ship an API.
+
+## PRD Summary
+PRD text.
+
+## Architecture Summary
+Arch text.
+
+## Reference Paths (read these for full details)
+- PRD: /plan/prd.md
+- Architecture: /plan/arch.md
+- Issue files: /plan/issues
+- Repository: /repo
+
+## Full DAG (all levels)
+Level 0:
+  - a (provides: ['x'])
+Level 1:
+  - b (depends_on: ['a']) (provides: ['y'])
+Level 2:
+  - c (depends_on: ['b'])
+
+## Completed Issues
+- **a**: did a
+  Files changed: a.py
+
+## Failed Issues (triggering this replan)
+### b
+- **Attempts**: 2
+- **Error**: boom
+- **Error context**:
+```
+trace of b
+```
+- **Dependencies**: ['a']
+- **Was supposed to provide**: ['y']
+- **Description**: do b
+
+## Remaining Issues (not yet executed)
+- **c**: Issue C
+  depends_on: ['b'], provides: []
+
+## Previous Replan Attempts (DO NOT REPEAT)
+### Replan #1: modify_dag
+Rationale: split b
+Summary: was too big
+
+## Issue Advisor Escalation Notes
+These issues were analyzed by the Issue Advisor before escalation. Use its diagnosis as a head start — do not repeat work it already did.
+### b
+**Escalation context**: dep missing
+**Previous adaptations tried**:
+  - RETRY_APPROACH: tried other lib
+
+## Adaptation History (ACs already modified — do not duplicate)
+- **RETRY_MODIFIED** on issue (rationale: relaxed b)
+  Dropped: ['strict mode']
+
+## Accumulated Technical Debt
+- [high] missing_feature: no retries
+
+## Your Task
+Analyze the failures above. Read the referenced files for full context if needed. Decide how to proceed and return a ReplanDecision.

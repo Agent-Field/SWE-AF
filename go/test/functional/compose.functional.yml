@@ -1,0 +1,110 @@
+# Self-contained stack for the Go-port functional tests (design §11(b), T7.2).
+#
+# The production docker-compose.go.yml is an opt-in ADD-ON that joins the Python
+# stack's external network and has no control plane of its own — so it cannot be
+# brought up in isolation. The functional harness needs a complete, ISOLATED
+# stack (its own control plane + both Go nodes + own network/volumes) that it can
+# stand up and tear down under a dedicated compose project. This file provides
+# exactly that; main_test.go layers compose.override.functional.yml on top to
+# remap host ports.
+#
+# Nodes register under the Go port's opt-in-sibling identities:
+#     swe-agent-go  ->  node id "swe-planner-go", :8005
+#     swe-fast-go   ->  node id "swe-fast-go",    :8006
+services:
+  control-plane:
+    image: agentfield/control-plane:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - AGENTFIELD_HTTP_ADDR=0.0.0.0:8080
+      - AGENTFIELD_STORAGE_MODE=local
+    volumes:
+      - agentfield-data:/data
+
+  # Ephemeral Postgres for build-time integration checks. Repo-agnostic: it
+  # ships an empty database and the *target repo's own* integration global-setup
+  # migrates it, so the factory needs no schema knowledge. Tests that hard-require
+  # a DB (e.g. REQUIRE_TEST_DB=1 …) can connect via DATABASE_URL_TEST instead of
+  # failing at the connection layer (pg-pool ECONNREFUSED) and cascading.
+  #
+  # The data is intentionally throwaway (no volume). One shared DB means
+  # DB-dependent builds should run one at a time; per-build databases would be
+  # the next step if concurrent DB builds are needed.
+  build-db:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=${BUILD_DB_USER:-builder}
+      - POSTGRES_PASSWORD=${BUILD_DB_PASSWORD:-builder}
+      - POSTGRES_DB=${BUILD_DB_NAME:-buildtest}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BUILD_DB_USER:-builder} -d ${BUILD_DB_NAME:-buildtest}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  swe-agent-go:
+    build:
+      # Paths are relative to THIS file's dir (go/test/functional); ../../..
+      # points the build context at the repo root so the go/ module is in
+      # context and the SDK clone lays out as a sibling.
+      context: ../../..
+      dockerfile: go/Dockerfile
+    env_file: ../../../.env
+    environment:
+      - AGENTFIELD_SERVER=http://control-plane:8080
+      - NODE_ID=swe-planner-go
+      - PORT=8005
+      - AGENT_CALLBACK_URL=http://swe-agent-go:8005
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
+      - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}
+    ports:
+      - "8005:8005"
+    volumes:
+      - workspaces:/workspaces
+      - ${HOME}/.codex:/root/.codex
+    depends_on:
+      control-plane:
+        condition: service_started
+      build-db:
+        condition: service_healthy
+
+  swe-fast-go:
+    build:
+      context: ../../..
+      dockerfile: go/Dockerfile
+    command: ["/usr/local/bin/swe-fast"]
+    env_file: ../../../.env
+    environment:
+      - AGENTFIELD_SERVER=http://control-plane:8080
+      - NODE_ID=swe-fast-go
+      - PORT=8006
+      - AGENT_CALLBACK_URL=http://swe-fast-go:8006
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      - GH_TOKEN=${GH_TOKEN}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-}
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
+      - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
+      - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}
+    ports:
+      - "8006:8006"
+    volumes:
+      - workspaces:/workspaces
+      - ${HOME}/.codex:/root/.codex
+    depends_on:
+      control-plane:
+        condition: service_started
+      build-db:
+        condition: service_healthy
+
+volumes:
+  agentfield-data:
+  workspaces:

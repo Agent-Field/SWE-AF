@@ -1,0 +1,38 @@
+## Workspace Repositories
+
+This task spans multiple repositories. Each repository is listed below with its role and local path:
+
+- **api** (role: primary): `/ws/api`
+- **web** (role: dependency): `/ws/web`
+
+## Issue Being Evaluated
+- **Name**: lexer
+- **Title**: Build the lexer
+- **Acceptance Criteria** (all must pass for APPROVE):
+  - tok ints
+  - ws
+
+## QA Results
+- **Tests passed**: False
+- **Summary**: qa ran
+- **Test Failures**:
+  - `test_x` in `tests/x.rs`: panic
+- **Coverage Gaps** (ACs without tests):
+  - AC2 uncovered
+
+## Code Review Results
+- **Approved**: False
+- **Blocking issues**: True
+- **Summary**: blocking bug
+- **Debt items**:
+  - [should_fix] refactor: long fn
+
+## Iteration History (1 previous)
+- **Iteration 1**: action=FIX, summary=first try
+
+## Your Task
+1. Analyze the QA results and code review results.
+2. Check the iteration history for stuck patterns.
+3. Decide: APPROVE, FIX, or BLOCK.
+4. If FIX: write concise, actionable feedback for the coder in your summary.
+5. If BLOCK: explain why this cannot be completed.

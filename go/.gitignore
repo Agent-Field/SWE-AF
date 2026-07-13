@@ -1,0 +1,5 @@
+# Local Go workspace used during SDK-parity development to resolve the
+# agentfield Go SDK to the parity worktree. Must NOT be committed — CI/Docker
+# rely on the go.mod replace + a pinned agentfield checkout instead.
+go.work
+go.work.sum

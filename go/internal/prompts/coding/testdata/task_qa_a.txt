@@ -1,0 +1,35 @@
+## Workspace Repositories
+
+This task spans multiple repositories. Each repository is listed below with its role and local path:
+
+- **api** (role: primary): `/ws/api`
+- **web** (role: dependency): `/ws/web`
+
+## Target Repository: `api`
+## Issue Under Test
+- **Name**: lexer
+- **Title**: Build the lexer
+- **Acceptance Criteria**:
+  - tokenizes ints
+  - handles whitespace
+- **Testing Strategy (expected by spec)**: unit tests per token type
+
+## Project Context
+- PRD: `/a/prd.md` (read for acceptance criteria)
+- Architecture: `/a/arch.md` (read for expected design)
+
+## Coder's Changes
+- **Summary**: implemented lexer
+- **Files changed**:
+  - `src/lexer.rs`
+  - `tests/lexer_test.rs`
+
+## Working Directory
+`/ws/api/wt`
+
+## Your Task
+1. Review the changed files and acceptance criteria.
+2. **Coverage check**: for each AC, verify a test exists. List uncovered ACs in `coverage_gaps`.
+3. Write tests for any uncovered ACs, then add edge cases (empty, None, boundaries, error paths).
+4. Run all relevant tests.
+5. Report results: passed (bool) and a detailed summary including specific test names, file paths, and error messages for any failures. Populate `test_failures` with structured failure details.

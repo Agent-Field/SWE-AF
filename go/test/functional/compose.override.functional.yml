@@ -1,0 +1,25 @@
+# Functional-test compose override (T7.2). Layered on top of
+# compose.functional.yml by the test harness (main_test.go):
+#
+#   docker compose -p swe-af-go-functional \
+#     -f go/test/functional/compose.functional.yml \
+#     -f go/test/functional/compose.override.functional.yml up
+#
+# It remaps only the HOST port bindings (container ports and all
+# service-to-service URLs are untouched) so the functional stack can run
+# alongside anything already occupying 8080/8005/8006 on the host — e.g. a
+# host control-plane or the Go add-on nodes. `!override` replaces the
+# base list instead of appending to it (Compose v2.24+).
+#
+# Keep in sync with the defaults in main_test.go (cpHostPort/plannerHostPort/
+# fastHostPort = 18080/18005/18006).
+services:
+  control-plane:
+    ports: !override
+      - "18080:8080"
+  swe-agent-go:
+    ports: !override
+      - "18005:8005"
+  swe-fast-go:
+    ports: !override
+      - "18006:8006"

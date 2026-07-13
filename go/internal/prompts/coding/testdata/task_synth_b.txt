@@ -1,0 +1,16 @@
+
+## QA Results
+- **Tests passed**: True
+- **Summary**: ok
+
+## Code Review Results
+- **Approved**: True
+- **Blocking issues**: False
+- **Summary**: lgtm
+
+## Your Task
+1. Analyze the QA results and code review results.
+2. Check the iteration history for stuck patterns.
+3. Decide: APPROVE, FIX, or BLOCK.
+4. If FIX: write concise, actionable feedback for the coder in your summary.
+5. If BLOCK: explain why this cannot be completed.

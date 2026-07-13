@@ -1,0 +1,30 @@
+## Failed Verification Criteria
+### Criterion 1
+- **Criterion**: login returns 200
+- **Evidence**: got 500
+- **Responsible issue**: auth
+### Criterion 2
+- **Criterion**: logout clears session
+- **Evidence**: (none)
+- **Responsible issue**: (unknown)
+
+## Project Context
+- PRD description: An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth service. An auth
+- PRD Acceptance Criteria:
+  - users can log in
+  - users can log out
+
+- Completed issues: 2
+
+## Existing Technical Debt
+- [low] cosmetic: spacing
+
+## Reference: PRD at `/plan/prd.md`
+## Reference: Architecture at `/plan/arch.md`
+
+## Your Task
+1. For each failed criterion, inspect the codebase to understand the gap.
+2. Decide if it's fixable with a targeted code change.
+3. Generate fix issues for fixable criteria.
+4. Record unfixable criteria as debt.
+5. Return the JSON result.

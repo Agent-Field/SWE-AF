@@ -799,6 +799,19 @@ make clean-examples
 
 ---
 
+## Go implementation (opt-in)
+
+This repo also ships a Go port of the node under [`go/`](go/README.md). The
+**Python implementation is the default** — everything above is unchanged and
+still runs as `swe-planner` (`:8003`) / `swe-fast` (`:8004`). The Go port
+registers **separately** as `swe-planner-go` (`:8005`) and `swe-fast-go`
+(`:8006`), so both stacks can run against one control plane simultaneously.
+Opt in by targeting the `-go` reasoner path (e.g.
+`POST /api/v1/execute/async/swe-planner-go.build`). See
+[`go/README.md`](go/README.md) for build, run, and Docker instructions.
+
+---
+
 ### Also built on AgentField
 
 > **[SEC-AF](https://github.com/Agent-Field/sec-af)** — AI-native security auditor. 250 agents per audit, 94% noise reduction, every finding proven exploitable.

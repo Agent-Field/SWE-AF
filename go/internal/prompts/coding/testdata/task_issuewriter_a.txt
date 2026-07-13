@@ -1,0 +1,51 @@
+## Workspace Repositories
+
+This task spans multiple repositories. Each repository is listed below with its role and local path:
+
+- **api** (role: primary): `/ws/api`
+- **web** (role: dependency): `/ws/web`
+
+## Issue to Write
+- **Name**: lexer
+- **Title**: Build the lexer
+- **Description**: A lexer for the language
+- **Acceptance Criteria**:
+  - tokenizes ints
+  - handles whitespace
+- **Dependencies**: ['grammar', 'types']
+- **Provides**: ['Lexer', 'Token']
+- **Files to create**: ['src/lexer.rs']
+- **Files to modify**: ['src/lib.rs']
+- **Testing Strategy (from sprint planner)**: unit tests per token type
+- **Sprint Planner Guidance**:
+  - Testing: test each token
+  - Review focus: edge cases
+  - Risk: core module
+  - Scope: large
+  - Needs new tests: True
+  - Deeper QA: True
+
+## PRD Summary
+Build a compiler
+
+## Architecture Summary
+Layered design
+
+## Reference Documents
+- Full PRD: `/a/prd.md`
+- Architecture: `/a/arch.md`
+
+## Sibling Issues (for cross-reference)
+- **parser**: Parser (provides: Parser)
+- **types**: Types
+
+## Output Location
+Write the issue file to: `/a/issues/issue-03-lexer.md`
+
+## Your Task
+1. Read the architecture document for the relevant section and interface details.
+2. Read the PRD for requirements context.
+3. Write a lean issue-*.md file (~30-50 lines) at the specified location.
+4. Reference architecture sections by name — do NOT copy implementation code.
+5. Include Interface Contracts with key signatures only (3-5 lines max).
+6. Return a JSON object with `issue_name`, `issue_file_path`, and `success` (boolean).
