@@ -373,6 +373,24 @@ JSON
 
 For OpenRouter with `open_code`, use model IDs in `openrouter/<provider>/<model>` format (for example `openrouter/minimax/minimax-m2.5`).
 
+### MiniMax direct providers
+
+The Docker images include direct MiniMax provider entries for both supported regions and API compatibility modes. `MiniMax-M3` and `MiniMax-M2.7` are available in every entry.
+
+| Region | OpenAI-compatible `open_code` model | Anthropic-compatible `open_code` model | Anthropic base URL for `claude_code` |
+|---|---|---|---|
+| Global | `minimax-global-openai/MiniMax-M3` | `minimax/MiniMax-M3` | `https://api.minimax.io/anthropic` |
+| China | `minimax-cn-openai/MiniMax-M3` | `minimax-cn/MiniMax-M3` | `https://api.minimaxi.com/anthropic` |
+
+| Model | Context window | Input modalities | Thinking | Standard price per million tokens |
+|---|---:|---|---|---|
+| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | $0.30 input / $1.20 output / $0.06 cache read |
+| `MiniMax-M2.7` | 204,800 | text | always on | $0.30 input / $1.20 output / $0.06 cache read / $0.375 cache write |
+
+For the direct OpenAI-compatible path, set `MINIMAX_API_KEY`, use `runtime: "open_code"`, and select one of the model IDs above. The configured OpenAI-compatible base URLs are `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`.
+
+For the direct Anthropic-compatible Claude path, set `ANTHROPIC_AUTH_TOKEN`, set `ANTHROPIC_BASE_URL` to the regional `/anthropic` URL shown above, use `runtime: "claude_code"`, and select `MiniMax-M3` or `MiniMax-M2.7`. Do not append `/v1`; Claude Code adds `/v1/messages` to the configured base URL.
+
 For Codex with ChatGPT subscription auth, install the Codex CLI on the host, run `codex login`, leave `OPENAI_API_KEY` unset for this process, and set `SWE_CODEX_AUTH_MODE=chatgpt` or `auto`. For OpenAI API-platform billing, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
 > **Codex deployments using the Docker image must set `SWE_DEFAULT_MODEL=gpt-5.3-codex` on the environment** (or pass `models: {"default": "gpt-5.3-codex"}` in every build's `config`). The image bakes `HARNESS_MODEL=openrouter/moonshotai/kimi-k2.6` as an OpenCode fallback, and SWE-AF's model-resolution env cascade reads `HARNESS_MODEL` — so without `SWE_DEFAULT_MODEL` set, the Codex CLI receives an OpenRouter model id it can't handle and the Product Manager reasoner fails in ~13s. Setting `SWE_DEFAULT_MODEL` makes the cascade pin every role to the Codex model.
