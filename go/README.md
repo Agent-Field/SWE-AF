@@ -166,14 +166,20 @@ authoritative set. The per-request build config JSON (`runtime`, `models`,
 budget/iteration knobs) is byte-identical to the Python node's — see the root
 [README](../README.md) and `.env.example` for the schema and examples.
 
-## Deployment: no `af install` (yet)
+## Deployment: `af install` via the subdirectory selector
 
-`af install <this repo>` installs the **Python** node: the only
-`agentfield-package.yaml` in this repository is the root one, which declares
-the Python entrypoint (`python -m swe_af`, node id `swe-planner`). There is no
-Go manifest, so the Go nodes deploy via **Docker image / compose / binary**.
-The upstream AgentField installer does support Go nodes (`language: go` +
-`entrypoint.build`), and a subdirectory selector (`af install <repo> --path go`)
-is in flight — once both are released, shipping a `go/agentfield-package.yaml`
-would make the Go node installable the same way. Until then: compose add-on or
-bare binary.
+This directory ships its own `agentfield-package.yaml` (node `swe-planner-go`),
+so the Go node installs like any other package — address the subdirectory with
+the installer's `//` selector:
+
+```bash
+af install https://github.com/Agent-Field/SWE-AF//go
+af run swe-planner-go       # builds bin/swe-planner at install time (needs Go)
+af uninstall swe-planner-go
+```
+
+The root manifest still installs the **Python** node (`swe-planner`); both can
+be installed side by side — the registry is keyed by manifest name. The SDK is
+pinned in `go.mod` by pseudo-version (the same commit the Dockerfile pins), so
+the module resolves without the dev workspace. Docker image / compose / bare
+binary remain the container deployment paths.
