@@ -1,0 +1,51 @@
+config_version: v1
+name: swe-planner-go                    # MUST differ from root "swe-planner" (installer registry is keyed by name)
+version: 0.1.0
+description: SWE planning/execution agent node (Go port — plans and executes software-engineering tasks)
+author: Agent-Field
+language: go                            # explicit (also auto-detected from go/go.mod)
+
+entrypoint:
+  build: ./cmd/swe-planner
+  start: bin/swe-planner
+  healthcheck: /health
+
+agent_node:
+  node_id: swe-planner-go
+  default_port: 8005
+
+user_environment:
+  require_one_of:
+    # Same provider story as the Python node: Claude (Anthropic) or open
+    # models via OpenRouter. Provide one.
+    - id: llm_provider
+      description: an LLM provider key
+      options:
+        - name: ANTHROPIC_API_KEY
+          description: Anthropic API key (Claude)
+          type: secret
+          scope: global
+        - name: OPENROUTER_API_KEY
+          description: OpenRouter API key (DeepSeek/Qwen/Llama/… — 200+ models)
+          type: secret
+          scope: global
+  required:
+    # The core loop clones a repo, pushes a branch, and opens a pull request —
+    # all of which need GitHub write access (same as the Python node).
+    - name: GH_TOKEN
+      description: GitHub token (repo scope) for cloning repos and opening pull requests
+      type: secret
+      scope: global
+  optional:
+    - name: SWE_DEFAULT_MODEL
+      description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash)
+    - name: AGENTFIELD_SERVER
+      description: Control-plane URL
+      default: http://localhost:8080
+    - name: AGENTFIELD_API_KEY
+      description: Control-plane API key (if auth is enabled)
+      type: secret
+      scope: global
+    - name: NODE_ID
+      description: Identity this node registers under
+      default: swe-planner-go
