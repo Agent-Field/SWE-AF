@@ -14,6 +14,11 @@ OPENAI_PROVIDERS = {
     "minimax-global-openai": "https://api.minimax.io/v1",
     "minimax-cn-openai": "https://api.minimaxi.com/v1",
 }
+ANTHROPIC_PROVIDER = "minimax-anthropic"
+MODEL_LIMITS = {
+    "MiniMax-M3": {"context": 1000000, "output": 524288},
+    "MiniMax-M2.7": {"context": 204800, "output": 204800},
+}
 
 
 @pytest.fixture(scope="module")
@@ -44,14 +49,33 @@ def test_minimax_openai_provider_registry(
     assert set(provider["models"]) == MODEL_IDS
 
 
+def test_minimax_anthropic_provider_registry(
+    opencode_config: dict[str, object],
+) -> None:
+    providers = opencode_config["provider"]
+    assert isinstance(providers, dict)
+    provider = providers[ANTHROPIC_PROVIDER]
+
+    assert provider["npm"] == "@ai-sdk/anthropic"
+    assert provider["env"] == ["MINIMAX_API_KEY"]
+    assert provider["options"] == {
+        "apiKey": "{env:MINIMAX_API_KEY}",
+        "baseURL": "{env:ANTHROPIC_BASE_URL}/v1",
+    }
+    assert set(provider["models"]) == MODEL_IDS
+
+
 def test_minimax_model_metadata_matches_target_config(
     opencode_config: dict[str, object],
 ) -> None:
     providers = opencode_config["provider"]
     assert isinstance(providers, dict)
 
-    for provider_id in OPENAI_PROVIDERS:
+    for provider_id in (*OPENAI_PROVIDERS, ANTHROPIC_PROVIDER):
         models = providers[provider_id]["models"]
+        assert {
+            model_id: models[model_id]["limit"] for model_id in MODEL_IDS
+        } == MODEL_LIMITS
         assert models["MiniMax-M3"]["cost"] == {
             "input": 0.3,
             "output": 1.2,
@@ -80,18 +104,24 @@ def test_minimax_anthropic_endpoints_and_model_ids_are_documented() -> None:
     for value in (
         "https://api.minimax.io/anthropic",
         "https://api.minimaxi.com/anthropic",
-        "minimax/MiniMax-M3",
-        "minimax/MiniMax-M2.7",
-        "minimax-cn/MiniMax-M3",
-        "minimax-cn/MiniMax-M2.7",
+        "minimax-anthropic/MiniMax-M3",
+        "minimax-anthropic/MiniMax-M2.7",
+        "claude_code",
         "1,000,000",
         "204,800",
         "adaptive or disabled",
         "always on",
-        "$0.30 input / $1.20 output / $0.06 cache read",
-        "$0.30 input / $1.20 output / $0.06 cache read / $0.375 cache write",
+        "$0.30 / $1.20 / $0.06 / not charged",
+        "$0.60 / $2.40 / $0.12 / not charged",
+        "$0.45 / $1.80 / $0.09 / not charged",
+        "$0.90 / $3.60 / $0.18 / not charged",
+        "$0.30 / $1.20 / $0.06 / $0.375",
     ):
         assert value in docs
 
+    assert "minimax/MiniMax-M3" not in docs
+    assert "minimax/MiniMax-M2.7" not in docs
+    assert "minimax-cn/MiniMax-M3" not in docs
+    assert "minimax-cn/MiniMax-M2.7" not in docs
     assert "https://api.minimax.io/anthropic/v1" not in docs
     assert "https://api.minimaxi.com/anthropic/v1" not in docs

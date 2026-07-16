@@ -34,7 +34,7 @@ cp .env.example .env
 | `OPENROUTER_API_KEY` | OpenRouter API key (200+ models) |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GOOGLE_API_KEY` | Google Gemini API key |
-| `MINIMAX_API_KEY` | MiniMax API key for direct OpenAI- or Anthropic-compatible `open_code` providers |
+| `MINIMAX_API_KEY` | MiniMax API key for direct OpenAI- and Anthropic-compatible `open_code` providers |
 
 **For direct MiniMax with the Claude runtime:**
 
@@ -61,7 +61,7 @@ cp .env.example .env
 | `SWE_DEFAULT_RUNTIME` | Default runtime: `claude_code`, `open_code`, or `codex` | `claude_code` |
 | `SWE_DEFAULT_MODEL` | Default model ID for every role | runtime-specific |
 
-The image registers `MiniMax-M3` and `MiniMax-M2.7` under the direct OpenAI-compatible providers `minimax-global-openai` and `minimax-cn-openai`. OpenCode's Anthropic-compatible entries are `minimax` and `minimax-cn`. Use the regional OpenAI base URLs `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`; use the Anthropic base URLs exactly as shown above without appending `/v1`.
+The image registers `MiniMax-M3` and `MiniMax-M2.7` under the direct OpenAI-compatible providers `minimax-global-openai` and `minimax-cn-openai`, and under the Anthropic-compatible OpenCode provider `minimax-anthropic`. Set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above; the OpenCode adapter derives `/v1` internally. Use the regional OpenAI base URLs `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`; keep the external Anthropic base URL exactly as shown without appending `/v1`.
 
 ### Package Versions
 

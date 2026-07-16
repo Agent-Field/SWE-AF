@@ -51,7 +51,7 @@ user_environment:
     - name: SWE_DEFAULT_MODEL
       description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash)
     - name: ANTHROPIC_BASE_URL
-      description: Anthropic-compatible base URL for the Claude runtime
+      description: Anthropic-compatible base URL for OpenCode or Claude Code
     - name: AGENTFIELD_SERVER
       description: Control-plane URL
       default: http://localhost:8080
