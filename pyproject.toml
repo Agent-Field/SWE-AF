@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     # >=0.1.96 ships ReasonerFailed, which build() raises so an empty build
     # reports `failed` (not `succeeded`) with its result preserved (#82 Gap 2).
-    "agentfield>=0.1.108",
+    "agentfield>=0.1.111",
     "pydantic>=2.0",
     # Compatibility pin: newer SDK builds have surfaced
     # "Unknown message type: rate_limit_event" during streaming.
