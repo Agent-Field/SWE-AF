@@ -38,6 +38,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/roles/planning"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fast"
+	"github.com/Agent-Field/SWE-AF/go/internal/issue"
 )
 
 const (
@@ -46,18 +47,21 @@ const (
 )
 
 // RegisterPlanner registers the full swe-planner surface: 25 role reasoners +
-// 5 orchestrators (30 total). Ports swe_af/app.py.
+// 5 orchestrators + the issue-level entry point (31 total). Ports swe_af/app.py.
 func (n *Node) RegisterPlanner() {
 	n.registerRoles()
 	n.registerOrchestrators()
+	n.registerIssueReasoner()
 }
 
 // RegisterFast registers the swe-fast surface: the same 25 role reasoners + the
-// 4 fast reasoners (29 total). Ports swe_af/fast/app.py. It deliberately does
-// NOT register the orchestrators — fast/app.py only defines its own build.
+// 4 fast reasoners + the issue-level entry point (30 total). Ports
+// swe_af/fast/app.py. It deliberately does NOT register the orchestrators —
+// fast/app.py only defines its own build.
 func (n *Node) RegisterFast() {
 	n.registerRoles()
 	n.registerFastReasoners()
+	n.registerIssueReasoner()
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +179,30 @@ func (n *Node) registerFastReasoners() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue-level entry point (both nodes)
+// ---------------------------------------------------------------------------
+
+// registerIssueReasoner wires implement_issue — the sub-harness entry point a
+// main coding harness delegates fully-scoped issues to. Python includes the
+// swe-issue-tagged issue_router in BOTH apps; the Go port mirrors that on both
+// nodes under the -go tag convention.
+func (n *Node) registerIssueReasoner() {
+	deps := &issue.Deps{
+		Call:   newCallFn(n.App),
+		Note:   n.App,
+		NodeID: n.NodeID,
+	}
+	tag := agent.WithReasonerTags("swe-issue-go")
+	for name, h := range issue.Handlers() {
+		opts := []agent.ReasonerOption{tag}
+		if s, ok := issueSchemas[name]; ok {
+			opts = append(opts, agent.WithInputSchema(s))
+		}
+		regHandler(n, name, deps, h, opts...)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Registration helper
 // ---------------------------------------------------------------------------
 
@@ -248,6 +276,15 @@ var orchestratorSchemas = map[string]json.RawMessage{
 	"resume_build": schema(`{"type":"object","additionalProperties":true,"required":["repo_path"],"properties":{` +
 		`"repo_path":{"type":"string"},"artifacts_dir":{"type":"string"},"config":{"type":"object"},` +
 		`"git_config":{"type":"object"}}}`),
+}
+
+// issueSchemas maps the issue-level reasoner to its input schema.
+var issueSchemas = map[string]json.RawMessage{
+	// implement_issue(issue, repo_path, base_branch="", artifacts_dir=".artifacts",
+	//                 additional_context="", config=None)
+	"implement_issue": schema(`{"type":"object","additionalProperties":true,"required":["issue","repo_path"],"properties":{` +
+		`"issue":{"type":"object"},"repo_path":{"type":"string"},"base_branch":{"type":"string"},` +
+		`"artifacts_dir":{"type":"string"},"additional_context":{"type":"string"},"config":{"type":"object"}}}`),
 }
 
 // fastSchemas maps the 4 fast reasoner names to their input schemas.

@@ -56,6 +56,10 @@ var pythonOrchestrators = []string{"build", "plan", "execute", "resolve", "resum
 // plus fast_plan_tasks / fast_execute_tasks / fast_verify.
 var pythonFastReasoners = []string{"build", "fast_plan_tasks", "fast_execute_tasks", "fast_verify"}
 
+// pythonIssueReasoners is the issue-level entry point (swe_af/issue/build.py),
+// registered on BOTH nodes via the shared issue_router.
+var pythonIssueReasoners = []string{"implement_issue"}
+
 func TestRegisterPlannerExactSurface(t *testing.T) {
 	n, err := BuildAgent("swe-planner-go", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
@@ -63,8 +67,10 @@ func TestRegisterPlannerExactSurface(t *testing.T) {
 	}
 	n.RegisterPlanner()
 
-	// swe-planner-go surface = 25 roles + 5 orchestrators = 30 unique names.
+	// swe-planner-go surface = 25 roles + 5 orchestrators + implement_issue
+	// = 31 unique names.
 	want := append(append([]string(nil), pythonRoleSurface...), pythonOrchestrators...)
+	want = append(want, pythonIssueReasoners...)
 	assertSurface(t, "swe-planner-go", n.RegisteredNames(), want)
 }
 
@@ -75,10 +81,12 @@ func TestRegisterFastExactSurface(t *testing.T) {
 	}
 	n.RegisterFast()
 
-	// swe-fast-go surface = 25 roles + 4 fast reasoners = 29 unique names.
-	// It must NOT contain plan/execute/resolve/resume_build (those live only on
-	// swe-planner-go) — assertSurface's extra-name check enforces that.
+	// swe-fast-go surface = 25 roles + 4 fast reasoners + implement_issue
+	// = 30 unique names. It must NOT contain plan/execute/resolve/resume_build
+	// (those live only on swe-planner-go) — assertSurface's extra-name check
+	// enforces that.
 	want := append(append([]string(nil), pythonRoleSurface...), pythonFastReasoners...)
+	want = append(want, pythonIssueReasoners...)
 	assertSurface(t, "swe-fast-go", n.RegisteredNames(), want)
 }
 
