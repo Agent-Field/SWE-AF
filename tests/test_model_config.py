@@ -27,6 +27,9 @@ _PROVIDER_ENV_KEYS = (
     "SWE_DEFAULT_MODEL",
     "AI_MODEL",
     "HARNESS_MODEL",
+    "SWE_MODEL_LOW",
+    "SWE_MODEL_MED",
+    "SWE_MODEL_HIGH",
 )
 
 
