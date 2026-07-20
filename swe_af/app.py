@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # surface HAX_API_KEY (and friends) before Agent() is constructed
 
+from swe_af.issue import issue_router
 from swe_af.reasoners import router
 from swe_af.reasoners.pipeline import _assign_sequence_numbers, _compute_levels, _validate_file_conflicts
 from swe_af.reasoners.schemas import PlanResult, ReviewResult
@@ -59,6 +60,7 @@ app = Agent(
 )
 
 app.include_router(router)
+app.include_router(issue_router)
 
 
 # ---------------------------------------------------------------------------

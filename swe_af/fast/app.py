@@ -39,6 +39,11 @@ app.include_router(fast_router)
 from swe_af.reasoners import router as _execution_router  # noqa: E402
 app.include_router(_execution_router)
 
+# Issue-level entry point (implement_issue) — shared with swe-planner so a
+# main harness can delegate scoped issues to either node.
+from swe_af.issue import issue_router as _issue_router  # noqa: E402
+app.include_router(_issue_router)
+
 
 def _repo_name_from_url(url: str) -> str:
     """Extract repo name from a GitHub URL."""
