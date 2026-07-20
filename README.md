@@ -623,6 +623,118 @@ Configuration on `BuildConfig`:
 | `ci_wait_seconds` | `1500` | Wall-clock cap per `gh pr checks` watch (25 min). |
 | `ci_poll_seconds` | `30` | Poll interval for `gh pr checks`. |
 
+## Use SWE-AF as a Sub-Harness (Issue-Level Builds)
+
+The full `build` pipeline is **feature-level**: it plans, decomposes, and
+verifies a whole feature, which takes hours. When the caller is itself a
+coding harness — Claude Code, Codex, OpenCode — it has already done the
+planning. For that case SWE-AF exposes an **issue-level** entry point,
+`implement_issue`, that skips every planning agent and runs just the coding
+loop on an isolated branch. Delegating well-scoped issues to SWE-AF on cheap
+or open-weight models keeps the main harness's token budget for the work that
+needs it.
+
+Rule of thumb for the two prompt shapes:
+
+| Prompt shape | Entry point |
+| --- | --- |
+| "Implement X feature" (needs decomposition) | `swe-planner.build` / `swe-fast.build` |
+| "Change this code in this file, like this" (fully scoped, context supplied) | `swe-planner.implement_issue` / `swe-fast.implement_issue` |
+
+Each call creates its own git worktree and an `issue/<build_id>-<slug>` branch
+off `base_branch` (default: the current branch), implements the issue with the
+coder → reviewer loop (a QA + synthesizer path when `needs_deeper_qa` is set),
+optionally runs one verifier pass against the acceptance criteria, removes the
+worktree, and returns the branch. The caller's checkout, current branch, and
+`git status` are untouched — so a main harness can fan out several issues
+against the same `repo_path` concurrently and merge the returned branches
+itself. Nothing is pushed and no PR is opened unless `enable_github_pr` is set:
+the caller owns merge and CI. Typical cost is 4–8 LLM calls (vs hundreds for a
+feature-level build).
+
+```bash
+# Delegate one scoped issue (async; returns an execution_id immediately)
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.implement_issue \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "input": {
+    "issue": {
+      "title": "Add retry with exponential backoff to fetch_user",
+      "description": "In src/api/client.py, wrap fetch_user's HTTP call in a retry helper: 3 attempts, 0.5s base delay, doubling. Reuse the existing logger for retry warnings.",
+      "acceptance_criteria": [
+        "fetch_user retries up to 3 times on ConnectionError",
+        "tests cover the retry-then-succeed path"
+      ],
+      "files_to_modify": ["src/api/client.py"],
+      "testing_strategy": "pytest tests/api/test_client.py"
+    },
+    "repo_path": "/workspaces/my-project",
+    "base_branch": "main",
+    "config": { "models": { "default": "haiku" } }
+  },
+  "webhook": { "url": "https://my-harness.example/hooks/swe-af" }
+}
+JSON
+
+# Poll instead of (or in addition to) the webhook
+curl http://localhost:8080/api/v1/executions/<execution_id>
+# Progress notes while it runs
+curl http://localhost:8080/api/v1/executions/<execution_id>/notes
+```
+
+The result's `branch` field is the deliverable:
+
+```json
+{
+  "success": true,
+  "outcome": "completed",
+  "branch": "issue/a1b2c3d4-add-retry-with-exponential-backoff",
+  "base_branch": "main",
+  "commits": ["<sha>"],
+  "files_changed": ["src/api/client.py", "tests/api/test_client.py"],
+  "iterations": 1,
+  "verification": { "passed": true, "criteria_results": ["..."] },
+  "debt_items": [],
+  "pr_url": ""
+}
+```
+
+`issue` fields: `title` + `description` (required), `acceptance_criteria`,
+`files_to_create` / `files_to_modify`, `testing_strategy`, `needs_deeper_qa`
+(routes through QA + reviewer + synthesizer), `estimated_complexity`, `name`.
+`additional_context` (top-level) is appended to the description.
+
+`config` keys (full schema: [`swe_af/issue/schemas.py`](swe_af/issue/schemas.py)):
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `runtime` / `models` | as in `build` | Same runtime + flat role map; valid role keys: `default`, `coder`, `code_reviewer`, `qa`, `qa_synthesizer`, `verifier`, `git` |
+| `max_coding_iterations` | `3` | Inner-loop budget (the feature-level default is 5) |
+| `verify` | `true` | One verifier pass against the acceptance criteria |
+| `enable_github_pr` | `false` | Push the branch and open a PR (needs an `origin` remote) |
+| `agent_timeout_seconds` | `1800` | Per-agent timeout |
+| `agent_max_turns` | `50` | Tool-use turn budget per agent |
+| `keep_worktree` | `false` | Leave the worktree in place for debugging |
+
+Notes for main-harness authors:
+
+- `repo_path` must be a checkout the SWE-AF node can reach (same machine, or
+  the shared `workspaces` volume in the Docker setup) with at least one commit.
+- Uncommitted changes in the caller's tree are **not** visible to the issue
+  branch — it is created from the committed base state.
+- A failed build with commits still returns the branch (`success: false`) so
+  the caller can triage; a build that produced no commits deletes its branch
+  and returns `branch: ""`.
+- Cap your fan-out: each delegation is a paid multi-agent run. A handful of
+  concurrent issues per repo is the sweet spot — the node also bounds its own
+  concurrency.
+- Available identically on `swe-fast.implement_issue` and, in the Go port, on
+  `swe-planner-go` / `swe-fast-go`.
+
+A ready-made Claude Code skill for this flow ships in
+[`.claude/skills/delegate-issue/`](.claude/skills/delegate-issue/SKILL.md).
+
 ## API Reference
 
 <details>
@@ -633,6 +745,9 @@ Core async endpoints (returns an `execution_id` immediately):
 ```bash
 # Full build: plan -> execute -> verify
 POST /api/v1/execute/async/swe-planner.build
+
+# Issue-level build (sub-harness entry): coding loop only, no planning
+POST /api/v1/execute/async/swe-planner.implement_issue
 
 # Plan only
 POST /api/v1/execute/async/swe-planner.plan
