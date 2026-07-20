@@ -88,6 +88,40 @@ var allowedModelKeys = func() map[string]struct{} {
 	return m
 }()
 
+// modelTiers ports MODEL_TIERS (ordered).
+var modelTiers = []string{"low", "med", "high"}
+
+// RoleToTier ports ROLE_TO_TIER: capability tier per role. "high" =
+// planning-heavy reasoning, "med" = coding/review/QA work, "low" = mechanical
+// transformation. Each tier can be pointed at a model via its env var (see
+// tierModelEnvVars).
+var RoleToTier = map[string]string{
+	"pm":                 "high",
+	"architect":          "high",
+	"tech_lead":          "high",
+	"replan":             "high",
+	"sprint_planner":     "med",
+	"coder":              "med",
+	"qa":                 "med",
+	"code_reviewer":      "med",
+	"retry_advisor":      "med",
+	"issue_writer":       "med",
+	"issue_advisor":      "med",
+	"verifier":           "med",
+	"merger":             "med",
+	"integration_tester": "med",
+	"ci_fixer":           "med",
+	"qa_synthesizer":     "low",
+	"git":                "low",
+}
+
+// tierModelEnvVars ports TIER_MODEL_ENV_VARS (tier → env var).
+var tierModelEnvVars = map[string]string{
+	"low":  "SWE_MODEL_LOW",
+	"med":  "SWE_MODEL_MED",
+	"high": "SWE_MODEL_HIGH",
+}
+
 // ---------------------------------------------------------------------------
 // Model default strings
 // ---------------------------------------------------------------------------
@@ -207,9 +241,30 @@ func defaultModelFromEnv() string {
 	return ""
 }
 
-// DefaultPlanningModel ports _default_planning_model: env cascade, then the
-// OpenRouter default when only an OpenRouter key is present, else "sonnet".
+// tierModelsFromEnv ports _tier_models_from_env: tier → model id for each
+// SWE_MODEL_<TIER> env var that is set. Lets the deployer point each role
+// class at a different model without enumerating every role (see RoleToTier).
+// Only tiers whose env var is non-empty (stripped) appear in the result; unset
+// tiers fall through to the lower precedence layers in ResolveRuntimeModels.
+func tierModelsFromEnv() map[string]string {
+	tiers := make(map[string]string, len(tierModelEnvVars))
+	for tier, v := range tierModelEnvVars {
+		if value := envStripped(v); value != "" {
+			tiers[tier] = value
+		}
+	}
+	return tiers
+}
+
+// DefaultPlanningModel ports _default_planning_model: SWE_MODEL_HIGH first
+// (the planning reasoners are high-tier roles, see RoleToTier — the same
+// relative precedence tier env vars have in ResolveRuntimeModels), then the
+// env cascade, then the OpenRouter default when only an OpenRouter key is
+// present, else "sonnet".
 func DefaultPlanningModel() string {
+	if highModel := tierModelsFromEnv()["high"]; highModel != "" {
+		return highModel
+	}
 	if envModel := defaultModelFromEnv(); envModel != "" {
 		return envModel
 	}
@@ -263,8 +318,10 @@ func sortedAllowedModelKeys() []string {
 }
 
 // ResolveRuntimeModels ports resolve_runtime_models. Resolution order (lowest →
-// highest precedence): runtime base defaults → env cascade → models["default"]
-// → models["<role>"]. fieldNames nil defaults to AllModelFields.
+// highest precedence): runtime base defaults → env cascade → tier env vars
+// (SWE_MODEL_LOW / SWE_MODEL_MED / SWE_MODEL_HIGH, each applying to the roles
+// in its tier, see RoleToTier) → models["default"] → models["<role>"].
+// fieldNames nil defaults to AllModelFields.
 func ResolveRuntimeModels(runtime string, models map[string]string, fieldNames []string) (map[string]string, error) {
 	if fieldNames == nil {
 		fieldNames = AllModelFields
@@ -303,6 +360,15 @@ func ResolveRuntimeModels(runtime string, models map[string]string, fieldNames [
 	if envDefault := defaultModelFromEnv(); envDefault != "" {
 		for _, field := range fieldNames {
 			resolved[field] = envDefault
+		}
+	}
+
+	if tierModels := tierModelsFromEnv(); len(tierModels) > 0 {
+		for _, field := range fieldNames {
+			tier := RoleToTier[modelFieldToRole[field]]
+			if model, ok := tierModels[tier]; ok {
+				resolved[field] = model
+			}
 		}
 	}
 

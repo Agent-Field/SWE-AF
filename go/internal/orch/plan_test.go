@@ -421,7 +421,8 @@ func TestPlanWritesArtifactsAtExactPaths(t *testing.T) {
 
 func TestPlanOpenRouterOnlyDefaults(t *testing.T) {
 	for _, k := range []string{"ANTHROPIC_API_KEY", "SWE_DEFAULT_RUNTIME",
-		"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"} {
+		"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL",
+		"SWE_MODEL_LOW", "SWE_MODEL_MED", "SWE_MODEL_HIGH"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
