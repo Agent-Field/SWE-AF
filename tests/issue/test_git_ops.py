@@ -96,6 +96,40 @@ class TestWorktreeLifecycle:
         assert git_ops.changed_files(git_repo, base_sha, "issue/tmp") == []
 
 
+class TestJunkHygiene:
+    def _worktree_with_junk(self, git_repo: str, *, commit_junk: bool) -> str:
+        _, base_sha = git_ops.resolve_base(git_repo)
+        worktree = os.path.join(git_repo, ".worktrees", "wt-junk")
+        git_ops.add_worktree(git_repo, worktree, "issue/junk", base_sha)
+        pycache = os.path.join(worktree, "pkg", "__pycache__")
+        os.makedirs(pycache)
+        with open(os.path.join(pycache, "mod.cpython-312.pyc"), "wb") as f:
+            f.write(b"\x00")
+        with open(os.path.join(worktree, "real.py"), "w") as f:
+            f.write("x = 1\n")
+        if commit_junk:
+            run_git(worktree, "add", "-A", ".")
+            run_git(worktree, "commit", "-q", "-m", "agent committed junk")
+        return worktree
+
+    def test_commit_all_excludes_bytecode_junk(self, git_repo: str) -> None:
+        worktree = self._worktree_with_junk(git_repo, commit_junk=False)
+        sha = git_ops.commit_all(worktree, "checkpoint")
+        assert sha
+        tracked = run_git(worktree, "ls-files")
+        assert "real.py" in tracked
+        assert "__pycache__" not in tracked
+
+    def test_scrub_untracks_agent_committed_junk(self, git_repo: str) -> None:
+        worktree = self._worktree_with_junk(git_repo, commit_junk=True)
+        assert "__pycache__" in run_git(worktree, "ls-files")
+        sha = git_ops.scrub_tracked_junk(worktree, "junk-issue")
+        assert sha
+        assert "__pycache__" not in run_git(worktree, "ls-files")
+        # Idempotent: nothing left to scrub.
+        assert git_ops.scrub_tracked_junk(worktree, "junk-issue") == ""
+
+
 class TestLocalExcludes:
     def test_adds_patterns_and_masks_status(self, git_repo: str) -> None:
         os.makedirs(os.path.join(git_repo, ".artifacts"), exist_ok=True)

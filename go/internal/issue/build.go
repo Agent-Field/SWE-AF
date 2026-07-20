@@ -211,6 +211,10 @@ func ImplementIssue(ctx context.Context, deps *Deps, input map[string]any) (any,
 		iterationHistory = loopResult.IterationHistory
 		debtItems = loopResult.DebtItems
 
+		if _, err := scrubTrackedJunk(worktreePath, plannedName); err != nil {
+			deps.note(ctx, fmt.Sprintf("Junk scrub failed: %v", err),
+				"issue_build", "error")
+		}
 		if _, err := commitAll(
 			worktreePath,
 			fmt.Sprintf("chore(%s): checkpoint uncommitted issue work", plannedName),

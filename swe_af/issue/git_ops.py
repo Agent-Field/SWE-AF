@@ -101,16 +101,14 @@ def _has_commit_identity(repo_path: str) -> bool:
     return bool(_git(repo_path, "config", "user.email", check=False).stdout.strip())
 
 
-def commit_all(worktree_path: str, message: str) -> str:
-    """Commit any uncommitted changes inside the (isolated) worktree.
+# Bytecode/cache junk that must never be versioned on the issue branch. The
+# coder runs tests inside the worktree, so these appear as a side effect and
+# an indiscriminate `git add` (ours or the coder's) would sweep them in.
+_JUNK_PATHSPECS: tuple[str, ...] = ("*__pycache__*", "*.pyc", "*.pyo")
 
-    ``add -A`` is safe here precisely because the worktree belongs to this
-    build alone. Returns the new commit sha, or "" when there was nothing to
-    commit.
-    """
-    if not is_dirty(worktree_path):
-        return ""
-    _git(worktree_path, "add", "-A")
+
+def _commit_index(worktree_path: str, message: str) -> str:
+    """Commit whatever is staged. Returns the sha, or "" when index is clean."""
     identity: list[str] = []
     if not _has_commit_identity(worktree_path):
         identity = [
@@ -125,6 +123,38 @@ def commit_all(worktree_path: str, message: str) -> str:
         detail = proc.stderr.strip() or proc.stdout.strip()
         raise GitOpsError(f"git commit failed: {detail}")
     return _git(worktree_path, "rev-parse", "HEAD").stdout.strip()
+
+
+def scrub_tracked_junk(worktree_path: str, issue_name: str) -> str:
+    """Untrack bytecode junk an agent committed on the issue branch.
+
+    Returns the scrub commit sha, or "" when the branch was already clean.
+    History stays append-only: the agent's commit is not rewritten.
+    """
+    listed = _git(worktree_path, "ls-files", "--", *_JUNK_PATHSPECS, check=False)
+    if listed.returncode != 0 or not listed.stdout.strip():
+        return ""
+    _git(
+        worktree_path, "rm", "-r", "--cached", "-q", "--ignore-unmatch",
+        "--", *_JUNK_PATHSPECS,
+    )
+    return _commit_index(
+        worktree_path, f"chore({issue_name}): untrack bytecode caches"
+    )
+
+
+def commit_all(worktree_path: str, message: str) -> str:
+    """Commit any uncommitted changes inside the (isolated) worktree.
+
+    ``add -A`` is safe here precisely because the worktree belongs to this
+    build alone; bytecode junk is excluded. Returns the new commit sha, or
+    "" when there was nothing to commit.
+    """
+    if not is_dirty(worktree_path):
+        return ""
+    excludes = [f":(exclude){p}" for p in _JUNK_PATHSPECS]
+    _git(worktree_path, "add", "-A", "--", ".", *excludes)
+    return _commit_index(worktree_path, message)
 
 
 def new_commits(repo_path: str, base_sha: str, branch: str) -> list[str]:

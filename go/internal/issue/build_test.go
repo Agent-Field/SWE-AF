@@ -251,6 +251,74 @@ func TestUncommittedCoderWorkGetsCheckpointCommit(t *testing.T) {
 	}
 }
 
+func TestBytecodeJunkNeverLandsOnBranch(t *testing.T) {
+	// The real coder runs tests in the worktree, generating __pycache__, and
+	// a sloppy model may even commit it. Neither may reach the branch.
+	repo := initRepo(t)
+	rec := &recorder{}
+	inner := scriptedCallFn(t, rec, scriptOpts{coderCommits: false, coderWrites: true})
+	callFn := func(ctx context.Context, target string, kwargs map[string]any) (map[string]any, error) {
+		if strings.HasSuffix(target, "run_coder") {
+			worktree, _ := kwargs["worktree_path"].(string)
+			pycache := filepath.Join(worktree, "pkg", "__pycache__")
+			if err := os.MkdirAll(pycache, 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(pycache, "x.cpython-312.pyc"), []byte{0}, 0o644); err != nil {
+				return nil, err
+			}
+		}
+		return inner(ctx, target, kwargs)
+	}
+	result := runImplement(t, repo, callFn,
+		map[string]any{"config": map[string]any{"verify": false}})
+
+	if result["success"] != true {
+		t.Fatalf("success = %v", result["success"])
+	}
+	for _, f := range result["files_changed"].([]string) {
+		if strings.Contains(f, "__pycache__") || strings.HasSuffix(f, ".pyc") {
+			t.Errorf("junk in files_changed: %s", f)
+		}
+	}
+	tracked := gitT(t, repo, "ls-tree", "-r", "--name-only", result["branch"].(string))
+	if strings.Contains(tracked, "__pycache__") {
+		t.Errorf("junk tracked on branch:\n%s", tracked)
+	}
+}
+
+func TestScrubUntracksAgentCommittedJunk(t *testing.T) {
+	repo := initRepo(t)
+	_, baseSHA, err := resolveBase(repo, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktree := filepath.Join(repo, ".worktrees", "wt-junk")
+	if err := addWorktree(repo, worktree, "issue/junk", baseSHA); err != nil {
+		t.Fatal(err)
+	}
+	pycache := filepath.Join(worktree, "pkg", "__pycache__")
+	if err := os.MkdirAll(pycache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pycache, "m.cpython-312.pyc"), []byte{0}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, worktree, "add", "-A", ".")
+	gitT(t, worktree, "commit", "-q", "-m", "agent committed junk")
+
+	sha, err := scrubTrackedJunk(worktree, "junk-issue")
+	if err != nil || sha == "" {
+		t.Fatalf("scrub: sha=%q err=%v", sha, err)
+	}
+	if tracked := gitT(t, worktree, "ls-files"); strings.Contains(tracked, "__pycache__") {
+		t.Errorf("junk still tracked:\n%s", tracked)
+	}
+	if again, err := scrubTrackedJunk(worktree, "junk-issue"); err != nil || again != "" {
+		t.Errorf("scrub not idempotent: sha=%q err=%v", again, err)
+	}
+}
+
 func TestBaseBranchOverride(t *testing.T) {
 	repo := initRepo(t)
 	gitT(t, repo, "checkout", "-q", "-b", "dev")

@@ -93,6 +93,29 @@ class TestHappyPath:
         message = run_git(git_repo, "log", "-1", "--format=%s", result["branch"])
         assert "checkpoint" in message
 
+    def test_bytecode_junk_never_lands_on_branch(self, git_repo: str) -> None:
+        # The real coder runs pytest in the worktree, generating __pycache__,
+        # and a sloppy model may even commit it. Neither may reach the branch.
+        recorded: list = []
+        base_call_fn = make_call_fn(recorded, coder_commits=False)
+
+        async def call_fn(target, **kwargs):
+            if target.endswith("run_coder"):
+                worktree = kwargs["worktree_path"]
+                pycache = os.path.join(worktree, "taskstore", "__pycache__")
+                os.makedirs(pycache, exist_ok=True)
+                with open(os.path.join(pycache, "x.cpython-312.pyc"), "wb") as f:
+                    f.write(b"\x00")
+            return await base_call_fn(target, **kwargs)
+
+        result = _run(git_repo, call_fn, config={"verify": False})
+
+        assert result["success"] is True
+        assert not any("__pycache__" in f or f.endswith(".pyc")
+                       for f in result["files_changed"])
+        tracked = run_git(git_repo, "ls-tree", "-r", "--name-only", result["branch"])
+        assert "__pycache__" not in tracked
+
     def test_base_branch_override(self, git_repo: str) -> None:
         run_git(git_repo, "checkout", "-q", "-b", "dev")
         with open(os.path.join(git_repo, "dev.txt"), "w") as f:

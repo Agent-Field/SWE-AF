@@ -254,6 +254,9 @@ async def _implement_issue_impl(
         debt_items = loop_result.debt_items
 
         await asyncio.to_thread(
+            git_ops.scrub_tracked_junk, worktree_path, planned["name"]
+        )
+        await asyncio.to_thread(
             git_ops.commit_all,
             worktree_path,
             f"chore({planned['name']}): checkpoint uncommitted issue work",

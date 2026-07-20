@@ -97,16 +97,15 @@ func hasCommitIdentity(repoPath string) bool {
 	return code == 0 && out != ""
 }
 
-// commitAll commits any uncommitted changes inside the (isolated) worktree.
-// `add -A` is safe here precisely because the worktree belongs to this build
-// alone. Returns the new commit sha, or "" when there was nothing to commit.
-func commitAll(worktreePath, message string) (string, error) {
-	if !isDirty(worktreePath) {
-		return "", nil
-	}
-	if _, detail, code := runGit(worktreePath, "add", "-A"); code != 0 {
-		return "", gitOpsErrf("git add -A failed: %s", detail)
-	}
+// junkPathspecs lists bytecode/cache junk that must never be versioned on the
+// issue branch. The coder runs tests inside the worktree, so these appear as
+// a side effect and an indiscriminate `git add` (ours or the coder's) would
+// sweep them in. Ports git_ops._JUNK_PATHSPECS.
+var junkPathspecs = []string{"*__pycache__*", "*.pyc", "*.pyo"}
+
+// commitIndex commits whatever is staged. Returns the sha, or "" when the
+// index is clean. Ports git_ops._commit_index.
+func commitIndex(worktreePath, message string) (string, error) {
 	args := []string{}
 	if !hasCommitIdentity(worktreePath) {
 		args = append(args,
@@ -128,6 +127,41 @@ func commitAll(worktreePath, message string) (string, error) {
 		return "", gitOpsErrf("git rev-parse HEAD failed: %s", detail)
 	}
 	return sha, nil
+}
+
+// scrubTrackedJunk untracks bytecode junk an agent committed on the issue
+// branch. Returns the scrub commit sha, or "" when the branch was already
+// clean. History stays append-only. Ports git_ops.scrub_tracked_junk.
+func scrubTrackedJunk(worktreePath, issueName string) (string, error) {
+	listArgs := append([]string{"ls-files", "--"}, junkPathspecs...)
+	out, _, code := runGit(worktreePath, listArgs...)
+	if code != 0 || out == "" {
+		return "", nil
+	}
+	rmArgs := append([]string{"rm", "-r", "--cached", "-q", "--ignore-unmatch", "--"}, junkPathspecs...)
+	if _, detail, code := runGit(worktreePath, rmArgs...); code != 0 {
+		return "", gitOpsErrf("git rm --cached failed: %s", detail)
+	}
+	return commitIndex(worktreePath,
+		fmt.Sprintf("chore(%s): untrack bytecode caches", issueName))
+}
+
+// commitAll commits any uncommitted changes inside the (isolated) worktree.
+// `add -A` is safe here precisely because the worktree belongs to this build
+// alone; bytecode junk is excluded. Returns the new commit sha, or "" when
+// there was nothing to commit.
+func commitAll(worktreePath, message string) (string, error) {
+	if !isDirty(worktreePath) {
+		return "", nil
+	}
+	addArgs := []string{"add", "-A", "--", "."}
+	for _, p := range junkPathspecs {
+		addArgs = append(addArgs, ":(exclude)"+p)
+	}
+	if _, detail, code := runGit(worktreePath, addArgs...); code != 0 {
+		return "", gitOpsErrf("git add -A failed: %s", detail)
+	}
+	return commitIndex(worktreePath, message)
 }
 
 // newCommits returns commits on branch since baseSHA, oldest first; empty when
