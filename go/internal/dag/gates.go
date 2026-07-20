@@ -70,7 +70,7 @@ func executeSingleIssue(
 		if result.Outcome == schemas.IssueOutcomeCompleted || result.Outcome == schemas.IssueOutcomeCompletedWithDebt {
 			result.Adaptations = adaptations
 			result.DebtItems = debtItems
-			result.FinalAcceptanceCriteria = asStringSlice(currentIssue["acceptance_criteria"])
+			result.FinalAcceptanceCriteria = schemas.StrList(asStringSlice(currentIssue["acceptance_criteria"]))
 			return result, nil
 		}
 
@@ -218,7 +218,7 @@ func executeSingleIssue(
 				AdvisorInvocations:      advisorRound + 1,
 				Adaptations:             adaptations,
 				DebtItems:               debtItems,
-				FinalAcceptanceCriteria: asStringSlice(currentIssue["acceptance_criteria"]),
+				FinalAcceptanceCriteria: schemas.StrList(asStringSlice(currentIssue["acceptance_criteria"])),
 				IterationHistory:        result.IterationHistory,
 			}, nil
 

@@ -23,6 +23,20 @@ from swe_af.runtime.providers import RUNTIME_VALUES, runtime_to_harness_provider
 DEFAULT_AGENT_MAX_TURNS: int = 150
 
 
+def ensure_str_list(value: Any) -> Any:
+    """Coerce LLM-shaped scalars into ``list[str]`` (str → [str], None → []).
+
+    Weaker models sometimes emit a single criterion/filename as a bare string
+    where the schema wants a list. Anything else passes through unchanged so
+    genuine type errors still surface via normal validation.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Provider normalization
 # ---------------------------------------------------------------------------
@@ -186,6 +200,15 @@ class SplitIssueSpec(BaseModel):
     files_to_modify: list[str] = []
     parent_issue_name: str = ""
 
+    @field_validator(
+        "acceptance_criteria", "depends_on", "provides",
+        "files_to_create", "files_to_modify",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str_list(cls, v: Any) -> Any:
+        return ensure_str_list(v)
+
 
 class IssueAdvisorDecision(BaseModel):
     """Structured output from the Issue Advisor agent."""
@@ -239,6 +262,14 @@ class IssueResult(BaseModel):
     escalation_context: str = ""
     final_acceptance_criteria: list[str] = []
     iteration_history: list[dict] = []
+
+    @field_validator("final_acceptance_criteria", mode="before")
+    @classmethod
+    def _coerce_final_acceptance_criteria(cls, v: Any) -> Any:
+        # LLM-generated fix issues have carried a bare-string criterion here;
+        # without coercion a checkpoint reload (or the replanner's DAGState
+        # re-validation) kills the whole build. See PR for the incident.
+        return ensure_str_list(v)
 
 
 class LevelResult(BaseModel):

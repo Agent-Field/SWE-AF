@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
 
+from pydantic import BaseModel, field_validator
+
+from swe_af.execution.schemas import ensure_str_list
 from swe_af.hitl.ask_user import AskUserForm
 
 
@@ -91,6 +94,16 @@ class PlannedIssue(BaseModel):
     sequence_number: int | None = None  # Assigned after topo sort, used in file/branch naming
     guidance: IssueGuidance | None = None  # Per-issue guidance from sprint planner
     target_repo: str = ""  # Target repository for multi-repo builds (empty = default/only repo)
+
+    @field_validator(
+        "acceptance_criteria", "depends_on", "provides",
+        "files_to_create", "files_to_modify",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str_list(cls, v: Any) -> Any:
+        # Weaker models sometimes emit a bare string where a list is expected.
+        return ensure_str_list(v)
 
 
 class PlanResult(BaseModel):

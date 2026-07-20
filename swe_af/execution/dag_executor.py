@@ -23,6 +23,7 @@ from swe_af.execution.schemas import (
     ReplanAction,
     ReplanDecision,
     WorkspaceManifest,
+    ensure_str_list,
 )
 
 # ---------------------------------------------------------------------------
@@ -827,7 +828,12 @@ async def _execute_single_issue(
         if result.outcome in (IssueOutcome.COMPLETED, IssueOutcome.COMPLETED_WITH_DEBT):
             result.adaptations = adaptations
             result.debt_items = debt_items
-            result.final_acceptance_criteria = current_issue.get("acceptance_criteria", [])
+            # ensure_str_list: attribute assignment bypasses Pydantic, so a
+            # bare-string criterion from an LLM-sourced issue would poison the
+            # checkpoint here and only explode on the next DAGState validation.
+            result.final_acceptance_criteria = ensure_str_list(
+                current_issue.get("acceptance_criteria", [])
+            )
             return result
 
         # Advisor budget exhausted or disabled — return raw failure
@@ -969,7 +975,9 @@ async def _execute_single_issue(
                 advisor_invocations=advisor_round + 1,
                 adaptations=adaptations,
                 debt_items=debt_items,
-                final_acceptance_criteria=current_issue.get("acceptance_criteria", []),
+                final_acceptance_criteria=ensure_str_list(
+                    current_issue.get("acceptance_criteria", [])
+                ),
                 iteration_history=result.iteration_history,
             )
 
