@@ -493,6 +493,37 @@ _MODEL_FIELD_TO_ROLE: dict[str, str] = {
 }
 _ALLOWED_MODEL_KEYS: set[str] = set(MODEL_ROLE_KEYS) | {"default"}
 
+MODEL_TIERS: tuple[str, ...] = ("low", "med", "high")
+
+# Capability tier per role: "high" = planning-heavy reasoning, "med" =
+# coding/review/QA work, "low" = mechanical transformation. Each tier can be
+# pointed at a model via its env var (see TIER_MODEL_ENV_VARS).
+ROLE_TO_TIER: dict[str, str] = {
+    "pm": "high",
+    "architect": "high",
+    "tech_lead": "high",
+    "replan": "high",
+    "sprint_planner": "med",
+    "coder": "med",
+    "qa": "med",
+    "code_reviewer": "med",
+    "retry_advisor": "med",
+    "issue_writer": "med",
+    "issue_advisor": "med",
+    "verifier": "med",
+    "merger": "med",
+    "integration_tester": "med",
+    "ci_fixer": "med",
+    "qa_synthesizer": "low",
+    "git": "low",
+}
+
+TIER_MODEL_ENV_VARS: dict[str, str] = {
+    "low": "SWE_MODEL_LOW",
+    "med": "SWE_MODEL_MED",
+    "high": "SWE_MODEL_HIGH",
+}
+
 _LEGACY_GROUP_EQUIVALENTS: dict[str, str] = {
     "planning": "models.pm, models.architect, models.tech_lead, models.sprint_planner",
     "coding": "models.coder, models.qa, models.code_reviewer",
@@ -631,6 +662,22 @@ def _default_model_from_env() -> str | None:
     return None
 
 
+def _tier_models_from_env() -> dict[str, str]:
+    """Tier → model id for each ``SWE_MODEL_<TIER>`` env var that is set.
+
+    Lets the deployer point each role class at a different model without
+    enumerating every role (see ``ROLE_TO_TIER``). Only tiers whose env var is
+    non-empty appear in the result; unset tiers fall through to the lower
+    precedence layers in ``resolve_runtime_models``.
+    """
+    tiers: dict[str, str] = {}
+    for tier, var in TIER_MODEL_ENV_VARS.items():
+        value = os.getenv(var, "").strip()
+        if value:
+            tiers[tier] = value
+    return tiers
+
+
 def _default_planning_model() -> str:
     """Model for the planning reasoners (the ``plan`` pipeline) when the caller
     passes no model.
@@ -638,12 +685,19 @@ def _default_planning_model() -> str:
     The planning reasoners take an explicit ``model`` argument rather than a
     runtime ``models={}`` config, so the ``resolve_runtime_models`` cascade
     doesn't apply to them. This mirrors that cascade for the planning path so an
-    OpenRouter-only deployment is zero-config. Precedence, first match wins:
+    OpenRouter-only deployment is zero-config. The planning reasoners are
+    high-tier roles (see ``ROLE_TO_TIER``), so ``SWE_MODEL_HIGH`` beats the
+    generic default-model env — the same relative precedence tier env vars have
+    in ``resolve_runtime_models``. Precedence, first match wins:
 
-        1. deployer env (``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` → ``HARNESS_MODEL``)
-        2. the OpenRouter default when only an OpenRouter key is present
-        3. the Claude ``sonnet`` alias (historical default)
+        1. ``SWE_MODEL_HIGH`` (planning reasoners are high-tier)
+        2. deployer env (``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` → ``HARNESS_MODEL``)
+        3. the OpenRouter default when only an OpenRouter key is present
+        4. the Claude ``sonnet`` alias (historical default)
     """
+    high_model = _tier_models_from_env().get("high")
+    if high_model:
+        return high_model
     env_model = _default_model_from_env()
     if env_model:
         return env_model
@@ -724,8 +778,11 @@ def resolve_runtime_models(
         1. runtime base defaults (``_RUNTIME_BASE_MODELS[runtime]``)
         2. env-var cascade: ``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` →
            ``HARNESS_MODEL`` (first non-empty wins, applies to all roles)
-        3. caller's ``models["default"]``
-        4. caller's ``models["<role>"]``
+        3. tier env vars: ``SWE_MODEL_LOW`` / ``SWE_MODEL_MED`` /
+           ``SWE_MODEL_HIGH``, each applying to the roles in its tier
+           (see ``ROLE_TO_TIER``)
+        4. caller's ``models["default"]``
+        5. caller's ``models["<role>"]``
     """
     if field_names is None:
         field_names = ALL_MODEL_FIELDS
@@ -753,6 +810,13 @@ def resolve_runtime_models(
     if env_default:
         for field in field_names:
             resolved[field] = env_default
+
+    tier_models = _tier_models_from_env()
+    if tier_models:
+        for field in field_names:
+            tier = ROLE_TO_TIER[_MODEL_FIELD_TO_ROLE[field]]
+            if tier in tier_models:
+                resolved[field] = tier_models[tier]
 
     default_model = flat_models.get("default")
     if default_model:
