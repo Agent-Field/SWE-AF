@@ -884,6 +884,10 @@ class BuildConfig(BaseModel):
     enable_integration_testing: bool = True
     max_coding_iterations: int = 5
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
+    # Mechanical git steps (worktree setup, conflict-free merges, cleanup) run
+    # as plain git instead of LLM agent calls; the merger agent still resolves
+    # real conflicts. False restores the fully agent-driven path.
+    deterministic_git: bool = True
     execute_fn_target: str = ""
     permission_mode: str = ""
     repo_url: str = ""  # GitHub URL to clone (single-repo shorthand)
@@ -1018,6 +1022,7 @@ class BuildConfig(BaseModel):
             "enable_integration_testing": self.enable_integration_testing,
             "max_coding_iterations": self.max_coding_iterations,
             "agent_max_turns": self.agent_max_turns,
+            "deterministic_git": self.deterministic_git,
             "agent_timeout_seconds": self.agent_timeout_seconds,
             "max_advisor_invocations": self.max_advisor_invocations,
             "enable_issue_advisor": self.enable_issue_advisor,
@@ -1184,6 +1189,8 @@ class ExecutionConfig(BaseModel):
     enable_integration_testing: bool = True
     max_coding_iterations: int = 5
     agent_max_turns: int = DEFAULT_AGENT_MAX_TURNS
+    # Mirrors BuildConfig.deterministic_git (see there for semantics).
+    deterministic_git: bool = True
     permission_mode: str = ""
     agent_timeout_seconds: int = 2700  # 45 min
     max_advisor_invocations: int = 2

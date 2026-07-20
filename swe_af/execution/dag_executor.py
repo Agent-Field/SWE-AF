@@ -9,6 +9,7 @@ import re
 import traceback
 from typing import Callable
 
+from swe_af.execution import git_fast_path
 from swe_af.execution.dag_utils import apply_replan, find_downstream
 from swe_af.execution.envelope import unwrap_call_result
 from swe_af.execution.fatal_error import FatalHarnessError
@@ -48,8 +49,59 @@ async def _call_with_timeout(coro, timeout: int = 2700, label: str = ""):
 
 
 # ---------------------------------------------------------------------------
-# Git worktree helpers (all delegate to reasoners via call_fn)
+# Git worktree helpers. With config.deterministic_git (default) the mechanical
+# steps run as plain git via git_fast_path; the reasoner agents remain the
+# fallback (and the conflict-resolution path for merges).
 # ---------------------------------------------------------------------------
+
+
+async def _dispatch_workspace_setup(
+    call_fn: Callable,
+    node_id: str,
+    config: ExecutionConfig,
+    *,
+    repo_path: str,
+    integration_branch: str,
+    issues: list[dict],
+    worktrees_dir: str,
+    artifacts_dir: str,
+    level: int,
+    build_id: str,
+    note_fn: Callable | None,
+) -> dict:
+    """Deterministic worktree creation first; agent fallback on failure."""
+    if config.deterministic_git:
+        try:
+            setup = await asyncio.to_thread(
+                git_fast_path.setup_worktrees,
+                repo_path, integration_branch, issues, worktrees_dir, build_id,
+            )
+            if note_fn:
+                note_fn(
+                    f"Worktrees created deterministically: "
+                    f"{len(setup['workspaces'])} (no agent call)",
+                    tags=["execution", "worktree_setup", "fast_path"],
+                )
+            return setup
+        except git_fast_path.GitFastPathError as e:
+            if note_fn:
+                note_fn(
+                    f"Deterministic worktree setup failed ({e}) — "
+                    f"falling back to the workspace agent",
+                    tags=["execution", "worktree_setup", "fallback"],
+                )
+    return await call_fn(
+        f"{node_id}.run_workspace_setup",
+        repo_path=repo_path,
+        integration_branch=integration_branch,
+        issues=issues,
+        worktrees_dir=worktrees_dir,
+        artifacts_dir=artifacts_dir,
+        level=level,
+        model=config.git_model,
+        ai_provider=config.ai_provider,
+        build_id=build_id,
+    )
 
 
 async def _setup_worktrees(
@@ -78,19 +130,18 @@ async def _setup_worktrees(
             tags=["execution", "worktree_setup", "start"],
         )
 
-    # --- Single-repo path: unchanged ---
+    # --- Single-repo path ---
     if dag_state.workspace_manifest is None:
-        setup = await call_fn(
-            f"{node_id}.run_workspace_setup",
+        setup = await _dispatch_workspace_setup(
+            call_fn, node_id, config,
             repo_path=dag_state.repo_path,
             integration_branch=dag_state.git_integration_branch,
             issues=active_issues,
             worktrees_dir=dag_state.worktrees_dir,
             artifacts_dir=dag_state.artifacts_dir,
             level=dag_state.current_level,
-            model=config.git_model,
-            ai_provider=config.ai_provider,
             build_id=build_id,
+            note_fn=note_fn,
         )
 
         if not setup.get("success"):
@@ -143,17 +194,16 @@ async def _setup_worktrees(
             continue
 
         repo_worktrees_dir = os.path.join(ws_repo.absolute_path, ".worktrees")
-        setup = await call_fn(
-            f"{node_id}.run_workspace_setup",
+        setup = await _dispatch_workspace_setup(
+            call_fn, node_id, config,
             repo_path=ws_repo.absolute_path,
             integration_branch=integration_branch,
             issues=repo_issues,
             worktrees_dir=repo_worktrees_dir,
             artifacts_dir=dag_state.artifacts_dir,
             level=dag_state.current_level,
-            model=config.git_model,
-            ai_provider=config.ai_provider,
             build_id=build_id,
+            note_fn=note_fn,
         )
 
         if not setup.get("success"):
@@ -202,6 +252,69 @@ def _enrich_issues_from_setup(
             enriched.append(issue)
 
     return enriched
+
+
+async def _dispatch_merge(
+    call_fn: Callable,
+    node_id: str,
+    config: ExecutionConfig,
+    *,
+    repo_path: str,
+    integration_branch: str,
+    completed_branches: list[dict],
+    merge_kwargs: dict,
+    level: int,
+    note_fn: Callable | None,
+) -> dict:
+    """Deterministic --no-ff merges first; the merger agent handles only the
+    branches that actually conflict. With deterministic_git off, the agent
+    merges everything (with the historical one-retry on failure)."""
+    if config.deterministic_git:
+        fast: dict | None = None
+        try:
+            fast = await asyncio.to_thread(
+                git_fast_path.merge_branches,
+                repo_path, integration_branch,
+                [b["branch_name"] for b in completed_branches], level,
+            )
+        except git_fast_path.GitFastPathError as e:
+            if note_fn:
+                note_fn(
+                    f"Deterministic merge failed ({e}) — falling back to the merger agent",
+                    tags=["execution", "merge", "fallback"],
+                )
+        if fast is not None:
+            if not fast["failed_branches"]:
+                if note_fn:
+                    note_fn(
+                        f"Merged {len(fast['merged_branches'])} branch(es) "
+                        f"deterministically (no agent call)",
+                        tags=["execution", "merge", "fast_path"],
+                    )
+                return fast
+            conflicted = [
+                b for b in completed_branches
+                if b["branch_name"] in fast["failed_branches"]
+            ]
+            if note_fn:
+                note_fn(
+                    f"{len(conflicted)} branch(es) conflict — merger agent takes over: "
+                    f"{[b['branch_name'] for b in conflicted]}",
+                    tags=["execution", "merge", "fallback"],
+                )
+            agent_result = await call_fn(
+                f"{node_id}.run_merger",
+                **{**merge_kwargs, "branches_to_merge": conflicted},
+            )
+            return git_fast_path.combine_merge_results(fast, agent_result)
+
+    merge_result = await call_fn(f"{node_id}.run_merger", **merge_kwargs)
+    # Retry once on failure (handles transient auth errors, network blips)
+    if not merge_result.get("success") and merge_result.get("failed_branches"):
+        if note_fn:
+            note_fn("Merge failed, retrying once...", tags=["execution", "merge", "retry"])
+        merge_result = await call_fn(f"{node_id}.run_merger", **merge_kwargs)
+    return merge_result
 
 
 async def _merge_level_branches(
@@ -262,16 +375,15 @@ async def _merge_level_branches(
             ai_provider=config.ai_provider,
         )
 
-        merge_result = await call_fn(f"{node_id}.run_merger", **merge_kwargs)
-
-        # Retry once on failure (handles transient auth errors, network blips)
-        if not merge_result.get("success") and merge_result.get("failed_branches"):
-            if note_fn:
-                note_fn(
-                    "Merge failed, retrying once...",
-                    tags=["execution", "merge", "retry"],
-                )
-            merge_result = await call_fn(f"{node_id}.run_merger", **merge_kwargs)
+        merge_result = await _dispatch_merge(
+            call_fn, node_id, config,
+            repo_path=dag_state.repo_path,
+            integration_branch=dag_state.git_integration_branch,
+            completed_branches=completed_branches,
+            merge_kwargs=merge_kwargs,
+            level=level_result.level_index,
+            note_fn=note_fn,
+        )
 
         dag_state.merge_results.append(merge_result)
         for b in merge_result.get("merged_branches", []):
@@ -338,8 +450,7 @@ async def _merge_level_branches(
             for r in issue_results
         ]
 
-        result = await call_fn(
-            f"{node_id}.run_merger",
+        merge_kwargs = dict(
             repo_path=ws_repo.absolute_path,
             integration_branch=integration_branch,
             branches_to_merge=branches_to_merge,
@@ -351,7 +462,15 @@ async def _merge_level_branches(
             model=config.merger_model,
             ai_provider=config.ai_provider,
         )
-        return result
+        return await _dispatch_merge(
+            call_fn, node_id, config,
+            repo_path=ws_repo.absolute_path,
+            integration_branch=integration_branch,
+            completed_branches=branches_to_merge,
+            merge_kwargs=merge_kwargs,
+            level=level_result.level_index,
+            note_fn=note_fn,
+        )
 
     # Dispatch all repo merges concurrently
     tasks = [
@@ -493,6 +612,7 @@ async def _cleanup_worktrees(
     model: str = "sonnet",
     ai_provider: str = "claude",
     completed_results: list | None = None,
+    deterministic_git: bool = True,
 ) -> None:
     """Remove worktrees and clean up branches after merge.
 
@@ -528,7 +648,7 @@ async def _cleanup_worktrees(
             await _cleanup_single_repo(
                 call_fn, node_id, ws_repo.absolute_path, repo_worktrees_dir,
                 repo_branches, dag_state.artifacts_dir, level, model, ai_provider,
-                note_fn,
+                note_fn, deterministic_git=deterministic_git,
             )
         return
 
@@ -536,7 +656,7 @@ async def _cleanup_worktrees(
     await _cleanup_single_repo(
         call_fn, node_id, dag_state.repo_path, dag_state.worktrees_dir,
         branches_to_clean, dag_state.artifacts_dir, level, model, ai_provider,
-        note_fn,
+        note_fn, deterministic_git=deterministic_git,
     )
 
 
@@ -551,8 +671,28 @@ async def _cleanup_single_repo(
     model: str,
     ai_provider: str,
     note_fn: Callable | None = None,
+    deterministic_git: bool = True,
 ) -> None:
     """Clean up worktrees for a single repo. Retries once on failure."""
+    if deterministic_git:
+        try:
+            result = await asyncio.to_thread(
+                git_fast_path.cleanup_worktrees,
+                repo_path, worktrees_dir, branches_to_clean,
+            )
+            if note_fn:
+                note_fn(
+                    f"Worktree cleanup complete (deterministic): {result.get('cleaned', [])}",
+                    tags=["execution", "worktree_cleanup", "fast_path"],
+                )
+            return
+        except git_fast_path.GitFastPathError as e:
+            if note_fn:
+                note_fn(
+                    f"Deterministic cleanup failed ({e}) — falling back to the cleanup agent",
+                    tags=["execution", "worktree_cleanup", "fallback"],
+                )
+
     for attempt in range(2):  # up to 1 retry
         try:
             result = await call_fn(
@@ -1600,6 +1740,7 @@ async def run_dag(
                     model=config.git_model,
                     ai_provider=config.ai_provider,
                     completed_results=level_result.completed,
+                    deterministic_git=config.deterministic_git,
                 )
             )
         else:
@@ -1789,6 +1930,7 @@ async def run_dag(
                 level=dag_state.current_level,
                 model=config.git_model,
                 ai_provider=config.ai_provider,
+                deterministic_git=config.deterministic_git,
             )
 
     if note_fn:

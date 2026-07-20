@@ -184,7 +184,7 @@ func RunDAG(
 		cleanupDone = make(chan struct{})
 		go func() {
 			cleanupErr = cleanupWorktrees(ctx, dagState, branches, callFn, nodeID, note,
-				level, cfg.GitModel(), cfg.AIProvider(), completed)
+				level, cfg.GitModel(), cfg.AIProvider(), cfg.DeterministicGit, completed)
 			close(cleanupDone)
 		}()
 	}
@@ -536,7 +536,7 @@ mainLoop:
 					[]string{"execution", "worktree_cleanup", "final_sweep"})
 			}
 			if err := cleanupWorktrees(ctx, dagState, allBranches, callFn, nodeID, note,
-				dagState.CurrentLevel, cfg.GitModel(), cfg.AIProvider(), nil); err != nil {
+				dagState.CurrentLevel, cfg.GitModel(), cfg.AIProvider(), cfg.DeterministicGit, nil); err != nil {
 				return nil, err
 			}
 		}
