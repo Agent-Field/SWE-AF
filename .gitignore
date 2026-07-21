@@ -39,8 +39,9 @@ _worktrees/
 # Root runtime artifacts for this node (example artifacts are versioned separately)
 /.artifacts/
 
-# Claude Code
-.claude/
+# Claude Code — local state stays ignored; versioned skills ship with the repo
+.claude/*
+!.claude/skills/
 
 # Python packaging / dist
 dist/
