@@ -489,7 +489,16 @@ def _is_empty_build(success: bool, ever_completed: int, ever_merged: int) -> boo
     return not success and ever_completed == 0 and ever_merged == 0
 
 
-@app.reasoner()
+@app.reasoner(
+    tags=["entrypoint"],
+    description=(
+        "Feature-level build: plans a PRD → architecture → issue DAG, then codes, "
+        "reviews, merges and verifies end-to-end. Give it a goal plus repo_path or "
+        "repo_url; returns a verified feature branch (optionally a draft PR). "
+        "Typical wall-clock 25-60 min. For one well-scoped change with known files, "
+        "prefer implement_issue."
+    ),
+)
 async def build(
     goal: str,
     repo_path: str = "",

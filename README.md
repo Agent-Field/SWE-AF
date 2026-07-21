@@ -641,6 +641,12 @@ Rule of thumb for the two prompt shapes:
 | "Implement X feature" (needs decomposition) | `swe-planner.build` / `swe-fast.build` |
 | "Change this code in this file, like this" (fully scoped, context supplied) | `swe-planner.implement_issue` / `swe-fast.implement_issue` |
 
+A harness does not need this table hardcoded: both entry points register with
+the control plane carrying an `entrypoint` tag and a routing description, so
+`af ls --entrypoints` (or `GET /api/v1/discovery/capabilities`) lists them —
+with when-to-use guidance — on any AgentField control plane the node joins
+(agentfield ≥ 0.1.113).
+
 Each call creates its own git worktree and an `issue/<build_id>-<slug>` branch
 off `base_branch` (default: the current branch), implements the issue with the
 coder → reviewer loop (a QA + synthesizer path when `needs_deeper_qa` is set),

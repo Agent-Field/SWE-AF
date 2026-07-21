@@ -361,7 +361,16 @@ async def _implement_issue_impl(
     ).model_dump()
 
 
-@issue_router.reasoner()
+@issue_router.reasoner(
+    tags=["entrypoint"],
+    description=(
+        "Issue-level build (sub-harness entry): implements ONE fully-scoped issue "
+        "on an isolated branch of a local repo — no planning agents, ~4-8 LLM "
+        "calls, minutes not hours. Give it issue{title, description, "
+        "acceptance_criteria, files_to_*} plus repo_path; returns the deliverable "
+        "branch. Prefer this over build when you already know exactly what to change."
+    ),
+)
 async def implement_issue(
     issue: dict,
     repo_path: str,
