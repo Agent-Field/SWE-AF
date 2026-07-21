@@ -5,7 +5,7 @@ module github.com/Agent-Field/SWE-AF/go
 go 1.21
 
 require (
-	github.com/Agent-Field/agentfield/sdk/go v0.0.0-20260720184209-dfb5c8a37f93
+	github.com/Agent-Field/agentfield/sdk/go v0.0.0-20260721154150-054a7d18b4bf
 	github.com/invopop/jsonschema v0.13.0
 	golang.org/x/sync v0.11.0
 )

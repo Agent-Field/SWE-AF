@@ -137,16 +137,38 @@ func (n *Node) registerOrchestrators() {
 	handlers["resolve"] = orch.ResolveHandler
 	handlers["resume_build"] = orch.ResumeBuildHandler
 
-	// Python registers the orchestrators via @app.reasoner() with NO tags
-	// (only router-registered roles carry tags) — keep the registration
-	// payload identical.
+	// Python registers the orchestrators via @app.reasoner(): only `build`
+	// carries tags (["entrypoint"]) plus an explicit routing description; the
+	// others get their docstring summaries as descriptions — keep the
+	// registration payload identical.
 	for name, h := range handlers {
 		var opts []agent.ReasonerOption
+		if name == "build" {
+			opts = append(opts, agent.WithReasonerTags("entrypoint"))
+		}
+		if d, ok := orchestratorDescriptions[name]; ok {
+			opts = append(opts, agent.WithDescription(d))
+		}
 		if s, ok := orchestratorSchemas[name]; ok {
 			opts = append(opts, agent.WithInputSchema(s))
 		}
 		regHandler(n, name, deps, h, opts...)
 	}
+}
+
+// orchestratorDescriptions mirrors the Python side: build's explicit
+// description= kwarg, and the docstring first paragraphs the Python SDK
+// auto-registers for the other orchestrators (swe_af/app.py).
+var orchestratorDescriptions = map[string]string{
+	"build": "Feature-level build: plans a PRD → architecture → issue DAG, then codes, " +
+		"reviews, merges and verifies end-to-end. Give it a goal plus repo_path or " +
+		"repo_url; returns a verified feature branch (optionally a draft PR). " +
+		"Typical wall-clock 25-60 min. For one well-scoped change with known files, " +
+		"prefer implement_issue.",
+	"plan":         "Run the full planning pipeline.",
+	"execute":      "Execute a planned DAG with self-healing replanning.",
+	"resolve":      "Update an existing PR: merge base, fix CI, address review comments, push.",
+	"resume_build": "Resume a crashed build from the last checkpoint.",
 }
 
 // ---------------------------------------------------------------------------
@@ -164,11 +186,20 @@ func (n *Node) registerFastReasoners() {
 
 	// Python tags: fast_plan_tasks/fast_execute_tasks/fast_verify come from
 	// fast_router (tags=["swe-fast"]); the fast `build` is @app.reasoner()
-	// with NO tags. Mirror that exactly.
+	// tagged ["entrypoint"] with a routing description. Mirror that exactly.
 	tag := agent.WithReasonerTags(tagFast)
 	for name, h := range fast.Handlers() {
 		var opts []agent.ReasonerOption
-		if name != "build" {
+		if name == "build" {
+			opts = append(opts,
+				agent.WithReasonerTags("entrypoint"),
+				agent.WithDescription(
+					"Fast-mode build: one planning pass into a small task list, then code and "+
+						"verify with tight timeouts. Same goal/repo_path interface as "+
+						"swe-planner.build, but lighter and cheaper — suited to small features "+
+						"where full DAG planning is overkill."),
+			)
+		} else {
 			opts = append(opts, tag)
 		}
 		if s, ok := fastSchemas[name]; ok {
@@ -192,9 +223,15 @@ func (n *Node) registerIssueReasoner() {
 		Note:   n.App,
 		NodeID: n.NodeID,
 	}
-	tag := agent.WithReasonerTags("swe-issue-go")
+	tag := agent.WithReasonerTags("swe-issue-go", "entrypoint")
 	for name, h := range issue.Handlers() {
-		opts := []agent.ReasonerOption{tag}
+		opts := []agent.ReasonerOption{tag, agent.WithDescription(
+			"Issue-level build (sub-harness entry): implements ONE fully-scoped issue " +
+				"on an isolated branch of a local repo — no planning agents, ~4-8 LLM " +
+				"calls, minutes not hours. Give it issue{title, description, " +
+				"acceptance_criteria, files_to_*} plus repo_path; returns the deliverable " +
+				"branch. Prefer this over build when you already know exactly what to change."),
+		}
 		if s, ok := issueSchemas[name]; ok {
 			opts = append(opts, agent.WithInputSchema(s))
 		}

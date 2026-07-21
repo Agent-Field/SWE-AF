@@ -60,7 +60,15 @@ def _runtime_to_provider(runtime: str) -> str:
     return "opencode"
 
 
-@app.reasoner()
+@app.reasoner(
+    tags=["entrypoint"],
+    description=(
+        "Fast-mode build: one planning pass into a small task list, then code and "
+        "verify with tight timeouts. Same goal/repo_path interface as "
+        "swe-planner.build, but lighter and cheaper — suited to small features "
+        "where full DAG planning is overkill."
+    ),
+)
 async def build(
     goal: str,
     repo_path: str = "",
