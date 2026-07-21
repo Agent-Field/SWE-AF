@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
@@ -52,9 +53,49 @@ func asStringSlice(v any) []string {
 			out = append(out, asString(e))
 		}
 		return out
+	case string:
+		// LLM shape tolerance (ports ensure_str_list): a bare string where a
+		// list is expected becomes a one-element list instead of vanishing.
+		if strings.TrimSpace(t) == "" {
+			return nil
+		}
+		return []string{t}
 	default:
 		return nil
 	}
+}
+
+// issueListFields are the issue-dict fields that must be list[str]. Ports
+// dag_utils._ISSUE_LIST_FIELDS.
+var issueListFields = []string{
+	"acceptance_criteria", "depends_on", "provides",
+	"files_to_create", "files_to_modify",
+}
+
+// NormalizeIssueDict coerces LLM-emitted scalar shapes on a raw issue dict, in
+// place. Ports dag_utils.normalize_issue_dict: raw issue dicts bypass schema
+// validation (DAGState.AllIssues is []map[string]any), so a bare-string
+// acceptance criterion survives until something re-validates the state — a
+// checkpoint reload or the replanner's DAGState — and kills the build long
+// after the cheap moment to catch it. Normalize at ingestion.
+func NormalizeIssueDict(issue map[string]any) map[string]any {
+	for _, field := range issueListFields {
+		v, ok := issue[field]
+		if !ok {
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			if strings.TrimSpace(t) == "" {
+				issue[field] = []string{}
+			} else {
+				issue[field] = []string{t}
+			}
+		case nil:
+			issue[field] = []string{}
+		}
+	}
+	return issue
 }
 
 // asInt coerces a value to an int, treating absent/None/non-numeric as 0.
@@ -437,7 +478,8 @@ func ApplyReplan(state *schemas.DAGState, decision schemas.ReplanDecision) (*sch
 	for _, updated := range decision.UpdatedIssues {
 		name := asString(updated["name"])
 		if existing, ok := remainingByName[name]; ok {
-			for k, v := range updated {
+			normalized := NormalizeIssueDict(copyMap(updated))
+			for k, v := range normalized {
 				existing[k] = v
 			}
 		}
@@ -459,6 +501,7 @@ func ApplyReplan(state *schemas.DAGState, decision schemas.ReplanDecision) (*sch
 		}
 	}
 	for _, newIssue := range decision.NewIssues {
+		newIssue = NormalizeIssueDict(copyMap(newIssue))
 		name := asString(newIssue["name"])
 		if name != "" {
 			if _, exists := remainingByName[name]; !exists {

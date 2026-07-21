@@ -14,6 +14,7 @@ type ExecutionConfig struct {
 	EnableIntegrationTesting   bool    `json:"enable_integration_testing"`
 	MaxCodingIterations        int     `json:"max_coding_iterations"`
 	AgentMaxTurns              int     `json:"agent_max_turns"`
+	DeterministicGit           bool    `json:"deterministic_git"`
 	PermissionMode             string  `json:"permission_mode"`
 	AgentTimeoutSeconds        int     `json:"agent_timeout_seconds"`
 	MaxAdvisorInvocations      int     `json:"max_advisor_invocations"`
@@ -45,6 +46,7 @@ func defaultExecutionConfig() ExecutionConfig {
 		EnableIntegrationTesting:   true,
 		MaxCodingIterations:        5,
 		AgentMaxTurns:              DefaultAgentMaxTurns,
+		DeterministicGit:           true,
 		PermissionMode:             "",
 		AgentTimeoutSeconds:        2700,
 		MaxAdvisorInvocations:      2,

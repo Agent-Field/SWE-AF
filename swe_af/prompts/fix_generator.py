@@ -25,9 +25,12 @@ For each failed criterion:
    - Was the criterion already attempted and failed repeatedly? → Record as debt
 
 2. **Generate fix issues** for fixable criteria:
-   - Each fix issue targets exactly ONE failed criterion
+   - Group related failures: criteria that share a root cause or touch the
+     same files belong in ONE fix issue whose acceptance_criteria lists every
+     covered criterion. Each fix issue costs a full coder+review cycle — only
+     genuinely independent failures get separate issues.
    - Include the specific files that need modification (from verifier evidence)
-   - Include concrete acceptance criteria (the failed criterion restated)
+   - Include concrete acceptance criteria (the failed criteria restated)
    - Keep scope minimal — surgical fixes only
 
 3. **Record debt** for unfixable criteria:
