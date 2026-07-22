@@ -492,7 +492,11 @@ func prepareSingleRepo(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	switch {
 	case cfg.RepoURL != "" && !pathExists(gitDir):
 		deps.Note(ctx, fmt.Sprintf("Cloning %s → %s", cfg.RepoURL, repoPath), "build", "clone")
-		_ = os.MkdirAll(repoPath, 0o755)
+		// Create only the parent; git clone creates the leaf itself. Pre-creating
+		// the destination leaf makes git refuse it as "already exists and is not
+		// an empty directory" on Windows, where it cannot re-open the dir the node
+		// just made (issue #107).
+		_ = os.MkdirAll(filepath.Dir(repoPath), 0o755)
 		r := runGit(ctx, "", "clone", cfg.RepoURL, repoPath)
 		if r.ExitCode != 0 {
 			errMsg := strings.TrimSpace(r.Stderr)
@@ -525,7 +529,8 @@ func prepareSingleRepo(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 			deps.Note(ctx, fmt.Sprintf("Reset to origin/%s failed — re-cloning", defaultBranch),
 				"build", "clone", "reclone")
 			_ = os.RemoveAll(repoPath)
-			_ = os.MkdirAll(repoPath, 0o755)
+			// Parent-only: git clone re-creates the leaf (issue #107).
+			_ = os.MkdirAll(filepath.Dir(repoPath), 0o755)
 			clone := runGit(ctx, "", "clone", cfg.RepoURL, repoPath)
 			if clone.ExitCode != 0 {
 				return fmt.Errorf("git re-clone failed: %s", strings.TrimSpace(clone.Stderr))

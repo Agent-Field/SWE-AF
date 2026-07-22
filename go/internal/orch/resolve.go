@@ -66,7 +66,10 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 		"resolve", "start")
 
 	// ---- 1. Clone ----------------------------------------------------------
-	_ = os.MkdirAll(repoPath, 0o755)
+	// Create only the parent; git clone creates the leaf. Pre-creating the leaf
+	// makes git refuse it as "already exists and is not an empty directory" on
+	// Windows, where it cannot re-open the node-created dir (issue #107).
+	_ = os.MkdirAll(filepath.Dir(repoPath), 0o755)
 	clone := runGit(ctx, "", "clone", in.RepoURL, repoPath)
 	if clone.ExitCode != 0 {
 		errMsg := strings.TrimSpace(clone.Stderr)
