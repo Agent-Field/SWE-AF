@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
 
 // buildHandler routes mock reasoner responses by target suffix. Overridable
@@ -203,8 +206,8 @@ func TestBuildIsolationConcurrent(t *testing.T) {
 func TestBuildScopedPathIncludesBuildID(t *testing.T) {
 	repoURL := "https://github.com/example/my-repo.git"
 	name := deriveRepoName(repoURL)
-	a := fmt.Sprintf("/workspaces/%s-%s", name, newBuildID())
-	b := fmt.Sprintf("/workspaces/%s-%s", name, newBuildID())
+	a := filepath.Join(workspace.Root(), fmt.Sprintf("%s-%s", name, newBuildID()))
+	b := filepath.Join(workspace.Root(), fmt.Sprintf("%s-%s", name, newBuildID()))
 	if a == b {
 		t.Fatal("two builds for the same repo must produce different workspace paths")
 	}

@@ -18,6 +18,7 @@ load_dotenv()
 
 from agentfield import Agent
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
+from swe_af.execution.schemas import _workspace_root
 from swe_af.fast import fast_router
 from swe_af.fast.schemas import FastBuildConfig, FastBuildResult, fast_resolve_models
 
@@ -90,7 +91,9 @@ async def build(
 
     # Auto-derive repo_path from repo_url when not specified
     if effective_repo_url and not repo_path:
-        repo_path = f"/workspaces/{_repo_name_from_url(effective_repo_url)}"
+        repo_path = os.path.join(
+            _workspace_root(), _repo_name_from_url(effective_repo_url)
+        )
     if not repo_path:
         raise ValueError("Either repo_path or repo_url must be provided")
 

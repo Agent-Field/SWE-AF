@@ -25,6 +25,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/harnessx"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
 
 // ---------------------------------------------------------------------------
@@ -169,7 +170,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	repoPath := in.RepoPath
 	// Auto-derive repo_path from repo_url when not specified.
 	if effectiveRepoURL != "" && repoPath == "" {
-		repoPath = "/workspaces/" + repoNameFromURL(effectiveRepoURL)
+		repoPath = filepath.Join(workspace.Root(), repoNameFromURL(effectiveRepoURL))
 	}
 	if repoPath == "" {
 		return nil, errors.New("Either repo_path or repo_url must be provided")

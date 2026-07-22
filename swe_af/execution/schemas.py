@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import tempfile
 from enum import Enum
 from typing import Any, Literal
 
@@ -71,6 +72,34 @@ def _derive_repo_name(url: str) -> str:
     # Handle both HTTPS and SSH URLs
     name = re.split(r"[/:]", stripped)[-1]
     return name
+
+
+def _workspace_root() -> str:
+    """Base directory into which builds clone repositories by default.
+
+    Resolution order:
+      1. ``SWE_WORKSPACE_ROOT`` env var, when set, on every platform.
+      2. On Windows (``os.name == "nt"``):
+         ``%LOCALAPPDATA%\\agentfield\\workspaces`` — an absolute drive-letter
+         path. Falls back to ``<tempdir>\\agentfield\\workspaces`` when
+         LOCALAPPDATA is unset.
+      3. Everywhere else: exactly ``/workspaces`` (Docker parity).
+
+    A hardcoded ``/workspaces`` base is *drive-relative* on Windows (no drive
+    letter), which the node's spawn context resolves unpredictably: makedirs
+    appears to succeed but ``git clone`` then fails with "destination path ...
+    already exists and is not an empty directory". Rooting the default under an
+    absolute base avoids that.
+
+    Ref: https://github.com/Agent-Field/SWE-AF/issues/107
+    """
+    root = os.environ.get("SWE_WORKSPACE_ROOT")
+    if root:
+        return root
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+        return os.path.join(base, "agentfield", "workspaces")
+    return "/workspaces"
 
 
 # ---------------------------------------------------------------------------
