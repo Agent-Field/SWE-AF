@@ -88,8 +88,16 @@ async def _run_codex_cli_with_stdin(
     env: dict[str, str] | None,
     cwd: str | None,
 ) -> tuple[str, str, int]:
+    # Windows: CreateProcess does no PATHEXT resolution, and npm installs the
+    # codex CLI only as a .cmd shim — spawning the bare name raises
+    # FileNotFoundError ([WinError 2]) on every call even though the shell
+    # finds it. resolve_cli_command resolves the shim's real path via
+    # shutil.which (a no-op on POSIX and for names that already carry a path).
+    from agentfield.harness._cli import resolve_cli_command
+
     proc = await asyncio.create_subprocess_exec(
-        *cmd,
+        resolve_cli_command(cmd[0]),
+        *cmd[1:],
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
