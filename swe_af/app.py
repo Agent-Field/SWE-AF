@@ -47,6 +47,7 @@ from swe_af.execution.schemas import (
     _default_planning_model,
     _default_runtime,
     _derive_repo_name as _repo_name_from_url,
+    _workspace_root,
 )
 
 NODE_ID = os.getenv("NODE_ID", "swe-planner")
@@ -141,7 +142,10 @@ async def _clone_repos(
 
         git_dir = os.path.join(dest, ".git")
         if spec.repo_url and not os.path.exists(git_dir):
-            os.makedirs(dest, exist_ok=True)
+            # Parent-only (workspace_root already exists): git clone creates the
+            # leaf. Pre-creating it makes git refuse it as "already exists and is
+            # not an empty directory" on Windows (issue #107).
+            os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
             cmd = ["git", "clone", spec.repo_url, dest]
             if spec.branch:
                 cmd += ["--branch", spec.branch]
@@ -516,7 +520,9 @@ async def build(
     This is the single entry point. Pass a goal, get working code.
 
     If ``repo_url`` is provided and ``repo_path`` is empty, the repo is cloned
-    into ``/workspaces/<repo-name>`` automatically (useful in Docker).
+    into a build-scoped directory under the workspace root automatically
+    (``/workspaces`` in Docker, ``%LOCALAPPDATA%\\agentfield\\workspaces`` on
+    Windows, or ``$SWE_WORKSPACE_ROOT`` when set — see ``_workspace_root``).
     """
     cfg = BuildConfig(**config) if config else BuildConfig()
 
@@ -535,13 +541,13 @@ async def build(
     # concurrent builds from sharing git state, artifacts, or worktrees.
     if cfg.repo_url and not repo_path:
         repo_name = _repo_name_from_url(cfg.repo_url)
-        repo_path = f"/workspaces/{repo_name}-{build_id}"
+        repo_path = os.path.join(_workspace_root(), f"{repo_name}-{build_id}")
 
     # Multi-repo: derive repo_path from primary repo; _clone_repos handles cloning later
     if not repo_path and len(cfg.repos) > 1:
         primary = next((r for r in cfg.repos if r.role == "primary"), cfg.repos[0])
         repo_name = _repo_name_from_url(primary.repo_url)
-        repo_path = f"/workspaces/{repo_name}-{build_id}"
+        repo_path = os.path.join(_workspace_root(), f"{repo_name}-{build_id}")
 
     if not repo_path:
         raise ValueError("Either repo_path or repo_url must be provided")
@@ -560,7 +566,10 @@ async def build(
         git_dir = os.path.join(repo_path, ".git")
         if cfg.repo_url and not os.path.exists(git_dir):
             app.note(f"Cloning {cfg.repo_url} → {repo_path}", tags=["build", "clone"])
-            os.makedirs(repo_path, exist_ok=True)
+            # Create only the parent; git clone creates the leaf itself.
+            # Pre-creating the leaf makes git refuse it as "already exists and is
+            # not an empty directory" on Windows (issue #107).
+            os.makedirs(os.path.dirname(repo_path) or ".", exist_ok=True)
             clone_result = subprocess.run(
                 ["git", "clone", cfg.repo_url, repo_path],
                 capture_output=True,
@@ -614,7 +623,8 @@ async def build(
                 )
                 import shutil
                 shutil.rmtree(repo_path, ignore_errors=True)
-                os.makedirs(repo_path, exist_ok=True)
+                # Parent-only: git clone re-creates the leaf (issue #107).
+                os.makedirs(os.path.dirname(repo_path) or ".", exist_ok=True)
                 clone_result = subprocess.run(
                     ["git", "clone", cfg.repo_url, repo_path],
                     capture_output=True, text=True,
@@ -1748,7 +1758,7 @@ async def resolve(
 
     build_id = uuid.uuid4().hex[:8]
     repo_name = _repo_name_from_url(repo_url)
-    repo_path = f"/workspaces/{repo_name}-resolve-{build_id}"
+    repo_path = os.path.join(_workspace_root(), f"{repo_name}-resolve-{build_id}")
 
     app.note(
         f"Resolve starting (build_id={build_id}) — PR #{pr_number}",
@@ -1756,7 +1766,10 @@ async def resolve(
     )
 
     # ---- 1. Clone -----------------------------------------------------------
-    os.makedirs(repo_path, exist_ok=True)
+    # Parent-only: git clone creates the leaf itself; pre-creating it makes git
+    # refuse it as "already exists and is not an empty directory" on Windows
+    # (issue #107).
+    os.makedirs(os.path.dirname(repo_path) or ".", exist_ok=True)
     clone = subprocess.run(
         ["git", "clone", repo_url, repo_path],
         capture_output=True, text=True,
