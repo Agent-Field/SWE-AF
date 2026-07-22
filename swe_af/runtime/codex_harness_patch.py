@@ -65,6 +65,81 @@ def _codex_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return strict
 
 
+def _codex_schema_strict_expressible(schema: Any) -> bool:
+    """Whether a strict-rewritten schema can be sent through --output-schema.
+
+    The server behind ``codex exec`` validates --output-schema against OpenAI
+    strict-mode rules (probed live on codex-cli 0.144.1): every object node
+    needs ``additionalProperties: false`` plus a full ``required`` array, every
+    node needs a ``type`` (or ``$ref`` / anyOf combinator), and free-form maps
+    (``dict[str, Any]``), typed maps, bare ``Any`` nodes, and boolean
+    subschemas are rejected with ``invalid_json_schema``. Schemas containing
+    such nodes must skip the flag: codex still persists its final answer via
+    --output-last-message and the harness runner validates locally (issue
+    Agent-Field/SWE-AF#106).
+    """
+    if not isinstance(schema, dict):
+        return False  # boolean subschemas ("default_value": true) and the like
+    for def_key in ("$defs", "definitions"):
+        defs = schema.get(def_key)
+        if isinstance(defs, dict):
+            if not all(_codex_schema_strict_expressible(value) for value in defs.values()):
+                return False
+    if isinstance(schema.get("$ref"), str):
+        return True  # target checked via the $defs walk above
+    for key in ("anyOf", "oneOf", "allOf"):
+        branch = schema.get(key)
+        if isinstance(branch, list):
+            return all(_codex_schema_strict_expressible(item) for item in branch)
+    type_value = schema.get("type")
+    if isinstance(type_value, str):
+        if type_value == "object":
+            properties = schema.get("properties")
+            if not isinstance(properties, dict):
+                return False  # free-form map — strict mode would force {}
+            if schema.get("additionalProperties") is not False:
+                return False
+            return all(
+                _codex_schema_strict_expressible(value) for value in properties.values()
+            )
+        if type_value == "array":
+            items = schema.get("items")
+            if not isinstance(items, dict):
+                return False
+            return _codex_schema_strict_expressible(items)
+        return True  # primitive leaf
+    if isinstance(type_value, list):
+        # e.g. ["string", "null"]; only primitive members are safely strict.
+        return bool(type_value) and all(
+            isinstance(tv, str) and tv not in ("object", "array") for tv in type_value
+        )
+    return False  # no type, no $ref, no combinator — e.g. {} for Any
+
+
+_SCHEMA_REJECTION_MARKERS = ("invalid_json_schema", "invalid schema for response_format")
+
+
+def _is_output_schema_rejection(output: str) -> bool:
+    """Whether CLI output carries the server-side strict validator's 400."""
+    lower = output.lower()
+    return any(marker in lower for marker in _SCHEMA_REJECTION_MARKERS)
+
+
+def _without_flag_value(cmd: list[str], flag: str) -> list[str]:
+    """Return cmd with one ``flag value`` pair removed."""
+    out: list[str] = []
+    skip_next = False
+    for i, arg in enumerate(cmd):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == flag and i + 1 < len(cmd):
+            skip_next = True
+            continue
+        out.append(arg)
+    return out
+
+
 def _augment_codex_error_message(message: str, detail: str) -> str:
     lower = f"{message}\n{detail}".lower()
     hints = (
@@ -178,11 +253,24 @@ def apply_codex_harness_patch() -> None:
             cmd.extend(["--sandbox", "workspace-write"])
 
         prompt_for_codex = prompt
+        used_output_schema = False
         if cwd:
             schema_path = _schema.get_schema_path(cwd)
             output_path = _schema.get_output_path(cwd)
             if Path(schema_path).exists():
-                cmd.extend(["--output-schema", schema_path])
+                # --output-schema only when the schema survives OpenAI's strict
+                # validator; otherwise the server 400s the whole session with
+                # invalid_json_schema. --output-last-message is safe either way
+                # and keeps the final answer capturable for local validation.
+                try:
+                    schema_expressible = _codex_schema_strict_expressible(
+                        json.loads(Path(schema_path).read_text(encoding="utf-8"))
+                    )
+                except Exception:
+                    schema_expressible = False
+                if schema_expressible:
+                    cmd.extend(["--output-schema", schema_path])
+                    used_output_schema = True
                 cmd.extend(["--output-last-message", output_path])
                 prompt_for_codex += (
                     "\n\n---\n"
@@ -193,17 +281,33 @@ def apply_codex_harness_patch() -> None:
                     "the output file yourself or make the output file the task."
                 )
 
-        try:
-            start = asyncio.get_running_loop().time()
+        async def _invoke(cmd_to_run: list[str]) -> tuple[str, str, int]:
             timeout_seconds = options.get("timeout_seconds")
             if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
-                stdout, stderr, returncode = await asyncio.wait_for(
-                    _run_codex_cli_with_stdin(cmd, prompt_for_codex, env=merged_env, cwd=cwd),
+                return await asyncio.wait_for(
+                    _run_codex_cli_with_stdin(
+                        cmd_to_run, prompt_for_codex, env=merged_env, cwd=cwd
+                    ),
                     timeout=float(timeout_seconds),
                 )
-            else:
-                stdout, stderr, returncode = await _run_codex_cli_with_stdin(
-                    cmd, prompt_for_codex, env=merged_env, cwd=cwd
+            return await _run_codex_cli_with_stdin(
+                cmd_to_run, prompt_for_codex, env=merged_env, cwd=cwd
+            )
+
+        try:
+            start = asyncio.get_running_loop().time()
+            stdout, stderr, returncode = await _invoke(cmd)
+            # Reactive fallback: if the server's strict validator refused the
+            # schema anyway (its rules can tighten upstream at any time), rerun
+            # once without --output-schema — the prompt still pins the JSON
+            # contract and --output-last-message still captures the answer.
+            if (
+                returncode != 0
+                and used_output_schema
+                and _is_output_schema_rejection(f"{stdout}\n{stderr}")
+            ):
+                stdout, stderr, returncode = await _invoke(
+                    _without_flag_value(cmd, "--output-schema")
                 )
             duration_ms = int((asyncio.get_running_loop().time() - start) * 1000)
         except FileNotFoundError as exc:
