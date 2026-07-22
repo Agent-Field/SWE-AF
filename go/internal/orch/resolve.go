@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
 
 // resolveInput mirrors the Python resolve() signature (param names + defaults).
@@ -58,7 +60,7 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 
 	buildID := newBuildID()
 	repoName := deriveRepoName(in.RepoURL)
-	repoPath := fmt.Sprintf("/workspaces/%s-resolve-%s", repoName, buildID)
+	repoPath := filepath.Join(workspace.Root(), fmt.Sprintf("%s-resolve-%s", repoName, buildID))
 
 	deps.Note(ctx, fmt.Sprintf("Resolve starting (build_id=%s) — PR #%d", buildID, in.PRNumber),
 		"resolve", "start")

@@ -19,6 +19,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
 
 // Handlers is the name→handler registration surface consumed by node wiring.
@@ -73,7 +74,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	// Auto-derive repo_path from repo_url, build-scoped.
 	if cfg.RepoURL != "" && repoPath == "" {
 		repoName := deriveRepoName(cfg.RepoURL)
-		repoPath = fmt.Sprintf("/workspaces/%s-%s", repoName, buildID)
+		repoPath = filepath.Join(workspace.Root(), fmt.Sprintf("%s-%s", repoName, buildID))
 	}
 
 	// Multi-repo: derive repo_path from the primary repo.
@@ -83,7 +84,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			primary = &cfg.Repos[0]
 		}
 		repoName := deriveRepoName(primary.RepoURL)
-		repoPath = fmt.Sprintf("/workspaces/%s-%s", repoName, buildID)
+		repoPath = filepath.Join(workspace.Root(), fmt.Sprintf("%s-%s", repoName, buildID))
 	}
 
 	if repoPath == "" {
