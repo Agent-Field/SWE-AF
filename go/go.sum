@@ -1,5 +1,5 @@
-github.com/Agent-Field/agentfield/sdk/go v0.0.0-20260721154150-054a7d18b4bf h1:wTYUlaz81NirvBpFC7tdXeCpHCWcmaKQZFAqamNZTJw=
-github.com/Agent-Field/agentfield/sdk/go v0.0.0-20260721154150-054a7d18b4bf/go.mod h1:08VZk14uw4GJH6a34psHkuLu+DcRr197Zi0IGmLlfrM=
+github.com/Agent-Field/agentfield/sdk/go v0.0.0-20260723130821-20955b2637b4 h1:OwOEyxRfYD0n2LAmaJIJdfejWpIYgRAf9oq/YA4qfVk=
+github.com/Agent-Field/agentfield/sdk/go v0.0.0-20260723130821-20955b2637b4/go.mod h1:08VZk14uw4GJH6a34psHkuLu+DcRr197Zi0IGmLlfrM=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/buger/jsonparser v1.1.1 h1:2PnMjfWD7wBILjqQbt530v576A/cAbQvEW9gGIpYMUs=
