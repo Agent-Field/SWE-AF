@@ -14,7 +14,10 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from swe_af.execution.fatal_error import check_fatal_harness_error
+from swe_af.execution.fatal_error import (
+    check_empty_harness_completion,
+    check_fatal_harness_error,
+)
 from swe_af.execution.schemas import DEFAULT_AGENT_MAX_TURNS
 from swe_af.reasoners.schemas import (
     Architecture,
@@ -217,6 +220,12 @@ async def run_product_manager(
             cwd=repo_path,
         )
         check_fatal_harness_error(result)
+        # An empty completion here (no parsed output, no text) is a
+        # provider/model mismatch, not a schema-quality problem — surface it
+        # distinctly with provider+model instead of the generic PRD message.
+        check_empty_harness_completion(
+            result, role="PM", provider=provider, model=model
+        )
         return result.parsed
 
     initial_prior = list(prior_user_responses or [])
@@ -231,7 +240,13 @@ async def run_product_manager(
     )
 
     if parsed is None:
-        raise RuntimeError("Product manager failed to produce a valid PRD")
+        # Reached only when the harness produced non-empty but unparseable
+        # output (empty completions are raised distinctly above). Name the
+        # provider+model so the failure is diagnosable.
+        raise RuntimeError(
+            f"Product manager failed to produce a valid PRD "
+            f"(provider={provider}, model={model})"
+        )
 
     router.note("PM complete", tags=["pm", "complete"])
     return parsed.model_dump()
@@ -407,8 +422,14 @@ async def run_architect(
         cwd=repo_path,
     )
     check_fatal_harness_error(result)
+    check_empty_harness_completion(
+        result, role="Architect", provider=provider, model=model
+    )
     if result.parsed is None:
-        raise RuntimeError("Architect failed to produce a valid architecture")
+        raise RuntimeError(
+            f"Architect failed to produce a valid architecture "
+            f"(provider={provider}, model={model})"
+        )
 
     router.note("Architect complete", tags=["architect", "complete"])
     return result.parsed.model_dump()
@@ -462,8 +483,14 @@ async def run_tech_lead(
         cwd=repo_path,
     )
     check_fatal_harness_error(result)
+    check_empty_harness_completion(
+        result, role="Tech lead", provider=provider, model=model
+    )
     if result.parsed is None:
-        raise RuntimeError("Tech lead failed to produce a valid review")
+        raise RuntimeError(
+            f"Tech lead failed to produce a valid review "
+            f"(provider={provider}, model={model})"
+        )
 
     review = result.parsed.model_dump()
     review_json_path = os.path.join(base, "plan", "review.json")
@@ -539,8 +566,14 @@ async def run_sprint_planner(
         cwd=repo_path,
     )
     check_fatal_harness_error(result)
+    check_empty_harness_completion(
+        result, role="Sprint planner", provider=provider, model=model
+    )
     if result.parsed is None:
-        raise RuntimeError("Sprint planner failed to produce valid issues")
+        raise RuntimeError(
+            f"Sprint planner failed to produce valid issues "
+            f"(provider={provider}, model={model})"
+        )
 
     router.note("Sprint Planner complete", tags=["sprint_planner", "complete"])
     return {

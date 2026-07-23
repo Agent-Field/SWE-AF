@@ -18,7 +18,11 @@ from pydantic import (
     model_validator,
 )
 from swe_af.hitl.ask_user import AskUserForm
-from swe_af.runtime.providers import RUNTIME_VALUES, runtime_to_harness_provider
+from swe_af.runtime.providers import (
+    RUNTIME_VALUES,
+    normalize_runtime_provider,
+    runtime_to_harness_provider,
+)
 
 # Global default for all agent max_turns. Change this one value to adjust everywhere.
 DEFAULT_AGENT_MAX_TURNS: int = 150
@@ -738,32 +742,44 @@ def _tier_models_from_env() -> dict[str, str]:
     return tiers
 
 
-def _default_planning_model() -> str:
+def _default_planning_model(runtime: str | None = None) -> str:
     """Model for the planning reasoners (the ``plan`` pipeline) when the caller
-    passes no model.
+    passes no model, resolved for the *given runtime*.
 
     The planning reasoners take an explicit ``model`` argument rather than a
-    runtime ``models={}`` config, so the ``resolve_runtime_models`` cascade
-    doesn't apply to them. This mirrors that cascade for the planning path so an
-    OpenRouter-only deployment is zero-config. The planning reasoners are
-    high-tier roles (see ``ROLE_TO_TIER``), so ``SWE_MODEL_HIGH`` beats the
-    generic default-model env — the same relative precedence tier env vars have
-    in ``resolve_runtime_models``. Precedence, first match wins:
+    runtime ``models={}`` config, so the SDK never runs the
+    ``resolve_runtime_models`` cascade for them. This delegates to that same
+    cascade for the high-tier ``pm`` role so the planning path picks a model
+    that is valid for ``runtime`` — critically, the auto default is
+    runtime-gated and never leaks a provider-prefixed id (e.g. an
+    ``openrouter/…`` model) into a runtime whose CLI cannot consume it. That
+    cross-runtime leak was the root cause of silent ~1s empty completions when a
+    caller pinned ``codex`` in an OpenRouter-only environment.
+
+    ``runtime`` is normalized (aliases like ``claude`` / ``opencode`` accepted).
+    When omitted, the runtime is resolved from the environment via
+    ``_default_runtime`` so callers that don't yet know the runtime keep the
+    historical env-only behavior.
+
+    Precedence is inherited from ``resolve_runtime_models`` (highest first):
 
         1. ``SWE_MODEL_HIGH`` (planning reasoners are high-tier)
         2. deployer env (``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` → ``HARNESS_MODEL``)
-        3. the OpenRouter default when only an OpenRouter key is present
-        4. the Claude ``sonnet`` alias (historical default)
+        3. the runtime's own auto/base default:
+             - ``codex``       → a codex-native model (never ``openrouter/…``)
+             - ``open_code``   → the OpenRouter auto default (OpenRouter-only
+                                 env) or the ``open_code`` base default
+             - ``claude_code`` → the Claude ``sonnet`` alias (historical default)
+
+    Env / explicit values (layers 1–2) still win verbatim — the deployer owns
+    them — so only the auto default (layer 3) is made runtime-aware.
     """
-    high_model = _tier_models_from_env().get("high")
-    if high_model:
-        return high_model
-    env_model = _default_model_from_env()
-    if env_model:
-        return env_model
-    if _openrouter_only_env():
-        return _OPENROUTER_AUTO_DEFAULT_MODEL
-    return "sonnet"
+    resolved_runtime = normalize_runtime_provider(runtime) if runtime else _default_runtime()
+    return resolve_runtime_models(
+        runtime=resolved_runtime,
+        models=None,
+        field_names=["pm_model"],
+    )["pm_model"]
 
 
 def _legacy_hint_for_model_key(key: str) -> str:

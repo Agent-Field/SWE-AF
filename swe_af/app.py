@@ -1459,8 +1459,13 @@ async def plan(
     ``_default_runtime``). Any explicitly passed value always wins.
     """
     # Resolve provider/model defaults from the environment (see docstring).
+    # The model default is resolved *for the chosen runtime* so it can never
+    # hand a provider-prefixed id (e.g. an ``openrouter/…`` model) to a runtime
+    # whose CLI can't consume it — the cross-runtime leak that caused silent
+    # ~1s empty completions when a caller pinned ``codex`` under OpenRouter-only
+    # env. Explicit ``ai_provider`` still wins; only the auto default is gated.
     ai_provider = ai_provider or _default_runtime()
-    default_model = _default_planning_model()
+    default_model = _default_planning_model(ai_provider)
     pm_model = pm_model or default_model
     architect_model = architect_model or default_model
     tech_lead_model = tech_lead_model or default_model
