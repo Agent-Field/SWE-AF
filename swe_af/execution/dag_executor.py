@@ -1414,7 +1414,7 @@ async def _invoke_replanner_via_call(
                 "adaptations": [a.model_dump() for a in f.adaptations],
             })
 
-    decision_dict = await call_fn(
+    raw = await call_fn(
         f"{node_id}.run_replanner",
         dag_state=dag_state.model_dump(),
         failed_issues=[f.model_dump() for f in unrecoverable],
@@ -1422,6 +1422,7 @@ async def _invoke_replanner_via_call(
         ai_provider=config.ai_provider,
         escalation_notes=escalation_notes,
     )
+    decision_dict = unwrap_call_result(raw, f"{node_id}.run_replanner")
     return ReplanDecision(**decision_dict)
 
 

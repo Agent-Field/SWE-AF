@@ -20,9 +20,10 @@ logger = logging.getLogger(__name__)
 def _note(msg: str, tags: list[str] | None = None) -> None:
     """Log a message via fast_router.note() when attached, else fall back to logger."""
     try:
-        # AgentRouter may raise RuntimeError on attribute access if not attached.
+        # AgentRouter may raise RuntimeError/AttributeError/AgentFieldClientError
+        # on attribute access if not attached.
         fast_router.note(msg, tags=tags or [])
-    except (RuntimeError, AttributeError):
+    except Exception:  # noqa: BLE001
         logger.debug("[fast_planner] %s (tags=%s)", msg, tags)
 
 

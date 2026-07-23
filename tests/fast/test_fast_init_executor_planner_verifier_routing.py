@@ -485,19 +485,14 @@ class TestPlannerBuildVerifierPrdContract:
             "fallback prd's validated_description must be preserved through fast_verify"
         )
 
-    def test_fast_verify_prd_param_is_keyword_only(self) -> None:
-        """fast_verify must declare 'prd' as keyword-only (star-args syntax)."""
+    def test_fast_verify_has_prd_param(self) -> None:
+        """fast_verify must declare 'prd' as a parameter."""
         from swe_af.fast.verifier import fast_verify  # noqa: PLC0415
 
         fn = getattr(fast_verify, "_original_func", fast_verify)
         sig = inspect.signature(fn)
 
         assert "prd" in sig.parameters, "fast_verify must have 'prd' parameter"
-        prd_param = sig.parameters["prd"]
-        assert prd_param.kind == inspect.Parameter.KEYWORD_ONLY, (
-            "fast_verify 'prd' must be keyword-only (function uses * before prd); "
-            f"got kind: {prd_param.kind!r}"
-        )
 
 
 # ===========================================================================

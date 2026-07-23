@@ -1615,7 +1615,13 @@ async def plan(
             ai_provider=ai_provider,
             workspace_manifest=workspace_manifest,
         ))
-    writer_results = await asyncio.gather(*writer_tasks, return_exceptions=True)
+    writer_results_raw = await asyncio.gather(*writer_tasks, return_exceptions=True)
+    writer_results: list[Any] = []
+    for r in writer_results_raw:
+        if isinstance(r, Exception):
+            writer_results.append(r)
+        else:
+            writer_results.append(_unwrap(r, f"{NODE_ID}.run_issue_writer"))
 
     succeeded = sum(1 for r in writer_results if isinstance(r, dict) and r.get("success"))
     failed = len(writer_results) - succeeded
@@ -1678,11 +1684,12 @@ async def execute(
     if execute_fn_target:
         # External coder agent (existing path)
         async def execute_fn(issue, dag_state):
-            return await app.call(
+            raw = await app.call(
                 execute_fn_target,
                 issue=issue,
                 repo_path=dag_state.repo_path,
             )
+            return _unwrap(raw, execute_fn_target)
     else:
         # Built-in coding loop — dag_executor will use call_fn + coding_loop
         execute_fn = None
@@ -2124,13 +2131,8 @@ async def resume_build(
             f"No checkpoint found at {plan_path}. Cannot resume."
         )
 
-    # Load the original plan artifacts to reconstruct plan_result
-    prd_path = os.path.join(base, "plan", "prd.md")
-    arch_path = os.path.join(base, "plan", "architecture.md")
-    rationale_path = os.path.join(base, "rationale.md")
-
     # We need the plan_result dict — reconstruct from checkpoint's DAGState
-    with open(plan_path, "r") as f:
+    with open(plan_path, "r", encoding="utf-8") as f:
         checkpoint = json.load(f)
 
     plan_result = {
@@ -2146,7 +2148,7 @@ async def resume_build(
 
     app.note("Resuming build from checkpoint", tags=["build", "resume"])
 
-    result = await app.call(
+    raw = await app.call(
         f"{NODE_ID}.execute",
         plan_result=plan_result,
         repo_path=repo_path,
@@ -2155,7 +2157,7 @@ async def resume_build(
         resume=True,
     )
 
-    return result
+    return _unwrap(raw, f"{NODE_ID}.execute")
 
 
 def main():
