@@ -514,6 +514,10 @@ func parseSynthesis(resp *ai.Response) (*schemas.QASynthesisResult, bool) {
 	if err := resp.JSON(&out); err != nil {
 		return nil, false
 	}
+	// The system prompt names the actions in uppercase (FIX/APPROVE/BLOCK) and
+	// the reflected request schema carries no enum, so models routinely answer
+	// in uppercase. Normalize before the enum check.
+	out.Action = schemas.QASynthesisAction(strings.ToLower(strings.TrimSpace(string(out.Action))))
 	switch out.Action {
 	case schemas.QASynthesisActionFix, schemas.QASynthesisActionApprove, schemas.QASynthesisActionBlock:
 		return &out, true

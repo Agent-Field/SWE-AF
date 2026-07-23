@@ -593,3 +593,33 @@ func TestInputDefaults(t *testing.T) {
 		t.Fatalf("qa_synthesizer default model must be haiku, got %q", si.Model)
 	}
 }
+
+// Contract: models routinely answer the action in uppercase (the system prompt
+// names FIX/APPROVE/BLOCK and the reflected request schema carries no enum), so
+// parseSynthesis must case-normalize instead of dropping the synthesis and
+// triggering the deterministic fallback.
+func TestRunQASynthesizerNormalizesUppercaseAction(t *testing.T) {
+	nr := &noteRecorder{}
+	mai := &mockAI{resp: aiJSONResponse(`{"action":"APPROVE","summary":"env failures are pre-existing","stuck":false}`)}
+	mh := &mockHarness{fn: func(_ any) (*harness.Result, error) {
+		t.Fatal("run_qa_synthesizer must not call the harness")
+		return nil, nil
+	}}
+
+	out, err := RunQASynthesizer(context.Background(), newDeps(mh, mai, nr), map[string]any{
+		"qa_result":         map[string]any{"passed": false},
+		"review_result":     map[string]any{"approved": true},
+		"iteration_history": []any{},
+		"iteration_id":      "s2",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := asMap(t, out)
+	if m["action"] != "approve" {
+		t.Fatalf("expected normalized action \"approve\", got %v", m["action"])
+	}
+	if m["summary"] != "env failures are pre-existing" {
+		t.Fatalf("model synthesis was discarded for the fallback: %v", m)
+	}
+}
