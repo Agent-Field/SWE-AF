@@ -132,6 +132,12 @@ func Start(ctx context.Context, opts Options) *Supervisor {
 	if opts.Stderr == nil {
 		opts.Stderr = os.Stderr
 	}
+	// The opt-in acknowledgement: one clear line so a user who set the flag
+	// knows the engine is on, how coding routes, and how to go back.
+	log.Printf("pro engine (opt-in preview) enabled: engine node %q joins the control plane; "+
+		"builds route per-issue coding through it. Unset %s to return to the classic engine. "+
+		"The pro engine is planned to become the default in a future release.",
+		NodeID(), EnvEnabled)
 	s := &Supervisor{done: make(chan struct{})}
 	go s.loop(ctx, bin, opts)
 	return s
