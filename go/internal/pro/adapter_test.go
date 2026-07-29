@@ -63,7 +63,9 @@ func TestComposeGoalMinimal(t *testing.T) {
 }
 
 func TestProExecutePass(t *testing.T) {
-	t.Setenv(EnvMaxCost, "")
+	for _, env := range []string{EnvMaxCost, EnvModelsHigh, EnvModelsLow, EnvVariant} {
+		t.Setenv(env, "")
+	}
 	rec := &callRec{res: map[string]any{
 		"status": "pass", "run_id": "r-1", "cost_usd": 1.25, "cycle": 2.0,
 	}}
@@ -81,8 +83,10 @@ func TestProExecutePass(t *testing.T) {
 	if rec.kwargs["dir"] != "/tmp/repo" {
 		t.Errorf("dir = %v", rec.kwargs["dir"])
 	}
-	if _, ok := rec.kwargs["max_cost"]; ok {
-		t.Error("max_cost forwarded without SWE_PRO_MAX_COST set")
+	for _, kw := range []string{"max_cost", "high", "low", "variant"} {
+		if _, ok := rec.kwargs[kw]; ok {
+			t.Errorf("%s forwarded without its env override set", kw)
+		}
 	}
 	m := out.(map[string]any)
 	if m["outcome"] != "completed" {
@@ -135,6 +139,23 @@ func TestProExecuteMaxCostForwarded(t *testing.T) {
 	}
 	if rec.kwargs["max_cost"] != "2.50" {
 		t.Errorf("max_cost = %v, want 2.50", rec.kwargs["max_cost"])
+	}
+}
+
+func TestProExecuteModelOverridesForwarded(t *testing.T) {
+	t.Setenv(EnvModelsHigh, "openrouter/openai/gpt-5.6-sol")
+	t.Setenv(EnvModelsLow, "openrouter/openai/gpt-5.6-sol")
+	t.Setenv(EnvVariant, "low")
+	rec := &callRec{res: map[string]any{"status": "pass"}}
+	deps := &Deps{Call: rec.call, EngineNode: "swe-pro"}
+	if _, err := ProExecute(context.Background(), deps,
+		map[string]any{"issue": sampleIssue(), "repo_path": "/tmp/repo"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec.kwargs["high"] != "openrouter/openai/gpt-5.6-sol" ||
+		rec.kwargs["low"] != "openrouter/openai/gpt-5.6-sol" ||
+		rec.kwargs["variant"] != "low" {
+		t.Errorf("model overrides not forwarded: %v", rec.kwargs)
 	}
 }
 

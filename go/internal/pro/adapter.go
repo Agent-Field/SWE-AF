@@ -75,8 +75,17 @@ func ProExecute(ctx context.Context, deps *Deps, input map[string]any) (any, err
 		"goal": ComposeGoal(in.Issue),
 		"dir":  in.RepoPath,
 	}
-	if mc := os.Getenv(EnvMaxCost); mc != "" {
-		kwargs["max_cost"] = mc
+	// Optional env-driven dispatch overrides: cost ceiling, sub-agent model
+	// pools and reasoning-effort variant. Unset keeps the engine's defaults.
+	for env, kw := range map[string]string{
+		EnvMaxCost:    "max_cost",
+		EnvModelsHigh: "high",
+		EnvModelsLow:  "low",
+		EnvVariant:    "variant",
+	} {
+		if v := os.Getenv(env); v != "" {
+			kwargs[kw] = v
+		}
 	}
 
 	name, _ := in.Issue["name"].(string)

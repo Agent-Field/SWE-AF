@@ -47,6 +47,14 @@ const (
 	// EnvMaxCost, when set, is forwarded as the engine's per-run cost ceiling
 	// (USD) on every pro_execute dispatch.
 	EnvMaxCost = "SWE_PRO_MAX_COST"
+	// EnvModelsHigh / EnvModelsLow, when set, are forwarded as the engine's
+	// model pools (comma-separated ids) on every pro_execute dispatch — the
+	// models its sub-agents run on. Unset keeps the engine's defaults.
+	EnvModelsHigh = "SWE_PRO_MODELS_HIGH"
+	EnvModelsLow  = "SWE_PRO_MODELS_LOW"
+	// EnvVariant, when set, is forwarded as the engine's reasoning-effort
+	// variant (e.g. "low" for fastest turnaround, "high" for depth).
+	EnvVariant = "SWE_PRO_VARIANT"
 
 	DefaultBin    = "/usr/local/bin/swe-pro"
 	DefaultNodeID = "swe-pro"
