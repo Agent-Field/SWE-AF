@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
@@ -364,6 +365,82 @@ func TestExecuteExternalTargetPath(t *testing.T) {
 	}
 	if completed := asMapList(out["completed_issues"]); len(completed) != 1 {
 		t.Errorf("external path must complete the issue, got %d completed", len(completed))
+	}
+}
+
+// The node-level default target applies when the request names none — the
+// engine opt-in seam — and a caller-supplied target always beats it.
+func TestExecuteDefaultExecuteFnTarget(t *testing.T) {
+	const defaultTarget = "swe-planner-go.pro_execute"
+	const explicitTarget = "coder-agent.code_issue"
+
+	run := func(t *testing.T, inputTarget, wantTarget string) {
+		t.Helper()
+		var seenTargets []string
+		app := &mockApp{handler: func(_ context.Context, target string, _ map[string]any) (map[string]any, error) {
+			seenTargets = append(seenTargets, target)
+			return map[string]any{"outcome": "completed", "result_summary": "Done"}, nil
+		}}
+		deps := &Deps{App: app, NodeID: "swe-planner-go", DefaultExecuteFnTarget: defaultTarget}
+
+		plan := minimalPlan()
+		plan["issues"] = []any{map[string]any{
+			"name": "impl", "title": "t", "description": "d",
+			"acceptance_criteria": []any{}, "depends_on": []any{},
+			"files_to_create": []any{}, "files_to_modify": []any{},
+		}}
+		plan["levels"] = []any{[]any{"impl"}}
+
+		input := map[string]any{"plan_result": plan, "repo_path": "/tmp/repo"}
+		if inputTarget != "" {
+			input["execute_fn_target"] = inputTarget
+		}
+		mustExecute(t, deps, input)
+
+		if !contains(seenTargets, wantTarget) {
+			t.Fatalf("want dispatch to %q, targets=%v", wantTarget, seenTargets)
+		}
+		other := defaultTarget
+		if wantTarget == defaultTarget {
+			other = explicitTarget
+		}
+		if contains(seenTargets, other) {
+			t.Errorf("dispatched to %q as well as %q; targets=%v", other, wantTarget, seenTargets)
+		}
+	}
+
+	t.Run("default applies when request names none", func(t *testing.T) {
+		run(t, "", defaultTarget)
+	})
+	t.Run("explicit target beats the default", func(t *testing.T) {
+		run(t, explicitTarget, explicitTarget)
+	})
+}
+
+// Without a node-level default, an empty execute_fn_target keeps the built-in
+// coding loop — the pre-existing behavior every current caller relies on. The
+// external path is observed by its absence: nothing dispatches to pro_execute.
+func TestExecuteNoDefaultKeepsBuiltinLoop(t *testing.T) {
+	var seenTargets []string
+	app := &mockApp{handler: func(_ context.Context, target string, _ map[string]any) (map[string]any, error) {
+		seenTargets = append(seenTargets, target)
+		return map[string]any{}, nil
+	}}
+	deps := &Deps{App: app, NodeID: "swe-planner-go"}
+
+	plan := minimalPlan()
+	plan["issues"] = []any{map[string]any{
+		"name": "impl", "title": "t", "description": "d",
+		"acceptance_criteria": []any{}, "depends_on": []any{},
+		"files_to_create": []any{}, "files_to_modify": []any{},
+	}}
+	plan["levels"] = []any{[]any{"impl"}}
+
+	mustExecute(t, deps, map[string]any{"plan_result": plan, "repo_path": "/tmp/repo"})
+	for _, target := range seenTargets {
+		if strings.HasSuffix(target, ".pro_execute") {
+			t.Fatalf("built-in loop expected, but dispatched to %q; targets=%v", target, seenTargets)
+		}
 	}
 }
 

@@ -134,6 +134,12 @@ func (n *Node) registerOrchestrators() {
 		CIGate:           orch.RunCIGate,
 		ApprovalGate:     orch.PlanApprovalGate,
 	}
+	// Engine opt-in (seamless path): with the flag set, builds and execute
+	// calls that name no execute_fn_target route per-issue coding through
+	// pro_execute on this node. Callers that pass a target keep full control.
+	if pro.Enabled() {
+		deps.DefaultExecuteFnTarget = n.NodeID + ".pro_execute"
+	}
 
 	handlers := orch.Handlers() // {"build": Build}
 	orch.RegisterPlan(handlers) // adds {"plan": Plan}

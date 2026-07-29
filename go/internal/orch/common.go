@@ -63,6 +63,14 @@ type Deps struct {
 	AgentFieldServer string
 	CIGate           CIGateRunner
 	ApprovalGate     ApprovalGate
+
+	// DefaultExecuteFnTarget, when non-empty, is the external coder target
+	// applied by the execute path whenever a request does not name one — the
+	// node-level engine opt-in seam. A caller-supplied execute_fn_target
+	// (request kwarg or config key) always wins; empty leaves the built-in
+	// coding loop as the default, so the wiring is inert unless the node
+	// registration sets it.
+	DefaultExecuteFnTarget string
 }
 
 // ---------------------------------------------------------------------------
