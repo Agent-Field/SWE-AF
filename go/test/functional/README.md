@@ -14,7 +14,7 @@ They are isolated behind the `functional` build tag, so the unit CI job
 | Test | Contract |
 |---|---|
 | `TestHealth` | `GET /health` on both Go nodes returns `200`. |
-| `TestRegistrationParity` | `swe-planner-go` registers **exactly** 30 reasoners and `swe-fast-go` **exactly** 29 — the parity checklist (name-set equality, no missing/extra). Names come from the Python registration surface, not from the Go `register.go`. |
+| `TestRegistrationParity` | `swe-planner-go` registers **exactly** 31 reasoners and `swe-fast-go` **exactly** 30 — the parity checklist (name-set equality, no missing/extra). Names come from the Python registration surface, not from the Go `register.go`. |
 | `TestDeterministicReasonerKeySets` | `run_ci_watcher` (the only no-LLM reasoner) on **both** nodes, called against a nonexistent repo path (deterministic — `gh pr checks` fails immediately), returns a result whose key set is exactly the Python `CIWatchResult.model_dump()` set: `status, pr_number, elapsed_seconds, failed_checks, summary`. |
 | `TestReasonerFailedStatusContract` | The control-plane persistence contract the ReasonerFailed carrier (design `§4.5`) relies on: `status=failed` + `result` + `error` persist **together**, and a resultless `failed` re-post (what the SDK sends) does **not** clobber the carried result. |
 | `TestEmptyBuildGuardViaBuild` | **Always skipped** — triggering the real empty-build guard needs an LLM plan/execute cycle; its CP contract is covered by `TestReasonerFailedStatusContract`, end-to-end by the gated build test below. |
