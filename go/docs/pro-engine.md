@@ -51,6 +51,13 @@ the standard pipeline, so the deliverables are unchanged.
 The engine inherits `OPENROUTER_API_KEY` and the control-plane coordinates
 (`AGENTFIELD_SERVER`, `AGENTFIELD_API_KEY`) from the node's environment.
 
+**OpenRouter-only deployments:** the compose files default
+`SWE_DEFAULT_RUNTIME` to `claude_code`. The engine itself runs on OpenRouter
+regardless, but the node's advisory/verification roles follow
+`SWE_DEFAULT_RUNTIME` — with no Anthropic credential they fail and degrade to
+accept-with-debt fallbacks. If OpenRouter is your only credential, set
+`SWE_DEFAULT_RUNTIME=open_code` so every role uses the same provider.
+
 ## Rollout
 
 The pro engine is an opt-in preview. It is planned to become the default in a

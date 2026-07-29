@@ -69,7 +69,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # OpenCode CLI (open_code runtime), Codex CLI (codex runtime), Claude Code CLI
 # (claude_code runtime).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates openssh-client jq nodejs npm && \
+    git curl ca-certificates openssh-client jq nodejs npm \
+    # Python test tooling: repos under build are frequently Python, and both
+    # the verifier role and evidence-based audits need a runnable pytest —
+    # without it, Python-repo verification is impossible in this image.
+    python3 python3-pytest && \
     # GitHub CLI
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
