@@ -39,6 +39,7 @@ import (
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fast"
 	"github.com/Agent-Field/SWE-AF/go/internal/issue"
+	"github.com/Agent-Field/SWE-AF/go/internal/pro"
 )
 
 const (
@@ -52,6 +53,9 @@ func (n *Node) RegisterPlanner() {
 	n.registerRoles()
 	n.registerOrchestrators()
 	n.registerIssueReasoner()
+	if pro.Enabled() {
+		n.registerProReasoners()
+	}
 }
 
 // RegisterFast registers the swe-fast surface: the same 25 role reasoners + the
@@ -240,6 +244,35 @@ func (n *Node) registerIssueReasoner() {
 }
 
 // ---------------------------------------------------------------------------
+// Pro-engine surface (opt-in, swe-planner only)
+// ---------------------------------------------------------------------------
+
+// registerProReasoners wires the opt-in pro-engine adapter. Called only when
+// pro.Enabled(), so the default surface — and the parity test asserting it —
+// is unchanged unless SWE_PRO_ENGINE is set.
+func (n *Node) registerProReasoners() {
+	deps := &pro.Deps{
+		Call:       newCallFn(n.App),
+		Note:       n.App,
+		EngineNode: pro.NodeID(),
+	}
+	for name, h := range pro.Handlers() {
+		opts := []agent.ReasonerOption{
+			agent.WithReasonerTags(tagPlanner),
+			agent.WithDescription(
+				"Pro-engine executor (opt-in): implements ONE fully-scoped issue via the " +
+					"bundled pro coding engine. Matches the execute_fn_target contract — " +
+					"set config.execute_fn_target to \"<node>.pro_execute\" on build/execute " +
+					"to route per-issue coding through it."),
+		}
+		if s, ok := proSchemas[name]; ok {
+			opts = append(opts, agent.WithInputSchema(s))
+		}
+		regHandler(n, name, deps, h, opts...)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Registration helper
 // ---------------------------------------------------------------------------
 
@@ -322,6 +355,13 @@ var issueSchemas = map[string]json.RawMessage{
 	"implement_issue": schema(`{"type":"object","additionalProperties":true,"required":["issue","repo_path"],"properties":{` +
 		`"issue":{"type":"object"},"repo_path":{"type":"string"},"base_branch":{"type":"string"},` +
 		`"artifacts_dir":{"type":"string"},"additional_context":{"type":"string"},"config":{"type":"object"}}}`),
+}
+
+// proSchemas maps the opt-in pro-engine reasoners to their input schemas.
+var proSchemas = map[string]json.RawMessage{
+	// pro_execute(issue, repo_path) — the execute_fn_target calling convention.
+	"pro_execute": schema(`{"type":"object","additionalProperties":true,"required":["issue","repo_path"],"properties":{` +
+		`"issue":{"type":"object"},"repo_path":{"type":"string"}}}`),
 }
 
 // fastSchemas maps the 4 fast reasoner names to their input schemas.

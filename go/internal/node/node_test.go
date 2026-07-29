@@ -61,6 +61,9 @@ var pythonFastReasoners = []string{"build", "fast_plan_tasks", "fast_execute_tas
 var pythonIssueReasoners = []string{"implement_issue"}
 
 func TestRegisterPlannerExactSurface(t *testing.T) {
+	// Pin the opt-in pro engine off so an inherited SWE_PRO_ENGINE cannot
+	// widen the surface under test (the gated surface has its own test).
+	t.Setenv("SWE_PRO_ENGINE", "")
 	n, err := BuildAgent("swe-planner-go", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
