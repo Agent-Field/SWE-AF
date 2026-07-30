@@ -232,7 +232,7 @@ af install https://github.com/Agent-Field/SWE-AF
 af run swe-planner
 ```
 
-`af install` clones the repo, provisions an isolated Python environment, and registers the `swe-planner` node with your control plane. On first `af run` you're prompted for the required secrets — an LLM provider key (`ANTHROPIC_API_KEY` **or** `OPENROUTER_API_KEY`) plus `GH_TOKEN` — which are stored encrypted and reused across every node, so you enter each only once. Then kick off a build:
+`af install` clones the repo, provisions an isolated Python environment, and registers the `swe-planner` node with your control plane. On first `af run` you're prompted for the one required secret — an LLM provider key (`ANTHROPIC_API_KEY` **or** `OPENROUTER_API_KEY`) — which is stored encrypted and reused across every node, so you enter it only once. (Add `GH_TOKEN` when you want builds to clone private repos and open pull requests.) Then kick off a build:
 
 ```bash
 af call swe-planner.build --in '{"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}'

@@ -148,8 +148,8 @@ set; the load-bearing ones:
 |-----------------------------------------------------------|------------------------------------------------------|
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`           | Claude runtime (`claude_code`)                       |
 | `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`| Open runtimes (`open_code` / `codex`)                |
-| `GH_TOKEN`                                                | GitHub PAT (`repo` scope) for PRs                    |
-| `SWE_DEFAULT_RUNTIME`                                     | `claude_code` \| `open_code` \| `codex` (default `claude_code`) |
+| `GH_TOKEN`                                                | Optional: GitHub PAT (`repo` scope) — needed for private repos and PRs |
+| `SWE_DEFAULT_RUNTIME`                                     | `claude_code` \| `open_code` \| `codex` (unset: auto — `open_code` when only an OpenRouter key is present, else `claude_code`) |
 | `SWE_DEFAULT_MODEL`                                       | Default model when the request config omits `models` |
 | `SWE_CODEX_AUTH_MODE`                                     | `auto` \| `chatgpt` \| `api_key` (codex CLI auth)     |
 | `OPENCODE_ENABLE_EXA` + `EXA_API_KEY`                     | Optional web search for the open runtime             |
