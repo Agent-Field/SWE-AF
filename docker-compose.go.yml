@@ -45,7 +45,10 @@ services:
       - NODE_ID=swe-planner-go
       - PORT=8005
       - AGENT_CALLBACK_URL=http://swe-agent-go:8005
-      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      # Empty = auto: open_code when only an OpenRouter key is present,
+      # else claude_code. A baked claude_code fallback here would break
+      # OpenRouter-only deployments.
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -76,9 +79,9 @@ services:
       - NODE_ID=swe-fast-go
       - PORT=8006
       - AGENT_CALLBACK_URL=http://swe-fast-go:8006
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
-      - GH_TOKEN=${GH_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - GH_TOKEN=${GH_TOKEN:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -87,7 +90,8 @@ services:
       - AI_BASE_URL=${AI_BASE_URL:-}
       - AI_MODEL=${AI_MODEL:-}
       - OPENCODE_MODEL=${OPENCODE_MODEL:-}
-      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      # Empty = auto (see swe-agent-go note).
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       # build-db lives in the Python stack; reachable over the shared network.
