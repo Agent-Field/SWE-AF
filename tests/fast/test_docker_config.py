@@ -98,7 +98,10 @@ def test_codex_auth_mode_env_in_swe_agent_and_swe_fast():
 
 
 def test_default_runtime_env_in_swe_agent_and_swe_fast():
-    expected = "SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}"
+    # Empty = auto-select (open_code when only an OpenRouter key is present,
+    # else claude_code). A baked claude_code fallback here would break
+    # OpenRouter-only deployments.
+    expected = "SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}"
     assert expected in _service_environment("swe-agent")
     assert expected in _service_environment("swe-fast")
 
