@@ -654,6 +654,11 @@ def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode", "codex"]
 # Default model for the auto-selected OpenRouter path (see _openrouter_only_env).
 _OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash"
 
+# Default model for the auto-selected Infron path (see _infron_only_env).
+# Infron is OpenAI-compatible and serves the standard <provider>/<model> ids,
+# so this is the existing gateway default with the prefix swapped.
+_INFRON_AUTO_DEFAULT_MODEL = "infron/deepseek/deepseek-v4-flash"
+
 
 def _openrouter_only_env() -> bool:
     """Whether the deployer implicitly chose the OpenRouter runtime.
@@ -672,6 +677,25 @@ def _openrouter_only_env() -> bool:
     return bool(os.getenv("OPENROUTER_API_KEY", "").strip())
 
 
+def _infron_only_env() -> bool:
+    """Whether the deployer implicitly chose the Infron runtime.
+
+    Mirrors ``_openrouter_only_env`` for the ``INFRON_API_KEY`` gateway: no
+    explicit ``SWE_DEFAULT_RUNTIME``, no Anthropic key, no other gateway key,
+    but an ``INFRON_API_KEY``. A gateway key that was already honored before
+    Infron existed deliberately keeps precedence, so adding an Infron key never
+    silently reroutes an existing deployment — to move traffic over, drop the
+    other key or set ``SWE_DEFAULT_MODEL=infron/...`` explicitly.
+    """
+    if os.getenv("SWE_DEFAULT_RUNTIME", "").strip():
+        return False
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        return False
+    if os.getenv("OPENROUTER_API_KEY", "").strip():
+        return False
+    return bool(os.getenv("INFRON_API_KEY", "").strip())
+
+
 def _default_runtime() -> Literal["claude_code", "open_code", "codex"]:
     """Default runtime, honoring the ``SWE_DEFAULT_RUNTIME`` env var.
 
@@ -683,7 +707,9 @@ def _default_runtime() -> Literal["claude_code", "open_code", "codex"]:
     """
     value = os.getenv("SWE_DEFAULT_RUNTIME", "").strip()
     if not value:
-        return "open_code" if _openrouter_only_env() else "claude_code"
+        if _openrouter_only_env() or _infron_only_env():
+            return "open_code"
+        return "claude_code"
     if value in RUNTIME_VALUES:
         return value  # type: ignore[return-value]
     logging.getLogger(__name__).warning(
@@ -763,6 +789,8 @@ def _default_planning_model() -> str:
         return env_model
     if _openrouter_only_env():
         return _OPENROUTER_AUTO_DEFAULT_MODEL
+    if _infron_only_env():
+        return _INFRON_AUTO_DEFAULT_MODEL
     return "sonnet"
 
 
@@ -864,6 +892,9 @@ def resolve_runtime_models(
         # default to DeepSeek. Explicit open_code deployers keep their own base
         # default; SWE_DEFAULT_MODEL / models overrides still win over this.
         base = {field: _OPENROUTER_AUTO_DEFAULT_MODEL for field in base}
+    elif runtime == "open_code" and _infron_only_env():
+        # Same rule for the Infron gateway (see _infron_only_env).
+        base = {field: _INFRON_AUTO_DEFAULT_MODEL for field in base}
     resolved: dict[str, str] = {field: base[field] for field in field_names}
 
     env_default = _default_model_from_env()

@@ -9,18 +9,27 @@ Ref: https://github.com/Agent-Field/SWE-AF/issues/46
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 import pytest
 
-DOCKERFILE = Path(__file__).resolve().parent.parent / "Dockerfile"
-REQUIREMENTS_DOCKER = Path(__file__).resolve().parent.parent / "requirements-docker.txt"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DOCKERFILE = REPO_ROOT / "Dockerfile"
+GO_DOCKERFILE = REPO_ROOT / "go" / "Dockerfile"
+OPENCODE_CONFIG = REPO_ROOT / "docker" / "opencode.json"
+REQUIREMENTS_DOCKER = REPO_ROOT / "requirements-docker.txt"
 
 
 @pytest.fixture(scope="module")
 def dockerfile_content() -> str:
     return DOCKERFILE.read_text()
+
+
+@pytest.fixture(scope="module")
+def opencode_config() -> dict:
+    return json.loads(OPENCODE_CONFIG.read_text())
 
 
 class TestWorkspacesDirectory:
@@ -65,7 +74,52 @@ def test_dockerfile_installs_codex_cli(dockerfile_content: str) -> None:
 
 def test_dockerfile_preserves_opencode_install(dockerfile_content: str) -> None:
     assert "https://opencode.ai/install" in dockerfile_content
-    assert "OPENROUTER_API_KEY" in dockerfile_content
+    # The provider block moved out of the Dockerfile into docker/opencode.json
+    # (shared by both images); the Dockerfile now only has to copy it in.
+    assert "docker/opencode.json" in dockerfile_content
+
+
+def test_both_dockerfiles_share_one_opencode_config() -> None:
+    """Python and Go images must copy the same config, or they drift apart."""
+    for path in (DOCKERFILE, GO_DOCKERFILE):
+        assert "COPY docker/opencode.json /root/.config/opencode/opencode.json" in (
+            path.read_text()
+        ), f"{path} must copy the shared opencode config"
+
+
+class TestOpenCodeProviders:
+    """docker/opencode.json wires the harness providers for both images."""
+
+    def test_model_follows_harness_model_env(self, opencode_config: dict) -> None:
+        """Both model and small_model must honor HARNESS_MODEL.
+
+        small_model is the one that falls through to config; if it does not
+        interpolate the same env var, OpenCode silently auto-selects a model
+        from whatever provider keys it finds.
+        """
+        assert opencode_config["model"] == "{env:HARNESS_MODEL}"
+        assert opencode_config["small_model"] == "{env:HARNESS_MODEL}"
+
+    def test_existing_provider_preserved(self, opencode_config: dict) -> None:
+        existing = opencode_config["provider"]["openrouter"]
+        assert existing["options"]["apiKey"] == "{env:OPENROUTER_API_KEY}"
+
+    def test_infron_provider_is_openai_compatible(self, opencode_config: dict) -> None:
+        infron = opencode_config["provider"]["infron"]
+        assert infron["npm"] == "@ai-sdk/openai-compatible"
+        assert infron["options"]["baseURL"] == "https://llm.onerouter.pro/v1"
+        assert infron["options"]["apiKey"] == "{env:INFRON_API_KEY}"
+
+    def test_infron_declares_models(self, opencode_config: dict) -> None:
+        """openai-compatible providers are not in models.dev, so models must
+        be listed explicitly or OpenCode cannot resolve `-m infron/<id>`."""
+        models = opencode_config["provider"]["infron"]["models"]
+        assert models, "infron provider must declare at least one model"
+        # The ids are the vendors' own, unchanged across gateways, which is
+        # what makes this a base-URL change rather than a model-mapping
+        # exercise.
+        assert "moonshotai/kimi-k2.6" in models
+        assert "deepseek/deepseek-v4-flash" in models
 
 
 def test_docker_requirements_pin_cryptography_below_sigill_version() -> None:

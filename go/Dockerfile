@@ -124,10 +124,14 @@ ENV PATH="/root/.opencode/bin:${PATH}"
 # so it must honor the same env var the rest of the stack uses. Default the
 # value inside the image so a fresh container has *some* value to interpolate;
 # Railway / docker-compose overrides win because their env injects afterward.
+#
+# The provider block itself lives in docker/opencode.json (shared with the
+# Python Dockerfile) so the two images cannot drift apart. It declares the
+# existing provider plus infron; a provider with no key set is never selected,
+# so shipping both costs nothing at runtime.
 ENV HARNESS_MODEL=openrouter/moonshotai/kimi-k2.6
-RUN mkdir -p /root/.config/opencode && \
-    echo '{"$schema":"https://opencode.ai/config.json","model":"{env:HARNESS_MODEL}","small_model":"{env:HARNESS_MODEL}","provider":{"openrouter":{"options":{"apiKey":"{env:OPENROUTER_API_KEY}"}}}}' \
-    > /root/.config/opencode/opencode.json
+RUN mkdir -p /root/.config/opencode
+COPY docker/opencode.json /root/.config/opencode/opencode.json
 
 # Git identity — env vars take highest precedence and are inherited by all
 # subprocesses (including the CLIs the harness spawns).

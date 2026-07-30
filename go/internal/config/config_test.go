@@ -10,6 +10,7 @@ import (
 var providerEnvKeys = []string{
 	"ANTHROPIC_API_KEY",
 	"OPENROUTER_API_KEY",
+	"INFRON_API_KEY",
 	"SWE_DEFAULT_RUNTIME",
 	"SWE_DEFAULT_MODEL",
 	"AI_MODEL",
@@ -43,6 +44,8 @@ func TestDefaultRuntime(t *testing.T) {
 		{"openrouter only -> open_code", map[string]string{"OPENROUTER_API_KEY": "sk-or"}, "open_code"},
 		{"both keys -> claude_code", map[string]string{"ANTHROPIC_API_KEY": "sk-ant", "OPENROUTER_API_KEY": "sk-or"}, "claude_code"},
 		{"explicit runtime beats autoselect", map[string]string{"OPENROUTER_API_KEY": "sk-or", "SWE_DEFAULT_RUNTIME": "claude_code"}, "claude_code"},
+		{"infron only -> open_code", map[string]string{"INFRON_API_KEY": "sk-inf"}, "open_code"},
+		{"infron + anthropic -> claude_code", map[string]string{"ANTHROPIC_API_KEY": "sk-ant", "INFRON_API_KEY": "sk-inf"}, "claude_code"},
 		{"env open_code", map[string]string{"SWE_DEFAULT_RUNTIME": "open_code"}, "open_code"},
 		{"env codex", map[string]string{"SWE_DEFAULT_RUNTIME": "codex"}, "codex"},
 		{"invalid env -> claude_code", map[string]string{"SWE_DEFAULT_RUNTIME": "bogus_runtime"}, "claude_code"},
@@ -74,6 +77,8 @@ func TestDefaultPlanningModel(t *testing.T) {
 		{"claude env -> sonnet", map[string]string{"ANTHROPIC_API_KEY": "sk-ant"}, "sonnet"},
 		{"no provider env -> sonnet", nil, "sonnet"},
 		{"openrouter only -> deepseek", map[string]string{"OPENROUTER_API_KEY": "sk-or"}, openRouterAutoDefaultModel},
+		{"infron only -> infron deepseek", map[string]string{"INFRON_API_KEY": "sk-inf"}, infronAutoDefaultModel},
+		{"existing gateway key wins over infron", map[string]string{"OPENROUTER_API_KEY": "sk-or", "INFRON_API_KEY": "sk-inf"}, openRouterAutoDefaultModel},
 		{"swe_default_model wins", map[string]string{"OPENROUTER_API_KEY": "sk-or", "SWE_DEFAULT_MODEL": "openrouter/qwen/qwen3-max"}, "openrouter/qwen/qwen3-max"},
 		{"ai_model cascade", map[string]string{"ANTHROPIC_API_KEY": "sk-ant", "AI_MODEL": "opus"}, "opus"},
 	}

@@ -30,6 +30,10 @@ user_environment:
           description: OpenRouter API key (DeepSeek/Qwen/Llama/… — 200+ models)
           type: secret
           scope: global
+        - name: INFRON_API_KEY
+          description: Infron API key (OpenAI-compatible gateway, standard <provider>/<model> ids)
+          type: secret
+          scope: global
   required:
     # The core loop clones a repo, pushes a branch, and opens a pull request —
     # all of which need GitHub write access.
