@@ -167,6 +167,43 @@ func TestRunCoderSuccessKeySetAndIterationID(t *testing.T) {
 	}
 }
 
+func TestRunCoderDirectCallRuntimeDefaults(t *testing.T) {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "SWE_DEFAULT_RUNTIME", "SWE_MODEL_MED", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	mh := &mockHarness{fn: func(dest any) (*harness.Result, error) {
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	if _, err := RunCoder(context.Background(), newDeps(mh, nil, &noteRecorder{}), map[string]any{
+		"issue": map[string]any{"name": "direct"}, "worktree_path": "/wt",
+	}); err != nil {
+		t.Fatalf("RunCoder: %v", err)
+	}
+	if mh.gotOpts.Provider != "opencode" || mh.gotOpts.Model != "openrouter/deepseek/deepseek-v4-flash" {
+		t.Fatalf("defaults = provider %q, model %q", mh.gotOpts.Provider, mh.gotOpts.Model)
+	}
+}
+
+func TestRunCoderExplicitRuntimeValuesUntouched(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("SWE_DEFAULT_RUNTIME", "")
+	mh := &mockHarness{fn: func(dest any) (*harness.Result, error) {
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	if _, err := RunCoder(context.Background(), newDeps(mh, nil, &noteRecorder{}), map[string]any{
+		"issue": map[string]any{"name": "explicit"}, "worktree_path": "/wt",
+		"ai_provider": "claude", "model": "sonnet",
+	}); err != nil {
+		t.Fatalf("RunCoder: %v", err)
+	}
+	if mh.gotOpts.Provider != "claude-code" || mh.gotOpts.Model != "sonnet" {
+		t.Fatalf("explicit = provider %q, model %q", mh.gotOpts.Provider, mh.gotOpts.Model)
+	}
+}
+
 // Contract: coder applies the web-search guardrail to its system prompt (via
 // tools.MaybeApplyCoderGuardrail) and runs with cwd = worktree.
 func TestRunCoderAppliesGuardrailAndCwd(t *testing.T) {
@@ -576,13 +613,16 @@ func TestHandlersRegistrationNames(t *testing.T) {
 	}
 }
 
-// Contract: input binding applies the Python default model per role.
+// Contract: input binding applies the configured call-time defaults per role.
 func TestInputDefaults(t *testing.T) {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "SWE_DEFAULT_RUNTIME", "SWE_MODEL_LOW", "SWE_MODEL_MED", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"} {
+		t.Setenv(key, "")
+	}
 	ci, err := bindInput[coderInput](map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ci.Model != "sonnet" || ci.AIProvider != "claude" || ci.Iteration != 1 {
+	if ci.Model != "sonnet" || ci.AIProvider != "claude_code" || ci.Iteration != 1 {
 		t.Fatalf("coder defaults wrong: %+v", ci)
 	}
 	si, err := bindInput[qaSynthInput](map[string]any{})

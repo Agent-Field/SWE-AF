@@ -274,6 +274,21 @@ func DefaultPlanningModel() string {
 	return "sonnet"
 }
 
+// DefaultRoleModel resolves the configured call-time default for one role.
+// It uses the same runtime base, environment cascade, and tier precedence as
+// ResolveRuntimeModels, without introducing a separate direct-call policy.
+func DefaultRoleModel(role string) (string, error) {
+	field, ok := RoleToModelField[role]
+	if !ok {
+		return "", fmt.Errorf("unknown role %s", pyRepr(role))
+	}
+	resolved, err := ResolveRuntimeModels(DefaultRuntime(), nil, []string{field})
+	if err != nil {
+		return "", err
+	}
+	return resolved[field], nil
+}
+
 // ---------------------------------------------------------------------------
 // Flat-model validation + resolution
 // ---------------------------------------------------------------------------

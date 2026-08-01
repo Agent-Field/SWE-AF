@@ -61,7 +61,11 @@ func RunGitInit(ctx context.Context, deps *Deps, input map[string]any) (any, err
 	if err != nil {
 		return nil, err
 	}
-	opts := roleOptions(provider, orDefault(in.Model, "sonnet"), systemPrompt, in.RepoPath,
+	model, err := resolveModel(in.Model, "git")
+	if err != nil {
+		return nil, err
+	}
+	opts := roleOptions(provider, model, systemPrompt, in.RepoPath,
 		[]string{"Bash", "Write"}, in.PermissionMode)
 
 	val, ok, err := runRole[schemas.GitInitResult](ctx, deps, taskPrompt, opts, "git_init", "Git init agent failed")
@@ -139,7 +143,11 @@ func RunWorkspaceSetup(ctx context.Context, deps *Deps, input map[string]any) (a
 	if err != nil {
 		return nil, err
 	}
-	opts := roleOptions(provider, orDefault(in.Model, "sonnet"), gitprompts.SetupSystemPrompt, in.RepoPath,
+	model, err := resolveModel(in.Model, "git")
+	if err != nil {
+		return nil, err
+	}
+	opts := roleOptions(provider, model, gitprompts.SetupSystemPrompt, in.RepoPath,
 		[]string{"Bash", "Write"}, in.PermissionMode)
 
 	val, ok, err := runRole[workspaceSetupResult](ctx, deps, taskPrompt, opts, "workspace_setup", "Workspace setup agent failed")
@@ -200,7 +208,11 @@ func RunWorkspaceCleanup(ctx context.Context, deps *Deps, input map[string]any) 
 	if err != nil {
 		return nil, err
 	}
-	opts := roleOptions(provider, orDefault(in.Model, "sonnet"), gitprompts.CleanupSystemPrompt, in.RepoPath,
+	model, err := resolveModel(in.Model, "git")
+	if err != nil {
+		return nil, err
+	}
+	opts := roleOptions(provider, model, gitprompts.CleanupSystemPrompt, in.RepoPath,
 		[]string{"Bash", "Write"}, in.PermissionMode)
 
 	val, ok, err := runRole[workspaceCleanupResult](ctx, deps, taskPrompt, opts, "workspace_cleanup", "Workspace cleanup agent failed")
