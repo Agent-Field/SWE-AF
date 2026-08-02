@@ -113,7 +113,7 @@ class FastBuildConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code", "codex"] = Field(default_factory=_default_fast_runtime)
+    runtime: Literal["claude_code", "open_code", "codex", "grok"] = Field(default_factory=_default_fast_runtime)
     models: dict[str, str] | None = None
     max_tasks: int = 10
     task_timeout_seconds: int = 300

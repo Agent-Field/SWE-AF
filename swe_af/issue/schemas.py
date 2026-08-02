@@ -106,7 +106,7 @@ class IssueBuildConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code", "codex"] = Field(
+    runtime: Literal["claude_code", "open_code", "codex", "grok"] = Field(
         default_factory=_default_runtime
     )
     models: dict[str, str] | None = None

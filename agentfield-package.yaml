@@ -40,6 +40,9 @@ user_environment:
   optional:
     - name: SWE_DEFAULT_MODEL
       description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash)
+    - name: SWE_DEFAULT_RUNTIME
+      description: Coding-agent runtime (claude_code|open_code|codex|grok)
+      default: claude_code
     - name: AGENTFIELD_SERVER
       description: Control-plane URL
       default: http://localhost:8080

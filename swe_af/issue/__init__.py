@@ -19,8 +19,10 @@ from __future__ import annotations
 
 from agentfield import AgentRouter
 from swe_af.runtime.codex_harness_patch import apply_codex_harness_patch
+from swe_af.runtime.grok_harness_patch import apply_grok_harness_patch
 
 apply_codex_harness_patch()
+apply_grok_harness_patch()
 
 issue_router = AgentRouter(tags=["swe-issue"])
 
