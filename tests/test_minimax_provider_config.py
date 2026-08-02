@@ -77,9 +77,9 @@ def test_minimax_model_metadata_matches_target_config(
             model_id: models[model_id]["limit"] for model_id in MODEL_IDS
         } == MODEL_LIMITS
         assert models["MiniMax-M3"]["cost"] == {
-            "input": 0.3,
-            "output": 1.2,
-            "cache_read": 0.06,
+            "input": 0.6,
+            "output": 2.4,
+            "cache_read": 0.12,
         }
         assert models["MiniMax-M3"]["modalities"]["input"] == [
             "text",
@@ -111,10 +111,7 @@ def test_minimax_anthropic_endpoints_and_model_ids_are_documented() -> None:
         "204,800",
         "adaptive or disabled",
         "always on",
-        "$0.30 / $1.20 / $0.06 / not charged",
         "$0.60 / $2.40 / $0.12 / not charged",
-        "$0.45 / $1.80 / $0.09 / not charged",
-        "$0.90 / $3.60 / $0.18 / not charged",
         "$0.30 / $1.20 / $0.06 / $0.375",
     ):
         assert value in docs

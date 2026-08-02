@@ -382,13 +382,10 @@ The Docker images include direct MiniMax provider entries for both supported reg
 | Global | `minimax-global-openai/MiniMax-M3`, `minimax-global-openai/MiniMax-M2.7` | `minimax-anthropic/MiniMax-M3`, `minimax-anthropic/MiniMax-M2.7` | `https://api.minimax.io/anthropic` |
 | China | `minimax-cn-openai/MiniMax-M3`, `minimax-cn-openai/MiniMax-M2.7` | `minimax-anthropic/MiniMax-M3`, `minimax-anthropic/MiniMax-M2.7` | `https://api.minimaxi.com/anthropic` |
 
-| Model | Context window | Input modalities | Thinking | Service tier | Input range | Input / output / cache read / cache write per million tokens |
-|---|---:|---|---|---|---|---|
-| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | standard | up to 512,000 | $0.30 / $1.20 / $0.06 / not charged |
-| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | standard | above 512,000 | $0.60 / $2.40 / $0.12 / not charged |
-| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | priority | up to 512,000 | $0.45 / $1.80 / $0.09 / not charged |
-| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | priority | above 512,000 | $0.90 / $3.60 / $0.18 / not charged |
-| `MiniMax-M2.7` | 204,800 | text | always on | standard | all inputs | $0.30 / $1.20 / $0.06 / $0.375 |
+| Model | Context window | Input modalities | Thinking | Input / output / cache read / cache write per million tokens |
+|---|---:|---|---|---|
+| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | $0.60 / $2.40 / $0.12 / not charged |
+| `MiniMax-M2.7` | 204,800 | text | always on | $0.30 / $1.20 / $0.06 / $0.375 |
 
 For the direct OpenAI-compatible path, set `MINIMAX_API_KEY`, use `runtime: "open_code"`, and select one of the `minimax-global-openai/*` or `minimax-cn-openai/*` model IDs above. The configured OpenAI-compatible base URLs are `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`.
 
