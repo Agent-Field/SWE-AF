@@ -749,13 +749,13 @@ class TestPlannerAiParamThreading:
         )
 
     def test_open_code_runtime_models_flow_correctly(self) -> None:
-        """For open_code runtime, all four roles must resolve to the qwen model."""
+        """For open_code runtime, all four roles must resolve to the shared default."""
         from swe_af.fast.schemas import fast_resolve_models, FastBuildConfig  # noqa: PLC0415
 
         config = FastBuildConfig(runtime="open_code")
         resolved = fast_resolve_models(config)
 
-        expected = "qwen/qwen-2.5-coder-32b-instruct"
+        expected = "openrouter/deepseek/deepseek-v4-flash"
         for role in ("pm_model", "coder_model", "verifier_model", "git_model"):
             assert resolved[role] == expected, (
                 f"open_code runtime: {role} should be {expected!r}, got {resolved[role]!r}"

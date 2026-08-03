@@ -13,7 +13,11 @@ from swe_af.runtime.providers import RUNTIME_VALUES
 # ---------------------------------------------------------------------------
 
 _CLAUDE_CODE_DEFAULT = "haiku"
-_OPEN_CODE_DEFAULT = "qwen/qwen-2.5-coder-32b-instruct"
+# Fast mode shares the open_code default with the main path so an
+# OpenRouter-only install behaves the same on both nodes. Keep in sync with
+# ``swe_af.execution.schemas._OPENROUTER_AUTO_DEFAULT_MODEL`` (not imported at
+# module scope to avoid a circular import).
+_OPEN_CODE_DEFAULT = "openrouter/deepseek/deepseek-v4-flash"
 
 _RUNTIME_DEFAULTS: dict[str, str] = {
     "claude_code": _CLAUDE_CODE_DEFAULT,
@@ -104,7 +108,16 @@ class FastVerificationResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _default_fast_runtime() -> str:
-    value = os.getenv("SWE_DEFAULT_RUNTIME", "claude_code")
+    """Default runtime for fast builds, honoring ``SWE_DEFAULT_RUNTIME``.
+
+    When unset (or blank), auto-selects ``open_code`` if only an OpenRouter key
+    is present — the same detection the main path uses — else ``claude_code``.
+    """
+    value = os.getenv("SWE_DEFAULT_RUNTIME", "").strip()
+    if not value:
+        from swe_af.execution.schemas import _openrouter_only_env  # noqa: PLC0415
+
+        return "open_code" if _openrouter_only_env() else "claude_code"
     return value if value in RUNTIME_VALUES else "claude_code"
 
 
@@ -145,9 +158,10 @@ def fast_resolve_models(config: FastBuildConfig) -> dict[str, str]:
     """Resolve the four role model strings for a fast build run.
 
     Resolution order (last wins):
-      1. Runtime default (haiku or qwen depending on runtime)
-      2. ``models["default"]`` — overrides all roles
-      3. ``models["<role>"]`` — overrides a specific role (pm, coder, verifier, git)
+      1. Runtime default (haiku or the shared open_code default, per runtime)
+      2. Env cascade: ``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` → ``HARNESS_MODEL``
+      3. ``models["default"]`` — overrides all roles
+      4. ``models["<role>"]`` — overrides a specific role (pm, coder, verifier, git)
 
     Args:
         config: A :class:`FastBuildConfig` instance.
@@ -163,6 +177,15 @@ def fast_resolve_models(config: FastBuildConfig) -> dict[str, str]:
     runtime_default = _runtime_default(config.runtime)
 
     resolved: dict[str, str] = {role: runtime_default for role in _FAST_ROLES}
+
+    # Deployer env cascade (SWE_DEFAULT_MODEL → AI_MODEL → HARNESS_MODEL), same
+    # as the main path — lets the variable that selects a model for the main
+    # node select it for fast builds too. Caller-supplied models still win.
+    from swe_af.execution.schemas import _default_model_from_env  # noqa: PLC0415
+
+    env_model = _default_model_from_env()
+    if env_model:
+        resolved = {role: env_model for role in _FAST_ROLES}
 
     if config.models:
         # Validate all keys first

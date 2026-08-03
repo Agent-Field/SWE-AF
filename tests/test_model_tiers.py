@@ -26,7 +26,7 @@ from swe_af.execution.schemas import (
 _HIGH_FIELDS = {"pm_model", "architect_model", "tech_lead_model", "replan_model"}
 _LOW_FIELDS = {"qa_synthesizer_model", "git_model"}
 
-_OPEN_CODE_BASE = "openrouter/minimax/minimax-m2.5"
+_OPEN_CODE_BASE = "openrouter/deepseek/deepseek-v4-flash"
 
 # Env vars that steer provider/runtime/model selection. Cleared before every
 # test so assertions never depend on the developer's ambient shell.

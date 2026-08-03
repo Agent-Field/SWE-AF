@@ -83,11 +83,11 @@ class TestResolveRuntimeModels(unittest.TestCase):
         self.assertEqual(resolved["qa_synthesizer_model"], "haiku")
 
     def test_open_code_defaults(self) -> None:
-        # No provider env set → not the auto-OpenRouter path → minimax base default.
+        # No provider env set → the shared open_code base default applies.
         with _provider_env():
             resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(resolved[field], "openrouter/minimax/minimax-m2.5")
+            self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash")
 
     def test_models_default_applies_to_all(self) -> None:
         resolved = resolve_runtime_models(
@@ -125,7 +125,7 @@ class TestBuildConfig(unittest.TestCase):
             cfg = BuildConfig(runtime="open_code")
             self.assertEqual(cfg.ai_provider, "opencode")
             resolved = cfg.resolved_models()
-        self.assertEqual(resolved["coder_model"], "openrouter/minimax/minimax-m2.5")
+        self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash")
 
 
 class TestOpenRouterAutoSelection(unittest.TestCase):
@@ -160,13 +160,14 @@ class TestOpenRouterAutoSelection(unittest.TestCase):
         for field in ALL_MODEL_FIELDS:
             self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash")
 
-    def test_explicit_open_code_keeps_minimax(self) -> None:
-        # A deployer who explicitly sets open_code keeps the runtime's own
-        # default even with an OpenRouter key present.
+    def test_explicit_open_code_same_default(self) -> None:
+        # A deployer who explicitly sets open_code resolves to the SAME model
+        # as the auto-selected OpenRouter path — opting in explicitly must
+        # never silently swap the model.
         with _provider_env(OPENROUTER_API_KEY="sk-or", SWE_DEFAULT_RUNTIME="open_code"):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(resolved[field], "openrouter/minimax/minimax-m2.5")
+            self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash")
 
     def test_swe_default_model_overrides_auto_deepseek(self) -> None:
         with _provider_env(OPENROUTER_API_KEY="sk-or", SWE_DEFAULT_MODEL="openrouter/qwen/qwen-3"):
@@ -188,7 +189,7 @@ class TestOpenRouterAutoSelection(unittest.TestCase):
         self.assertEqual(d["models"]["coder"], "deepseek/deepseek-chat")
         exec_cfg = ExecutionConfig(**d)
         self.assertEqual(exec_cfg.coder_model, "deepseek/deepseek-chat")
-        self.assertEqual(exec_cfg.qa_model, "openrouter/minimax/minimax-m2.5")
+        self.assertEqual(exec_cfg.qa_model, "openrouter/deepseek/deepseek-v4-flash")
 
     def test_legacy_top_level_keys_rejected(self) -> None:
         with self.assertRaises(ValueError) as ctx:
@@ -369,7 +370,7 @@ class TestDefaultModelFromEnv(unittest.TestCase):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
             for field in ALL_MODEL_FIELDS:
                 self.assertEqual(
-                    resolved[field], "openrouter/minimax/minimax-m2.5"
+                    resolved[field], "openrouter/deepseek/deepseek-v4-flash"
                 )
 
     def test_unset_env_uses_runtime_base(self) -> None:
@@ -379,7 +380,7 @@ class TestDefaultModelFromEnv(unittest.TestCase):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
             for field in ALL_MODEL_FIELDS:
                 self.assertEqual(
-                    resolved[field], "openrouter/minimax/minimax-m2.5"
+                    resolved[field], "openrouter/deepseek/deepseek-v4-flash"
                 )
 
     def test_ai_model_env_used_when_swe_default_unset(self) -> None:
@@ -457,8 +458,8 @@ class TestExecutionConfig(unittest.TestCase):
     def test_open_code_resolution(self) -> None:
         cfg = ExecutionConfig(runtime="open_code")
         self.assertEqual(cfg.ai_provider, "opencode")
-        self.assertEqual(cfg.coder_model, "openrouter/minimax/minimax-m2.5")
-        self.assertEqual(cfg.qa_synthesizer_model, "openrouter/minimax/minimax-m2.5")
+        self.assertEqual(cfg.coder_model, "openrouter/deepseek/deepseek-v4-flash")
+        self.assertEqual(cfg.qa_synthesizer_model, "openrouter/deepseek/deepseek-v4-flash")
 
     def test_models_override(self) -> None:
         cfg = ExecutionConfig(runtime="claude_code", models={"default": "sonnet", "qa": "opus"})
@@ -494,7 +495,7 @@ class TestExecutionConfig(unittest.TestCase):
         self.assertEqual(cfg.ci_fixer_model, "sonnet")
 
         cfg = ExecutionConfig(runtime="open_code")
-        self.assertEqual(cfg.ci_fixer_model, "openrouter/minimax/minimax-m2.5")
+        self.assertEqual(cfg.ci_fixer_model, "openrouter/deepseek/deepseek-v4-flash")
 
         cfg = ExecutionConfig(
             runtime="claude_code", models={"ci_fixer": "opus"}

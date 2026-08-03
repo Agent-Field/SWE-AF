@@ -606,13 +606,18 @@ _LEGACY_TOP_LEVEL_EQUIVALENTS: dict[str, str] = {
 _CODEX_API_KEY_MODEL = "gpt-5.3-codex"   # OpenAI API-key auth (api_key mode)
 _CODEX_CHATGPT_MODEL = "gpt-5.5"         # ChatGPT-account auth (-codex blocked)
 
+# Default model for the open_code runtime — both the auto-selected OpenRouter
+# path (see _openrouter_only_env) and an explicit SWE_DEFAULT_RUNTIME=open_code
+# resolve here, so opting in explicitly never silently swaps the model.
+_OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash"
+
 _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "claude_code": {
         **{field: "sonnet" for field in ALL_MODEL_FIELDS},
         "qa_synthesizer_model": "haiku",
     },
     "open_code": {
-        **{field: "openrouter/minimax/minimax-m2.5" for field in ALL_MODEL_FIELDS},
+        **{field: _OPENROUTER_AUTO_DEFAULT_MODEL for field in ALL_MODEL_FIELDS},
     },
     "codex": {
         **{field: _CODEX_API_KEY_MODEL for field in ALL_MODEL_FIELDS},
@@ -649,10 +654,6 @@ def _codex_default_model() -> str:
 
 def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode", "codex"]:
     return runtime_to_harness_provider(runtime)  # type: ignore[return-value]
-
-
-# Default model for the auto-selected OpenRouter path (see _openrouter_only_env).
-_OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash"
 
 
 def _openrouter_only_env() -> bool:
