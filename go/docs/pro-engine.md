@@ -34,6 +34,13 @@ to switch back. Two things change, both additive:
 The engine never pushes or opens PRs — branch, push and PR creation stay with
 the standard pipeline, so the deliverables are unchanged.
 
+If the flag is set but no engine binary is found, the node logs a warning and
+comes up on the classic coding loop: `pro_execute` is not registered and
+nothing is routed to an engine node that never joined. The binary is searched
+for at `SWE_PRO_BIN` when set (authoritative — no fallback), else
+`/usr/local/bin/swe-pro` (the Docker image layout), else `swe-pro` next to the
+running executable (the layout an `af install` checkout produces).
+
 ## Environment reference
 
 | Variable | Default | Purpose |
@@ -42,7 +49,7 @@ the standard pipeline, so the deliverables are unchanged.
 | `SWE_PRO_BIN` | `/usr/local/bin/swe-pro` | Engine binary path |
 | `SWE_PRO_NODE_ID` | `swe-pro` | Engine's control-plane node id |
 | `SWE_PRO_PORT` | `8801` | Engine's listen port |
-| `SWE_PRO_PUBLIC_URL` | derived | Callback base URL (containers) |
+| `SWE_PRO_PUBLIC_URL` | `http://localhost:8801` (engine default) | Callback base URL — **must** be set to a container-reachable address in Docker, otherwise the control plane cannot reach the engine |
 | `SWE_PRO_MAX_COST` | unset | Per-dispatch cost ceiling (USD) for `pro_execute` |
 | `SWE_PRO_MODELS_HIGH` | engine default | High-tier model pool (comma-separated) |
 | `SWE_PRO_MODELS_LOW` | engine default | Low-tier model pool |
@@ -51,12 +58,12 @@ the standard pipeline, so the deliverables are unchanged.
 The engine inherits `OPENROUTER_API_KEY` and the control-plane coordinates
 (`AGENTFIELD_SERVER`, `AGENTFIELD_API_KEY`) from the node's environment.
 
-**OpenRouter-only deployments:** the compose files default
-`SWE_DEFAULT_RUNTIME` to `claude_code`. The engine itself runs on OpenRouter
-regardless, but the node's advisory/verification roles follow
-`SWE_DEFAULT_RUNTIME` — with no Anthropic credential they fail and degrade to
-accept-with-debt fallbacks. If OpenRouter is your only credential, set
-`SWE_DEFAULT_RUNTIME=open_code` so every role uses the same provider.
+**OpenRouter-only deployments:** nothing to configure. The compose files leave
+`SWE_DEFAULT_RUNTIME` unset, so with an OpenRouter key as the only provider
+credential the node auto-selects the `open_code` runtime and defaults every
+role — including the advisory and verification roles that run outside the
+engine — to `openrouter/deepseek/deepseek-v4-flash`. Setting
+`SWE_DEFAULT_RUNTIME` explicitly is supported but unnecessary here.
 
 ## Rollout
 
