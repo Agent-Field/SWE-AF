@@ -37,6 +37,8 @@ user_environment:
       description: GitHub token (repo scope) — needed to clone private repos, push branches, and open pull requests
       type: secret
       scope: global
+    - name: SWE_DEFAULT_RUNTIME
+      description: Coding runtime for every role (claude_code | open_code | codex)
     - name: SWE_DEFAULT_MODEL
       description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash)
     - name: AGENTFIELD_SERVER
