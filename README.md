@@ -244,10 +244,14 @@ New to AgentField? Install the control plane first with `curl -fsSL https://agen
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/swe-af)
 
-One click deploys SWE-AF + AgentField control plane + PostgreSQL. Set two environment variables in Railway:
+One click deploys SWE-AF + AgentField control plane + PostgreSQL. Exactly **one** environment variable is required in Railway — an LLM provider key:
 
-- `CLAUDE_CODE_OAUTH_TOKEN` — run `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits)
-- `GH_TOKEN` — GitHub personal access token with `repo` scope for PR creation
+- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. With only this set (no `ANTHROPIC_API_KEY`, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash` — no further configuration needed.
+- *Alternative:* `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits), to run the `claude_code` runtime instead.
+
+Optional:
+
+- `GH_TOKEN` — GitHub personal access token with `repo` scope. Needed only to clone **private** repos, push branches, and open pull requests; builds against public repos work without it.
 
 Once deployed, trigger a build:
 
@@ -509,16 +513,22 @@ Benchmark assets, logs, evaluator, and generated projects live in [`examples/age
 
 ```bash
 cp .env.example .env
-# Add your API key: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
-# Optionally add GH_TOKEN for PR workflow
+# Uncomment exactly ONE provider key: OPENROUTER_API_KEY (recommended),
+# ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, or GOOGLE_API_KEY
+# Optionally add GH_TOKEN (private-repo clones, pushing branches, opening PRs)
 
 docker compose up -d
 ```
 
+> `.env.example` ships with **every** provider key commented out — uncomment
+> exactly one. In particular, don't leave a placeholder `ANTHROPIC_API_KEY`
+> value in place: any non-empty value forces the `claude_code` runtime and
+> breaks an OpenRouter-only setup.
+
 Submit a build:
 
 ```bash
-# Default (Claude)
+# Default runtime (auto-selected from whichever provider key is in .env)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'
@@ -600,7 +610,9 @@ JSON
 
 Requirements:
 
-- `GH_TOKEN` in `.env` with `repo` scope
+- `GH_TOKEN` in `.env` with `repo` scope — required for *this* workflow, since
+  it clones private repos, pushes the branch, and opens the PR. Builds that
+  stay local (`repo_path`) or target a public repo don't need it.
 - Repo access for that token
 
 ### Post-PR CI gate
@@ -930,6 +942,18 @@ registers **separately** as `swe-planner-go` (`:8005`) and `swe-fast-go`
 Opt in by targeting the `-go` reasoner path (e.g.
 `POST /api/v1/execute/async/swe-planner-go.build`). See
 [`go/README.md`](go/README.md) for build, run, and Docker instructions.
+
+### Coding engine (opt-in preview)
+
+The Go node ships a prebuilt high-performance coding engine next to the
+classic coding loop. It is **inert by default** — nothing changes unless you
+set `SWE_PRO_ENGINE=1`. With the flag set, builds route per-issue coding
+through the engine; unset it and the node returns to the classic
+coder → reviewer/QA loop. If the binary isn't present, the node logs a
+warning and keeps using the classic loop, so the flag is safe to leave on.
+Tuning knobs (`SWE_PRO_VARIANT`, `SWE_PRO_MAX_COST`, `SWE_PRO_PUBLIC_URL`)
+and the full env surface are documented in
+[`go/docs/pro-engine.md`](go/docs/pro-engine.md).
 
 ---
 

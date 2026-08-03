@@ -441,5 +441,11 @@ Runtime defaults:
 | Runtime | Base default | Special default |
 |---|---|---|
 | `claude_code` | `sonnet` | `qa_synthesizer=haiku` |
-| `open_code` | `minimax/minimax-m2.5` | none |
+| `open_code` | `openrouter/deepseek/deepseek-v4-flash` | none |
 | `codex` | `gpt-5.3-codex` | none |
+
+The `open_code` default applies both when the runtime is auto-selected (only
+`OPENROUTER_API_KEY` present — no `ANTHROPIC_API_KEY`, no
+`SWE_DEFAULT_RUNTIME`) and when `SWE_DEFAULT_RUNTIME=open_code` is set
+explicitly. It is also what fast mode resolves to on that path. Override the
+base default with `SWE_DEFAULT_MODEL` or per-request `models`.

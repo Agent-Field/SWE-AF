@@ -157,6 +157,10 @@ set; the load-bearing ones:
 | `AGENT_CALLBACK_URL`                                      | Public URL the control plane calls the node back on. **Required for any containerized/remote deploy that isn't this compose file** (compose sets it per service) — without it the CP gets `504 agent_unreachable` |
 | `NODE_ID`                                                 | Node ID (`swe-planner-go` / `swe-fast-go`)           |
 | `PORT`                                                    | Listen port (`8005` / `8006`)                        |
+| `SWE_PRO_ENGINE`                                          | Opt-in preview: route per-issue coding through the bundled high-performance coding engine. **Default unset (off)**; `1`/`true`/`yes`/`on` enables it |
+| `SWE_PRO_VARIANT`                                         | Engine reasoning-effort variant (e.g. `low` for fastest turnaround, `high` for depth). Unset keeps the engine's own default |
+| `SWE_PRO_MAX_COST`                                        | Per-run cost ceiling in USD forwarded to the engine on every dispatch. Unset: no SWE-AF-side ceiling |
+| `SWE_PRO_PUBLIC_URL`                                      | Callback base URL for the engine, mirroring `AGENT_CALLBACK_URL` on the nodes. **In Docker this must be set to a container-reachable URL**, otherwise the control plane can't call the engine back |
 
 Advanced knobs (HITL/approvals: `HAX_API_KEY`, `HAX_SDK_URL`, `HAX_SENDER_NAME`,
 `HAX_SENDER_KEY`, `AGENTFIELD_APPROVAL_USER_ID`; git identity for the resolve
@@ -165,6 +169,18 @@ read from the environment as well — grep `os.Getenv` under `internal/` for the
 authoritative set. The per-request build config JSON (`runtime`, `models`,
 budget/iteration knobs) is byte-identical to the Python node's — see the root
 [README](../README.md) and `.env.example` for the schema and examples.
+
+## Coding engine (opt-in preview)
+
+The Go image bundles a prebuilt high-performance coding engine alongside the
+classic coding loop. It stays completely inert unless `SWE_PRO_ENGINE` is set
+to a truthy value: with it set, the node supervises the engine as a sidecar
+and routes per-issue coding through it; unset it and builds fall back to the
+classic coder → reviewer/QA loop. A missing binary is not fatal — the node
+logs a warning and keeps using the classic loop.
+
+Full env surface (including the `SWE_PRO_*` knobs above, model pools, and the
+sidecar's restart behaviour): [`docs/pro-engine.md`](docs/pro-engine.md).
 
 ## Deployment: `af install` via the subdirectory selector
 
