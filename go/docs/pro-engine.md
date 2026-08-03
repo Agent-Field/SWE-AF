@@ -66,6 +66,21 @@ role — including the advisory and verification roles that run outside the
 engine — to `openrouter/deepseek/deepseek-v4-flash`. Setting
 `SWE_DEFAULT_RUNTIME` explicitly is supported but unnecessary here.
 
+## Control-plane inactivity sweep
+
+The engine does one issue's coding inside a single long call, where the classic
+loop makes many short ones. A control plane that reaps executions by "time
+since last activity" therefore sees the waiting parent as idle and can mark a
+healthy build `execution timed out (no activity)` while the engine is still
+working — the engine keeps going and finishes, but the run is already reported
+failed.
+
+AgentField fixes this by not reaping an execution that is waiting on a
+non-terminal child. On an older control plane, raise
+`agentfield.execution_cleanup.stale_execution_timeout` (shipped default `10m`)
+past the longest single issue you expect, or bound engine runs with
+`SWE_PRO_MAX_COST` / `max_hours` so they finish inside the window.
+
 ## Rollout
 
 The pro engine is an opt-in preview. It is planned to become the default in a
