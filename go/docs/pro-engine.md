@@ -34,7 +34,8 @@ to switch back. Two things change, both additive:
 The engine never pushes or opens PRs — branch, push and PR creation stay with
 the standard pipeline, so the deliverables are unchanged.
 
-If the flag is set but no engine binary is found, the node logs a warning and
+If the flag is set but no *runnable* engine binary is found — missing, or
+present without its execute bit — the node logs a warning naming the path and
 comes up on the classic coding loop: `pro_execute` is not registered and
 nothing is routed to an engine node that never joined. The binary is searched
 for at `SWE_PRO_BIN` when set (authoritative — no fallback), else

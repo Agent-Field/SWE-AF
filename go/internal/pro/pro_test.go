@@ -71,6 +71,31 @@ func TestResolveBin(t *testing.T) {
 		t.Errorf("ResolveBin() with missing override = (%q, %v), want (%q, false) — no fall-through", path, ok, missing)
 	}
 
+	// A present-but-not-executable binary must be treated as unavailable: it
+	// would fail at exec time, and routing coding to an engine that can never
+	// start is worse than staying on the classic loop. (Some install paths
+	// copy files without preserving the source's execute bit.)
+	nonExec := filepath.Join(dir, "not-executable")
+	if err := os.WriteFile(nonExec, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvBin, nonExec)
+	if _, ok := ResolveBin(); ok {
+		t.Error("ResolveBin() reported a non-executable file as usable")
+	}
+	t.Setenv(EnvEnabled, "1")
+	if Available() {
+		t.Error("Available() = true for a non-executable binary — must degrade to the classic loop")
+	}
+
+	// A directory at the binary path is likewise not runnable (os.Stat alone
+	// succeeds on directories).
+	t.Setenv(EnvBin, dir)
+	if _, ok := ResolveBin(); ok {
+		t.Error("ResolveBin() reported a directory as usable")
+	}
+	t.Setenv(EnvEnabled, "")
+
 	t.Setenv(EnvEnabled, "1")
 	t.Setenv(EnvBin, present)
 	if !Available() {

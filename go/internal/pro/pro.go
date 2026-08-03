@@ -87,25 +87,42 @@ func Enabled() bool {
 // BinPath returns the engine binary path (SWE_PRO_BIN or the default).
 func BinPath() string { return envOr(EnvBin, DefaultBin) }
 
-// ResolveBin returns the first engine binary that exists on disk. An explicit
+// runnable reports whether path is an existing regular file we could actually
+// spawn. Mere existence is not enough: a copy that lost its execute bit (some
+// installers create destination files with a fresh 0644 mode) would otherwise
+// look available and then fail at exec time, which is exactly the state the
+// availability gate exists to avoid.
+func runnable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode().Perm()&0o111 != 0
+}
+
+// ResolveBin returns the first runnable engine binary on disk. An explicit
 // SWE_PRO_BIN is authoritative (no fallback past it); otherwise DefaultBin is
 // tried (the Docker image layout), then "swe-pro" next to the running
 // executable — the layout an `af install` checkout produces, where the
 // installer builds bin/swe-planner into the same bin/ dir that carries the
-// vendored engine. ok=false means no binary exists; path then names the
-// primary location for warning logs.
+// vendored engine. ok=false means no usable binary was found; path then names
+// the primary location for warning logs.
 func ResolveBin() (path string, ok bool) {
 	if v := os.Getenv(EnvBin); v != "" {
-		_, err := os.Stat(v)
-		return v, err == nil
+		return v, runnable(v)
 	}
-	if _, err := os.Stat(DefaultBin); err == nil {
+	if runnable(DefaultBin) {
 		return DefaultBin, true
 	}
 	if exe, err := os.Executable(); err == nil {
 		sibling := filepath.Join(filepath.Dir(exe), "swe-pro")
-		if _, err := os.Stat(sibling); err == nil {
+		if runnable(sibling) {
 			return sibling, true
+		}
+		// Name a present-but-unusable sibling rather than the default path, so
+		// the warning points at the file that actually needs attention.
+		if _, err := os.Stat(sibling); err == nil {
+			return sibling, false
 		}
 	}
 	return DefaultBin, false
@@ -159,12 +176,13 @@ func Start(ctx context.Context, opts Options) *Supervisor {
 	if bin == "" {
 		resolved, ok := ResolveBin()
 		if !ok {
-			log.Printf("pro engine: binary not found at %s — sidecar disabled, builds use the classic coding engine", resolved)
+			log.Printf("pro engine: no runnable binary at %s (missing or not executable) — "+
+				"sidecar disabled, builds use the classic coding engine", resolved)
 			return nil
 		}
 		bin = resolved
-	} else if _, err := os.Stat(bin); err != nil {
-		log.Printf("pro engine: binary not found at %s — sidecar disabled, builds use the classic coding engine (%v)", bin, err)
+	} else if !runnable(bin) {
+		log.Printf("pro engine: no runnable binary at %s — sidecar disabled, builds use the classic coding engine", bin)
 		return nil
 	}
 	if opts.Stdout == nil {
