@@ -119,6 +119,18 @@ _OPEN_CODE_MODEL = "openrouter/deepseek/deepseek-v4-flash"
 
 
 class TestFastResolveModelsOpenCode:
+    def test_open_code_default_matches_the_main_path(self) -> None:
+        """Fast mode and the main path must resolve open_code to the same model.
+
+        The constant is duplicated rather than imported at module scope (that
+        import would be circular), so nothing but this test stops the two from
+        drifting apart — each side's own tests would keep passing.
+        """
+        from swe_af.execution.schemas import _OPENROUTER_AUTO_DEFAULT_MODEL  # noqa: PLC0415
+        from swe_af.fast.schemas import _OPEN_CODE_DEFAULT  # noqa: PLC0415
+
+        assert _OPEN_CODE_DEFAULT == _OPENROUTER_AUTO_DEFAULT_MODEL
+
     def test_all_roles_use_open_code_default(self, monkeypatch) -> None:
         for var in ("SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"):
             monkeypatch.delenv(var, raising=False)
