@@ -26,6 +26,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -86,6 +87,42 @@ func Enabled() bool {
 // BinPath returns the engine binary path (SWE_PRO_BIN or the default).
 func BinPath() string { return envOr(EnvBin, DefaultBin) }
 
+// ResolveBin returns the first engine binary that exists on disk. An explicit
+// SWE_PRO_BIN is authoritative (no fallback past it); otherwise DefaultBin is
+// tried (the Docker image layout), then "swe-pro" next to the running
+// executable — the layout an `af install` checkout produces, where the
+// installer builds bin/swe-planner into the same bin/ dir that carries the
+// vendored engine. ok=false means no binary exists; path then names the
+// primary location for warning logs.
+func ResolveBin() (path string, ok bool) {
+	if v := os.Getenv(EnvBin); v != "" {
+		_, err := os.Stat(v)
+		return v, err == nil
+	}
+	if _, err := os.Stat(DefaultBin); err == nil {
+		return DefaultBin, true
+	}
+	if exe, err := os.Executable(); err == nil {
+		sibling := filepath.Join(filepath.Dir(exe), "swe-pro")
+		if _, err := os.Stat(sibling); err == nil {
+			return sibling, true
+		}
+	}
+	return DefaultBin, false
+}
+
+// Available reports whether the engine is opted in AND its binary exists —
+// the gate for registering pro_execute and defaulting builds through it.
+// Enabled-but-missing must degrade to the classic coding loop (with Start's
+// warning) rather than route every issue to a node that never joins.
+func Available() bool {
+	if !Enabled() {
+		return false
+	}
+	_, ok := ResolveBin()
+	return ok
+}
+
 // NodeID returns the engine's control-plane node id (SWE_PRO_NODE_ID or the
 // default). The adapter dispatches to "<NodeID()>.<reasoner>".
 func NodeID() string { return envOr(EnvNodeID, DefaultNodeID) }
@@ -120,10 +157,14 @@ type Supervisor struct {
 func Start(ctx context.Context, opts Options) *Supervisor {
 	bin := opts.Bin
 	if bin == "" {
-		bin = BinPath()
-	}
-	if _, err := os.Stat(bin); err != nil {
-		log.Printf("pro engine: binary not found at %s — sidecar disabled (%v)", bin, err)
+		resolved, ok := ResolveBin()
+		if !ok {
+			log.Printf("pro engine: binary not found at %s — sidecar disabled, builds use the classic coding engine", resolved)
+			return nil
+		}
+		bin = resolved
+	} else if _, err := os.Stat(bin); err != nil {
+		log.Printf("pro engine: binary not found at %s — sidecar disabled, builds use the classic coding engine (%v)", bin, err)
 		return nil
 	}
 	if opts.Stdout == nil {

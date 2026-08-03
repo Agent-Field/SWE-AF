@@ -53,7 +53,7 @@ func (n *Node) RegisterPlanner() {
 	n.registerRoles()
 	n.registerOrchestrators()
 	n.registerIssueReasoner()
-	if pro.Enabled() {
+	if pro.Available() {
 		n.registerProReasoners()
 	}
 }
@@ -134,10 +134,13 @@ func (n *Node) registerOrchestrators() {
 		CIGate:           orch.RunCIGate,
 		ApprovalGate:     orch.PlanApprovalGate,
 	}
-	// Engine opt-in (seamless path): with the flag set, builds and execute
-	// calls that name no execute_fn_target route per-issue coding through
-	// pro_execute on this node. Callers that pass a target keep full control.
-	if pro.Enabled() {
+	// Engine opt-in (seamless path): with the flag set AND the binary present,
+	// builds and execute calls that name no execute_fn_target route per-issue
+	// coding through pro_execute on this node. Callers that pass a target keep
+	// full control. Flag-on with a missing binary degrades to the classic loop
+	// (pro.Start logs the warning) instead of routing to a node that never
+	// joined.
+	if pro.Available() {
 		deps.DefaultExecuteFnTarget = n.NodeID + ".pro_execute"
 	}
 
@@ -254,7 +257,7 @@ func (n *Node) registerIssueReasoner() {
 // ---------------------------------------------------------------------------
 
 // registerProReasoners wires the opt-in pro-engine adapter. Called only when
-// pro.Enabled(), so the default surface — and the parity test asserting it —
+// pro.Available(), so the default surface — and the parity test asserting it —
 // is unchanged unless SWE_PRO_ENGINE is set.
 func (n *Node) registerProReasoners() {
 	deps := &pro.Deps{

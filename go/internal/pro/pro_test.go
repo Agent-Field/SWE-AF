@@ -50,6 +50,43 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+// TestResolveBin covers the three-step search: explicit SWE_PRO_BIN is
+// authoritative (found or not — no fall-through), and Available() is the
+// flag AND binary-presence conjunction.
+func TestResolveBin(t *testing.T) {
+	dir := t.TempDir()
+	present := filepath.Join(dir, "engine")
+	if err := os.WriteFile(present, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(dir, "missing")
+
+	t.Setenv(EnvBin, present)
+	if path, ok := ResolveBin(); !ok || path != present {
+		t.Errorf("ResolveBin() with existing override = (%q, %v), want (%q, true)", path, ok, present)
+	}
+
+	t.Setenv(EnvBin, missing)
+	if path, ok := ResolveBin(); ok || path != missing {
+		t.Errorf("ResolveBin() with missing override = (%q, %v), want (%q, false) — no fall-through", path, ok, missing)
+	}
+
+	t.Setenv(EnvEnabled, "1")
+	t.Setenv(EnvBin, present)
+	if !Available() {
+		t.Error("Available() = false with flag on and binary present")
+	}
+	t.Setenv(EnvBin, missing)
+	if Available() {
+		t.Error("Available() = true with flag on but binary missing")
+	}
+	t.Setenv(EnvEnabled, "")
+	t.Setenv(EnvBin, present)
+	if Available() {
+		t.Error("Available() = true with flag off")
+	}
+}
+
 // TestChildEnv asserts the SWE-AF → engine env translation, including that the
 // appended entries win over inherited duplicates (os/exec last-wins) and that
 // provider keys pass through untouched.
