@@ -131,7 +131,10 @@ const (
 	codexAPIKeyModel  = "gpt-5.3-codex" // OpenAI API-key auth (api_key mode)
 	codexChatGPTModel = "gpt-5.5"       // ChatGPT-account auth (-codex blocked)
 
-	// Default model for the auto-selected OpenRouter path (see openRouterOnlyEnv).
+	// Default model for the open_code runtime — both the auto-selected
+	// OpenRouter path (see openRouterOnlyEnv) and an explicit
+	// SWE_DEFAULT_RUNTIME=open_code resolve here, so opting in explicitly
+	// never silently swaps the model.
 	openRouterAutoDefaultModel = "openrouter/deepseek/deepseek-v4-flash"
 )
 
@@ -149,7 +152,7 @@ func runtimeBaseModels(runtime string) map[string]string {
 		base["qa_synthesizer_model"] = "haiku"
 	case "open_code":
 		for _, field := range AllModelFields {
-			base[field] = "openrouter/minimax/minimax-m2.5"
+			base[field] = openRouterAutoDefaultModel
 		}
 	case "codex":
 		for _, field := range AllModelFields {

@@ -22,7 +22,7 @@ var highTierFields = map[string]bool{
 }
 
 // openCodeBaseModel ports _OPEN_CODE_BASE.
-const openCodeBaseModel = "openrouter/minimax/minimax-m2.5"
+const openCodeBaseModel = "openrouter/deepseek/deepseek-v4-flash"
 
 // TestModelTiers_NoTierEnvsUnchanged ports TestNoTierEnvsUnchanged: no tier
 // envs set → resolution unchanged for all runtimes.
