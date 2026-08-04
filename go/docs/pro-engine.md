@@ -1,7 +1,10 @@
 # Pro engine (opt-in preview)
 
-The Go node can run an optional high-performance coding engine, shipped as a
-prebuilt binary. It is **off by default**: without the opt-in flag the node
+The Go node can run an optional high-performance coding engine, shipped as
+prebuilt binaries — one per supported platform, vendored at `go/bin` as
+`swe-pro-darwin-arm64` and `swe-pro-linux-amd64`, because one checkout is
+installed on macOS and Linux alike and the node picks the matching build at
+startup. It is **off by default**: without the opt-in flag the node
 registers exactly the same reasoner surface as before, spawns no extra
 process, and every existing integration — reasoner calls, cron triggers,
 `execute_fn_target` overrides — behaves identically.
@@ -39,15 +42,18 @@ present without its execute bit — the node logs a warning naming the path and
 comes up on the classic coding loop: `pro_execute` is not registered and
 nothing is routed to an engine node that never joined. The binary is searched
 for at `SWE_PRO_BIN` when set (authoritative — no fallback), else
-`/usr/local/bin/swe-pro` (the Docker image layout), else `swe-pro` next to the
-running executable (the layout an `af install` checkout produces).
+`/usr/local/bin/swe-pro` (the Docker image layout: one image, one platform, so
+the image build copies its own `swe-pro-linux-amd64` to that path), else next
+to the running executable — the layout an `af install` checkout produces —
+first as `swe-pro-<GOOS>-<GOARCH>` and then as plain `swe-pro`. The suffix is
+what keeps a macOS install from exec'ing the Linux build.
 
 ## Environment reference
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `SWE_PRO_ENGINE` | unset | Truthy value opts in (`1`/`true`/`yes`/`on`) |
-| `SWE_PRO_BIN` | `/usr/local/bin/swe-pro` | Engine binary path |
+| `SWE_PRO_BIN` | `/usr/local/bin/swe-pro`, else a `swe-pro-<GOOS>-<GOARCH>` / `swe-pro` sibling | Engine binary path (authoritative when set) |
 | `SWE_PRO_NODE_ID` | `swe-pro` | Engine's control-plane node id |
 | `SWE_PRO_PORT` | `8801` | Engine's listen port |
 | `SWE_PRO_PUBLIC_URL` | `http://localhost:8801` (engine default) | Callback base URL — **must** be set to a container-reachable address in Docker, otherwise the control plane cannot reach the engine |

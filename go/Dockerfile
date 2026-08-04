@@ -150,10 +150,12 @@ RUN git config --global user.name "SWE-AF" && \
 COPY --from=builder /out/swe-planner /usr/local/bin/swe-planner
 COPY --from=builder /out/swe-fast /usr/local/bin/swe-fast
 
-# Prebuilt pro-engine binary (static, vendored at go/bin). Inert unless the
-# node is started with SWE_PRO_ENGINE=1 (see go/docs/pro-engine.md); the
-# supervisor's default SWE_PRO_BIN already points here.
-COPY go/bin/swe-pro /usr/local/bin/swe-pro
+# Prebuilt pro-engine binary (static, vendored at go/bin). go/bin carries one
+# build per supported platform; this image is linux/amd64 only, so the amd64
+# one is copied to the unsuffixed path the supervisor's default SWE_PRO_BIN
+# already points at. Inert unless the node is started with SWE_PRO_ENGINE=1
+# (see go/docs/pro-engine.md).
+COPY go/bin/swe-pro-linux-amd64 /usr/local/bin/swe-pro
 
 # Pre-create /workspaces so named-volume mounts inherit correct permissions
 # (without this, Docker creates it as root read-only on fresh deployments).

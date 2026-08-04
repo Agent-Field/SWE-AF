@@ -1,6 +1,8 @@
 // Package pro is the opt-in "pro engine" integration: a prebuilt coding-engine
 // binary shipped alongside SWE-AF that registers on the same control plane as
-// its own node and can take over per-issue coding work.
+// its own node and can take over per-issue coding work. The repo vendors one
+// build per supported platform under go/bin, named swe-pro-<GOOS>-<GOARCH>;
+// ResolveBin picks the one matching the host.
 //
 // Everything in this package is inert unless SWE_PRO_ENGINE is set to a truthy
 // value: no child process is spawned, no reasoner is registered, and the
@@ -27,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -57,6 +60,8 @@ const (
 	// variant (e.g. "low" for fastest turnaround, "high" for depth).
 	EnvVariant = "SWE_PRO_VARIANT"
 
+	// DefaultBin is where the Docker image installs the engine: one image, one
+	// platform, so the copy lands under the unsuffixed name.
 	DefaultBin    = "/usr/local/bin/swe-pro"
 	DefaultNodeID = "swe-pro"
 	DefaultPort   = "8801"
@@ -100,13 +105,30 @@ func runnable(path string) bool {
 	return info.Mode().Perm()&0o111 != 0
 }
 
+// osExecutable is os.Executable, indirected so tests can point the sibling
+// search at a temp dir instead of the test binary's own directory.
+var osExecutable = os.Executable
+
+// siblingNames lists the engine binary names to look for next to the running
+// executable, best candidate first. The repo vendors one engine build per
+// supported platform under go/bin (swe-pro-darwin-arm64, swe-pro-linux-amd64,
+// …) because a single checkout is installed on macOS and Linux alike, so the
+// GOOS/GOARCH suffix is what picks the build that can actually exec here — the
+// unsuffixed name would be a coin flip and yield "exec format error". The
+// plain name stays as a fallback for layouts that place one hand-built engine
+// beside the node (an unpacked image, a local engine build).
+func siblingNames() []string {
+	return []string{"swe-pro-" + runtime.GOOS + "-" + runtime.GOARCH, "swe-pro"}
+}
+
 // ResolveBin returns the first runnable engine binary on disk. An explicit
 // SWE_PRO_BIN is authoritative (no fallback past it); otherwise DefaultBin is
-// tried (the Docker image layout), then "swe-pro" next to the running
-// executable — the layout an `af install` checkout produces, where the
-// installer builds bin/swe-planner into the same bin/ dir that carries the
-// vendored engine. ok=false means no usable binary was found; path then names
-// the primary location for warning logs.
+// tried (the Docker image layout, where the image build copies its one
+// platform's binary to the unsuffixed path), then the siblingNames candidates
+// next to the running executable — the layout an `af install` checkout
+// produces, where the installer builds bin/swe-planner into the same bin/ dir
+// that carries the vendored engines. ok=false means no usable binary was
+// found; path then names the location worth reporting.
 func ResolveBin() (path string, ok bool) {
 	if v := os.Getenv(EnvBin); v != "" {
 		return v, runnable(v)
@@ -114,15 +136,26 @@ func ResolveBin() (path string, ok bool) {
 	if runnable(DefaultBin) {
 		return DefaultBin, true
 	}
-	if exe, err := os.Executable(); err == nil {
-		sibling := filepath.Join(filepath.Dir(exe), "swe-pro")
-		if runnable(sibling) {
-			return sibling, true
+	if exe, err := osExecutable(); err == nil {
+		dir := filepath.Dir(exe)
+		unusable := ""
+		for _, name := range siblingNames() {
+			sibling := filepath.Join(dir, name)
+			if runnable(sibling) {
+				return sibling, true
+			}
+			// Name a present-but-unusable sibling rather than the default path,
+			// so the warning points at the file that actually needs attention.
+			// Candidates are in preference order, so the first one found is the
+			// one the user meant to be used.
+			if unusable == "" {
+				if _, err := os.Stat(sibling); err == nil {
+					unusable = sibling
+				}
+			}
 		}
-		// Name a present-but-unusable sibling rather than the default path, so
-		// the warning points at the file that actually needs attention.
-		if _, err := os.Stat(sibling); err == nil {
-			return sibling, false
+		if unusable != "" {
+			return unusable, false
 		}
 	}
 	return DefaultBin, false

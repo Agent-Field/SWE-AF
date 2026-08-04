@@ -112,6 +112,60 @@ func TestResolveBin(t *testing.T) {
 	}
 }
 
+// TestResolveBinSiblings covers the `af install` layout, where the vendored
+// engines sit in the same bin/ dir the installer builds the node into. One
+// checkout carries a build per platform, so the swe-pro-<GOOS>-<GOARCH>
+// sibling must be preferred over a plain swe-pro — running the wrong one is an
+// "exec format error", not a fallback — while a lone plain swe-pro (an
+// unpacked image, a local engine build) still resolves.
+func TestResolveBinSiblings(t *testing.T) {
+	if runnable(DefaultBin) {
+		t.Skipf("%s exists on this host and short-circuits the sibling search", DefaultBin)
+	}
+	suffixed := "swe-pro-" + runtime.GOOS + "-" + runtime.GOARCH
+
+	cases := []struct {
+		name string
+		// present maps sibling file name to its mode; 0o644 is the
+		// present-but-unusable case the availability gate must reject.
+		present map[string]os.FileMode
+		want    string // sibling name, or "" for "no usable engine"
+		wantOK  bool
+	}{
+		{"suffixed preferred over plain", map[string]os.FileMode{suffixed: 0o755, "swe-pro": 0o755}, suffixed, true},
+		{"suffixed alone", map[string]os.FileMode{suffixed: 0o755}, suffixed, true},
+		{"plain alone is the fallback", map[string]os.FileMode{"swe-pro": 0o755}, "swe-pro", true},
+		{"neither present", nil, "", false},
+		{"plain usable, suffixed not", map[string]os.FileMode{suffixed: 0o644, "swe-pro": 0o755}, "swe-pro", true},
+		// Both unusable: the warning must name the suffixed candidate, the one
+		// this platform was meant to run.
+		{"both unusable names the best candidate", map[string]os.FileMode{suffixed: 0o644, "swe-pro": 0o644}, suffixed, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(EnvBin, "")
+			dir := t.TempDir()
+			for name, mode := range tc.present {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			orig := osExecutable
+			osExecutable = func() (string, error) { return filepath.Join(dir, "swe-planner"), nil }
+			defer func() { osExecutable = orig }()
+
+			want := DefaultBin
+			if tc.want != "" {
+				want = filepath.Join(dir, tc.want)
+			}
+			path, ok := ResolveBin()
+			if path != want || ok != tc.wantOK {
+				t.Errorf("ResolveBin() = (%q, %v), want (%q, %v)", path, ok, want, tc.wantOK)
+			}
+		})
+	}
+}
+
 // TestChildEnv asserts the SWE-AF → engine env translation, including that the
 // appended entries win over inherited duplicates (os/exec last-wins) and that
 // provider keys pass through untouched.
