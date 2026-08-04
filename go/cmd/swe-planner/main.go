@@ -16,11 +16,13 @@ import (
 )
 
 func main() {
-	// Defaults: NODE_ID "swe-planner-go", PORT 8005 — a distinct identity from
-	// the Python swe-planner node (app.py:51-59) so the Go port runs as an
-	// opt-in sibling alongside Python against one control plane. NODE_ID / PORT
-	// env vars still override.
-	n, err := node.BuildAgent("swe-planner-go", "8005", "Autonomous SWE planning pipeline")
+	// Defaults: NODE_ID "swe-planner", PORT 8005. This is the SWE node, so it
+	// registers under the product's name rather than a port-specific variant —
+	// callers' triggers do not change when a node moves from Python to Go. To
+	// run this alongside the Python node against one control plane, give it a
+	// distinct NODE_ID; the compose files do exactly that. NODE_ID / PORT env
+	// vars override both defaults.
+	n, err := node.BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		log.Fatalf("swe-planner: build agent: %v", err)
 	}

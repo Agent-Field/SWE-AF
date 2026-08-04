@@ -1,5 +1,11 @@
 config_version: v1
-name: swe-planner-go                    # MUST differ from root "swe-planner" (installer registry is keyed by name)
+# This is THE SWE node. It deliberately shares the root manifest's name: the
+# root declares `superseded_by` pointing here, so installing this repo installs
+# this package, and a user who already has the Python swe-planner gets it
+# replaced in place — same name, same node id, same triggers, secrets kept.
+# Installing the root as a local path (the documented escape hatch) is the one
+# way to get the Python node, and it necessarily takes this name over.
+name: swe-planner
 version: 0.1.0
 description: Autonomous SWE planning/execution agent node (Go port; 5 orchestrators + 25 role reasoners)
 author: Agent-Field
@@ -11,7 +17,9 @@ entrypoint:
   healthcheck: /health
 
 agent_node:
-  node_id: swe-planner-go
+  node_id: swe-planner
+  # 8005 rather than the Python node's 8003: during the changeover both may be
+  # running, and triggers resolve by node id, not port.
   default_port: 8005
 
 user_environment:

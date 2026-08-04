@@ -57,7 +57,7 @@ func TestExecuteConfigResolvedAndForwarded(t *testing.T) {
 
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
-	}}, NodeID: "swe-planner-go"}
+	}}, NodeID: "swe-planner"}
 
 	plan := minimalPlan()
 	_, err := ExecuteHandler(context.Background(), deps, map[string]any{
@@ -78,7 +78,7 @@ func TestExecuteConfigResolvedAndForwarded(t *testing.T) {
 	if captured.repoPath != "/tmp/target-repo" {
 		t.Errorf("repo_path not forwarded: got %q", captured.repoPath)
 	}
-	if captured.nodeID != "swe-planner-go" {
+	if captured.nodeID != "swe-planner" {
 		t.Errorf("node_id not forwarded: got %q", captured.nodeID)
 	}
 	if captured.callFn == nil {
@@ -223,7 +223,7 @@ func TestExecuteWorkspaceManifestNonePassthrough(t *testing.T) {
 		t.Errorf("no reasoner call expected for empty single-repo build, got %q", target)
 		return map[string]any{}, nil
 	}}
-	deps := &Deps{App: app, NodeID: "swe-planner-go"}
+	deps := &Deps{App: app, NodeID: "swe-planner"}
 
 	out := mustExecute(t, deps, map[string]any{
 		"plan_result": minimalPlan(),
@@ -250,7 +250,7 @@ func TestExecuteWorkspaceManifestForwarded(t *testing.T) {
 		// _init_all_repos dispatches run_git_init per repo; success is fine.
 		return map[string]any{"success": true, "mode": "existing", "integration_branch": "main"}, nil
 	}}
-	deps := &Deps{App: app, NodeID: "swe-planner-go"}
+	deps := &Deps{App: app, NodeID: "swe-planner"}
 
 	out := mustExecute(t, deps, map[string]any{
 		"plan_result":        minimalPlan(),
@@ -273,7 +273,7 @@ func TestExecuteWorkspaceManifestForwarded(t *testing.T) {
 func TestExecuteBuildIDForwarded(t *testing.T) {
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
-	}}, NodeID: "swe-planner-go"}
+	}}, NodeID: "swe-planner"}
 
 	out := mustExecute(t, deps, map[string]any{
 		"plan_result": minimalPlan(),
@@ -311,7 +311,7 @@ func TestExecuteResumeForwarded(t *testing.T) {
 
 	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
 		return map[string]any{}, nil
-	}}, NodeID: "swe-planner-go"}
+	}}, NodeID: "swe-planner"}
 
 	out := mustExecute(t, deps, map[string]any{
 		"plan_result": plan,
@@ -341,7 +341,7 @@ func TestExecuteExternalTargetPath(t *testing.T) {
 		}
 		return map[string]any{}, nil
 	}}
-	deps := &Deps{App: app, NodeID: "swe-planner-go"}
+	deps := &Deps{App: app, NodeID: "swe-planner"}
 
 	plan := minimalPlan()
 	plan["issues"] = []any{map[string]any{
@@ -371,7 +371,7 @@ func TestExecuteExternalTargetPath(t *testing.T) {
 // The node-level default target applies when the request names none — the
 // engine opt-in seam — and a caller-supplied target always beats it.
 func TestExecuteDefaultExecuteFnTarget(t *testing.T) {
-	const defaultTarget = "swe-planner-go.pro_execute"
+	const defaultTarget = "swe-planner.pro_execute"
 	const explicitTarget = "coder-agent.code_issue"
 
 	run := func(t *testing.T, inputTarget, wantTarget string) {
@@ -381,7 +381,7 @@ func TestExecuteDefaultExecuteFnTarget(t *testing.T) {
 			seenTargets = append(seenTargets, target)
 			return map[string]any{"outcome": "completed", "result_summary": "Done"}, nil
 		}}
-		deps := &Deps{App: app, NodeID: "swe-planner-go", DefaultExecuteFnTarget: defaultTarget}
+		deps := &Deps{App: app, NodeID: "swe-planner", DefaultExecuteFnTarget: defaultTarget}
 
 		plan := minimalPlan()
 		plan["issues"] = []any{map[string]any{
@@ -426,7 +426,7 @@ func TestExecuteNoDefaultKeepsBuiltinLoop(t *testing.T) {
 		seenTargets = append(seenTargets, target)
 		return map[string]any{}, nil
 	}}
-	deps := &Deps{App: app, NodeID: "swe-planner-go"}
+	deps := &Deps{App: app, NodeID: "swe-planner"}
 
 	plan := minimalPlan()
 	plan["issues"] = []any{map[string]any{

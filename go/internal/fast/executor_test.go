@@ -18,7 +18,7 @@ var sampleTask = map[string]any{
 
 func execDeps(fn func(ctx context.Context, target string, kwargs map[string]any) (map[string]any, error)) (*Deps, *callScripter) {
 	s := &callScripter{fn: fn}
-	return &Deps{Call: s.call, Note: &noteRecorder{}, NodeID: "swe-fast-go"}, s
+	return &Deps{Call: s.call, Note: &noteRecorder{}, NodeID: "swe-fast"}, s
 }
 
 // Contract: a successful coder call (complete=true) → outcome "completed".
@@ -42,7 +42,7 @@ func TestFastExecuteTasks_CompletedOutcome(t *testing.T) {
 	}
 	// run_coder must be the call target, args forwarded.
 	rec := s.snapshot()
-	if got := rec[0].target; got != "swe-fast-go.run_coder" {
+	if got := rec[0].target; got != "swe-fast.run_coder" {
 		t.Errorf("target = %q, want swe-fast.run_coder", got)
 	}
 	if rec[0].kwargs["worktree_path"] != "/tmp/repo" {

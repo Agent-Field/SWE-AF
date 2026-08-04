@@ -6,9 +6,12 @@ author: Agent-Field
 
 # The Go node in go/ is the maintained SWE node: same reasoners, same
 # interface, one static binary, and it ships the coding engine. Installing this
-# repo installs that instead, and replaces an existing swe-planner — so
-# `af install https://github.com/Agent-Field/SWE-AF` is the one thing a user
-# has to know, before and after the switch.
+# repo installs that instead — so `af install https://github.com/Agent-Field/SWE-AF`
+# is the one thing a user has to know, before and after the switch.
+#
+# go/ declares this same name deliberately, so the switch is a replacement in
+# place: same node id, same triggers, node-scoped secrets kept. Only one of the
+# two can be installed at a time, which is the point.
 #
 # This manifest stays here as the redirect, so the Python node is still what
 # `python -m swe_af` and the Docker images run. The redirect is a git-install

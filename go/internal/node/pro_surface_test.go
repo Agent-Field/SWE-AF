@@ -27,7 +27,7 @@ func TestRegisterPlannerProSurfaceGated(t *testing.T) {
 	t.Setenv(pro.EnvEnabled, "1")
 	fakeEngineBin(t)
 
-	n, err := BuildAgent("swe-planner-go", "8005", "Autonomous SWE planning pipeline")
+	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
 	}
@@ -38,9 +38,9 @@ func TestRegisterPlannerProSurfaceGated(t *testing.T) {
 	for name := range pro.Handlers() {
 		want = append(want, name)
 	}
-	assertSurface(t, "swe-planner-go[pro]", n.RegisteredNames(), want)
+	assertSurface(t, "swe-planner[pro]", n.RegisteredNames(), want)
 
-	f, err := BuildAgent("swe-fast-go", "8006", "fast desc")
+	f, err := BuildAgent("swe-fast", "8006", "fast desc")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestRegisterPlannerProSurfaceGated(t *testing.T) {
 func TestProSurfaceOffByDefault(t *testing.T) {
 	t.Setenv(pro.EnvEnabled, "")
 
-	n, err := BuildAgent("swe-planner-go", "8005", "Autonomous SWE planning pipeline")
+	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestProSurfaceEnabledButBinaryMissing(t *testing.T) {
 	t.Setenv(pro.EnvEnabled, "1")
 	t.Setenv(pro.EnvBin, filepath.Join(t.TempDir(), "missing"))
 
-	n, err := BuildAgent("swe-planner-go", "8005", "Autonomous SWE planning pipeline")
+	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
 	}

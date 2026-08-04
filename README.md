@@ -747,8 +747,8 @@ Notes for main-harness authors:
 - Cap your fan-out: each delegation is a paid multi-agent run. A handful of
   concurrent issues per repo is the sweet spot — the node also bounds its own
   concurrency.
-- Available identically on `swe-fast.implement_issue` and, in the Go port, on
-  `swe-planner-go` / `swe-fast-go`.
+- Available identically on `swe-fast.implement_issue`, and on the Go
+  implementation under those same node ids.
 
 A ready-made Claude Code skill for this flow ships in
 [`.claude/skills/delegate-issue/`](.claude/skills/delegate-issue/SKILL.md).
@@ -932,15 +932,19 @@ make clean-examples
 
 ---
 
-## Go implementation (opt-in)
+## Go implementation
 
-This repo also ships a Go port of the node under [`go/`](go/README.md). The
-**Python implementation is the default** — everything above is unchanged and
-still runs as `swe-planner` (`:8003`) / `swe-fast` (`:8004`). The Go port
-registers **separately** as `swe-planner-go` (`:8005`) and `swe-fast-go`
-(`:8006`), so both stacks can run against one control plane simultaneously.
-Opt in by targeting the `-go` reasoner path (e.g.
-`POST /api/v1/execute/async/swe-planner-go.build`). See
+The node under [`go/`](go/README.md) is what `af install` gives you, and it
+registers under the same ids as everything above — `swe-planner` and
+`swe-fast` — so no trigger, reasoner name, or API shape changes with it. The
+repo-root manifest declares itself `superseded_by` `//go`, so
+`af install https://github.com/Agent-Field/SWE-AF` lands there and replaces an
+existing Python install in place, keeping its node-scoped secrets.
+
+The Python implementation is unchanged and still what `python -m swe_af` and
+the compose stack in `docker-compose.yml` run. Because the two now answer to
+the same node ids, running both against one control plane needs an explicit
+`NODE_ID` on one of them — `docker-compose.go.yml` does that. See
 [`go/README.md`](go/README.md) for build, run, and Docker instructions.
 
 ### Coding engine (opt-in preview)

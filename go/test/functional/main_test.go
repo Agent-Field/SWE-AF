@@ -2,21 +2,21 @@
 
 // Package functional holds the black-box / functional parity tests for the
 // SWE-AF Go port (design §11(b), work-breakdown T7.2). They exercise the *live*
-// stack — a control-plane plus the two Go nodes (swe-planner-go :8005,
-// swe-fast-go :8006) — brought up via the self-contained compose.functional.yml,
+// stack — a control-plane plus the two Go nodes (swe-planner :8005,
+// swe-fast :8006) — brought up via the self-contained compose.functional.yml,
 // and assert the byte-level parity contracts that the Python→Go port must
 // preserve:
 //
 //   - /health on both nodes returns 200 (TestHealth);
 //   - each node registers EXACTLY its expected reasoner-name set — the parity
-//     checklist: 30 on swe-planner-go, 29 on swe-fast-go (TestRegistrationParity);
+//     checklist: 30 on swe-planner, 29 on swe-fast (TestRegistrationParity);
 //   - a deterministic (no-LLM) reasoner call returns the exact pydantic
 //     model_dump() key set — CIWatchResult (TestDeterministicReasonerKeySets);
 //   - the control-plane status contract that the ReasonerFailed carrier
 //     (design §4.5) depends on: status=failed + result + error persist together,
 //     and a resultless failed re-post does not clobber the result
 //     (TestReasonerFailedStatusContract);
-//   - (env-gated, default-skipped) a real minimal swe-planner-go.build returns the
+//   - (env-gated, default-skipped) a real minimal swe-planner.build returns the
 //     BuildResult key set and the control-plane DAG contains child executions
 //     for the expected role reasoners (TestBuildLLMAndDAGParity).
 //
@@ -68,8 +68,8 @@ const (
 	plannerBaseURL = "http://localhost:18005"
 	fastBaseURL    = "http://localhost:18006"
 
-	plannerNodeID = "swe-planner-go"
-	fastNodeID    = "swe-fast-go"
+	plannerNodeID = "swe-planner"
+	fastNodeID    = "swe-fast"
 
 	// Generous ceilings: the Go images are multi-stage builds that clone the
 	// AgentField SDK, so a cold `up --build` can take several minutes.

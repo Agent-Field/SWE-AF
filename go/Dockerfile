@@ -161,13 +161,13 @@ RUN mkdir -p /workspaces && chmod 777 /workspaces
 
 EXPOSE 8005
 
-# Defaults register the Go planner as "swe-planner-go" on :8005 — a distinct
-# identity from the Python swe-planner node (:8003) so both stacks can run
-# against one control plane. The swe-fast service overrides NODE_ID/PORT to
-# swe-fast-go/:8006 via compose.
+# Defaults register this as "swe-planner" on :8005 — the product's node id, so
+# callers' triggers are the same whichever implementation is serving them. The
+# compose files override NODE_ID where two stacks share one control plane and
+# need distinct identities, and the swe-fast service overrides NODE_ID/PORT.
 ENV PORT=8005 \
     AGENTFIELD_SERVER=http://control-plane:8080 \
-    NODE_ID=swe-planner-go
+    NODE_ID=swe-planner
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1

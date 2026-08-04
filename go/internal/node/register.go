@@ -14,14 +14,16 @@ package node
 //     those role names, backed by the full-pipeline role handlers (fast.Wrappers
 //     is the identity delegation map that documents this).
 //
-// Tags: the Go port registers under a distinct identity from the Python node
-// (swe-planner-go / swe-fast-go) so both stacks can run against one control
-// plane. Role reasoners carry ["swe-planner-go"] on BOTH nodes — mirroring the
-// Python structure where they are registered through the swe-planner-tagged
-// AgentRouter, but grouped under the Go node's -go identity. The four fast-node
-// reasoners carry ["swe-fast-go"] (Python: fast_router tags=["swe-fast"]). The
-// five orchestrators carry ["swe-planner-go"] to group them with the node in the
-// control-plane UI (design §8).
+// Tags match the Python node's exactly, because this registers under the same
+// identity: a caller's trigger does not change when the implementation does.
+// Role reasoners carry ["swe-planner"] on BOTH nodes — mirroring the Python
+// structure where they are registered through the swe-planner-tagged
+// AgentRouter. The four fast-node reasoners carry ["swe-fast"] (Python:
+// fast_router tags=["swe-fast"]). The five orchestrators carry ["swe-planner"]
+// to group them with the node in the control-plane UI (design §8).
+//
+// Running this alongside the Python node against one control plane therefore
+// needs an explicit NODE_ID on one of them; docker-compose.go.yml does that.
 
 import (
 	"context"
@@ -43,8 +45,8 @@ import (
 )
 
 const (
-	tagPlanner = "swe-planner-go"
-	tagFast    = "swe-fast-go"
+	tagPlanner = "swe-planner"
+	tagFast    = "swe-fast"
 )
 
 // RegisterPlanner registers the full swe-planner surface: 25 role reasoners +
@@ -74,7 +76,7 @@ func (n *Node) RegisterFast() {
 
 // registerRoles wires the 25 execution/planning role reasoners, each backed by
 // its package handler and threaded with the Deps built from the agent. All are
-// tagged ["swe-planner-go"] (Python groups them under the swe-planner router).
+// tagged ["swe-planner"] (Python groups them under the swe-planner router).
 func (n *Node) registerRoles() {
 	tag := agent.WithReasonerTags(tagPlanner)
 
