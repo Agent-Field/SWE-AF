@@ -117,7 +117,7 @@ class FastBuildConfig(BaseModel):
     models: dict[str, str] | None = None
     max_tasks: int = 10
     task_timeout_seconds: int = 300
-    build_timeout_seconds: int = 600
+    build_timeout_seconds: int = 1800
     enable_github_pr: bool = True
     github_pr_base: str = ""
     permission_mode: str = ""
