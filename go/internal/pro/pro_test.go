@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -28,6 +29,35 @@ func TestEnabled(t *testing.T) {
 		if got := Enabled(); got != want {
 			t.Errorf("Enabled() with %s=%q = %v, want %v", EnvEnabled, val, got, want)
 		}
+	}
+}
+
+// TestEnabledOptOutContract pins the two halves of the default-on rollout. The
+// manifest declares SWE_PRO_ENGINE with default "1", and the installer's env
+// resolver injects a declared default unconditionally — so unlike before, a
+// value is always present on an installed node and "turning it off" can only
+// mean writing a falsy one. "0" and "false" must therefore read as disabled,
+// and a genuinely absent variable (a bare binary, no manifest) must still read
+// as disabled so this package keeps its own default-off behaviour.
+func TestEnabledOptOutContract(t *testing.T) {
+	t.Setenv(EnvEnabled, "1")
+	if !Enabled() {
+		t.Errorf("%s=1 must enable the engine — this is what the manifest default injects", EnvEnabled)
+	}
+	for _, off := range []string{"0", "false", "FALSE"} {
+		t.Setenv(EnvEnabled, off)
+		if Enabled() {
+			t.Errorf("%s=%q must disable the engine — it is the documented opt-out", EnvEnabled, off)
+		}
+	}
+	// Genuinely unset, not merely empty: t.Setenv registers the restore, then
+	// Unsetenv removes the variable for the rest of this test.
+	t.Setenv(EnvEnabled, "")
+	if err := os.Unsetenv(EnvEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if Enabled() {
+		t.Errorf("unset %s must leave the engine off (bare binary, no manifest)", EnvEnabled)
 	}
 }
 
@@ -229,17 +259,57 @@ func fakeBin(t *testing.T, script string) string {
 	return p
 }
 
+// syncBuffer is a concurrency-safe io.Writer for capturing sidecar output: the
+// pipeLines goroutines write while the test goroutine reads.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitFor polls until want appears in b, or the deadline passes. Returns
+// whether it appeared. Polling rather than sleeping a fixed interval keeps the
+// test honest on a loaded machine, where spawning a shell can take far longer
+// than any hardcoded guess.
+func waitFor(b *syncBuffer, want string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if strings.Contains(b.String(), want) {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return strings.Contains(b.String(), want)
+}
+
 // TestSupervisorStopsOnCancel: a long-running sidecar is interrupted by ctx
 // cancellation and the loop winds down promptly.
 func TestSupervisorStopsOnCancel(t *testing.T) {
 	bin := fakeBin(t, `echo up; trap 'exit 0' INT TERM; while true; do sleep 0.1; done`)
 	ctx, cancel := context.WithCancel(context.Background())
-	var out strings.Builder
-	s := Start(ctx, Options{Server: "http://cp:8080", Bin: bin, Stdout: &out, Stderr: &out})
+	out := &syncBuffer{}
+	s := Start(ctx, Options{Server: "http://cp:8080", Bin: bin, Stdout: out, Stderr: out})
 	if s == nil {
 		t.Fatal("Start returned nil for an existing binary")
 	}
-	time.Sleep(300 * time.Millisecond) // let it spawn and print
+	// Cancel only once the sidecar has demonstrably started and its output has
+	// been captured — cancelling before it prints is what the old fixed sleep
+	// raced against under parallel package load.
+	if !waitFor(out, "[pro-engine] up", 15*time.Second) {
+		cancel()
+		t.Fatalf("sidecar stdout not prefixed/captured: %q", out.String())
+	}
 	cancel()
 	done := make(chan struct{})
 	go func() { s.Wait(10 * time.Second); close(done) }()
@@ -247,9 +317,6 @@ func TestSupervisorStopsOnCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(15 * time.Second):
 		t.Fatal("supervisor did not stop after cancel")
-	}
-	if !strings.Contains(out.String(), "[pro-engine] up") {
-		t.Errorf("sidecar stdout not prefixed/captured: %q", out.String())
 	}
 }
 

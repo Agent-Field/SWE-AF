@@ -61,7 +61,7 @@ func TestProSurfaceOffByDefault(t *testing.T) {
 	}
 	n.RegisterPlanner()
 	if toSet(n.RegisteredNames())["pro_execute"] {
-		t.Error("pro_execute registered without SWE_PRO_ENGINE — the surface must be opt-in")
+		t.Error("pro_execute registered without SWE_PRO_ENGINE — the surface must stay flag-gated")
 	}
 }
 

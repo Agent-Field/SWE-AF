@@ -136,10 +136,11 @@ func (n *Node) registerOrchestrators() {
 		CIGate:           orch.RunCIGate,
 		ApprovalGate:     orch.PlanApprovalGate,
 	}
-	// Engine opt-in (seamless path): with the flag set AND the binary present,
-	// builds and execute calls that name no execute_fn_target route per-issue
-	// coding through pro_execute on this node. Callers that pass a target keep
-	// full control. Flag-on with a missing binary degrades to the classic loop
+	// Engine default routing (seamless path): with the flag truthy AND the
+	// binary present, builds and execute calls that name no execute_fn_target
+	// route per-issue coding through pro_execute on this node. Callers that pass
+	// a target keep full control. Flag-on with a missing binary degrades to the
+	// classic loop
 	// (pro.Start logs the warning) instead of routing to a node that never
 	// joined.
 	if pro.Available() {
@@ -255,12 +256,12 @@ func (n *Node) registerIssueReasoner() {
 }
 
 // ---------------------------------------------------------------------------
-// Pro-engine surface (opt-in, swe-planner only)
+// Pro-engine surface (SWE_PRO_ENGINE-gated, swe-planner only)
 // ---------------------------------------------------------------------------
 
-// registerProReasoners wires the opt-in pro-engine adapter. Called only when
-// pro.Available(), so the default surface — and the parity test asserting it —
-// is unchanged unless SWE_PRO_ENGINE is set.
+// registerProReasoners wires the pro-engine adapter. Called only when
+// pro.Available(), so the classic surface — and the parity test asserting it —
+// is unchanged whenever SWE_PRO_ENGINE is falsy or the binary is missing.
 func (n *Node) registerProReasoners() {
 	deps := &pro.Deps{
 		Call:       newCallFn(n.App),
@@ -271,7 +272,7 @@ func (n *Node) registerProReasoners() {
 		opts := []agent.ReasonerOption{
 			agent.WithReasonerTags(tagPlanner),
 			agent.WithDescription(
-				"Pro-engine executor (opt-in): implements ONE fully-scoped issue via the " +
+				"Pro-engine executor: implements ONE fully-scoped issue via the " +
 					"bundled pro coding engine. Matches the execute_fn_target contract — " +
 					"set config.execute_fn_target to \"<node>.pro_execute\" on build/execute " +
 					"to route per-issue coding through it."),

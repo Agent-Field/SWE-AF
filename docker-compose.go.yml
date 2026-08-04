@@ -59,11 +59,12 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - GH_TOKEN=${GH_TOKEN:-}
-      # High-performance coding engine (opt-in preview). Empty = off, i.e. the
-      # classic coding loop. The public URL must be container-reachable: the
-      # engine otherwise advertises http://localhost:8801, which the control
-      # plane cannot reach from its own container.
-      - SWE_PRO_ENGINE=${SWE_PRO_ENGINE:-}
+      # High-performance coding engine, on by default (matching the af-install
+      # manifest). Export SWE_PRO_ENGINE=0 to fall back to the classic coding
+      # loop. The public URL must be container-reachable: the engine otherwise
+      # advertises http://localhost:8801, which the control plane cannot reach
+      # from its own container.
+      - SWE_PRO_ENGINE=${SWE_PRO_ENGINE:-1}
       - SWE_PRO_PUBLIC_URL=${SWE_PRO_PUBLIC_URL:-http://swe-agent-go:8801}
       - SWE_PRO_MODELS_HIGH=${SWE_PRO_MODELS_HIGH:-}
       - SWE_PRO_MODELS_LOW=${SWE_PRO_MODELS_LOW:-}

@@ -2,7 +2,7 @@
 // app.py). It builds the agent from the environment and registers the full
 // swe-planner surface — 5 orchestrators + 25 role reasoners — then serves until
 // SIGINT/SIGTERM. agent.Run installs its own signal handling, so main passes a
-// plain context; the cancellable wrapper below exists only to stop the opt-in
+// plain context; the cancellable wrapper below exists only to stop the
 // pro-engine sidecar when Run returns.
 package main
 
@@ -32,7 +32,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Opt-in pro-engine sidecar: inert unless SWE_PRO_ENGINE is truthy. The
+	// Pro-engine sidecar: inert unless SWE_PRO_ENGINE is truthy, which the
+	// af-install manifest defaults to "1" and SWE_PRO_ENGINE=0 turns off. The
 	// sidecar registers its own node on the same control plane; a missing
 	// binary logs a warning and the planner comes up as usual.
 	var sup *pro.Supervisor

@@ -1,13 +1,17 @@
-// Package pro is the opt-in "pro engine" integration: a prebuilt coding-engine
-// binary shipped alongside SWE-AF that registers on the same control plane as
-// its own node and can take over per-issue coding work. The repo vendors one
-// build per supported platform under go/bin, named swe-pro-<GOOS>-<GOARCH>;
-// ResolveBin picks the one matching the host.
+// Package pro is the "pro engine" integration: a prebuilt coding-engine binary
+// shipped alongside SWE-AF that registers on the same control plane as its own
+// node and can take over per-issue coding work. The repo vendors one build per
+// supported platform under go/bin, named swe-pro-<GOOS>-<GOARCH>; ResolveBin
+// picks the one matching the host.
 //
-// Everything in this package is inert unless SWE_PRO_ENGINE is set to a truthy
+// Everything in this package is inert unless SWE_PRO_ENGINE holds a truthy
 // value: no child process is spawned, no reasoner is registered, and the
 // default swe-planner surface (and its parity test) is byte-identical to a
-// build without this package.
+// build without this package. That gate is unchanged — what changed is who
+// sets it. The agentfield-package.yaml manifest defaults SWE_PRO_ENGINE to
+// "1", so an `af install` node runs the engine and users opt OUT with
+// SWE_PRO_ENGINE=0; a bare binary launched without the manifest still starts
+// classic, which keeps this package's default-off code path honest.
 //
 // Two surfaces, mirroring the two ways SWE-AF itself is used:
 //
@@ -37,7 +41,9 @@ import (
 // Env var surface. SWE-AF-side names only; the supervisor translates them to
 // the engine's own env contract in childEnv so callers never see engine names.
 const (
-	// EnvEnabled gates the whole package: "1"/"true"/"yes"/"on" enable it.
+	// EnvEnabled gates the whole package: "1"/"true"/"yes"/"on" enable it,
+	// anything else (notably "0" and "false") disables it. The manifest
+	// defaults it to "1", so this is the opt-OUT knob for installed nodes.
 	EnvEnabled = "SWE_PRO_ENGINE"
 	// EnvBin overrides the engine binary path.
 	EnvBin = "SWE_PRO_BIN"
@@ -80,7 +86,9 @@ var (
 	maxFastCrashes = 10
 )
 
-// Enabled reports whether the pro engine is opted in via SWE_PRO_ENGINE.
+// Enabled reports whether SWE_PRO_ENGINE holds a truthy value. Unset is false:
+// the manifest is what turns the engine on for installed nodes, so a bare
+// binary stays on the classic loop.
 func Enabled() bool {
 	switch strings.ToLower(os.Getenv(EnvEnabled)) {
 	case "1", "true", "yes", "on":
@@ -224,11 +232,11 @@ func Start(ctx context.Context, opts Options) *Supervisor {
 	if opts.Stderr == nil {
 		opts.Stderr = os.Stderr
 	}
-	// The opt-in acknowledgement: one clear line so a user who set the flag
-	// knows the engine is on, how coding routes, and how to go back.
-	log.Printf("pro engine (opt-in preview) enabled: engine node %q joins the control plane; "+
-		"builds route per-issue coding through it. Unset %s to return to the classic engine. "+
-		"The pro engine is planned to become the default in a future release.",
+	// One clear line so a user who never set the flag — the manifest turns it
+	// on for `af install` — knows the engine is on, how coding routes, and
+	// how to get back to the classic loop.
+	log.Printf("pro engine enabled: engine node %q joins the control plane; "+
+		"builds route per-issue coding through it. Set %s=0 to use the classic coding loop instead.",
 		NodeID(), EnvEnabled)
 	s := &Supervisor{done: make(chan struct{})}
 	go s.loop(ctx, bin, opts)

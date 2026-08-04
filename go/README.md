@@ -178,14 +178,15 @@ authoritative set. The per-request build config JSON (`runtime`, `models`,
 budget/iteration knobs) is byte-identical to the Python node's — see the root
 [README](../README.md) and `.env.example` for the schema and examples.
 
-## Coding engine (opt-in preview)
+## Coding engine
 
-The Go image bundles a prebuilt high-performance coding engine alongside the
-classic coding loop. It stays completely inert unless `SWE_PRO_ENGINE` is set
-to a truthy value: with it set, the node supervises the engine as a sidecar
-and routes per-issue coding through it; unset it and builds fall back to the
-classic coder → reviewer/QA loop. A missing binary is not fatal — the node
-logs a warning and keeps using the classic loop.
+The Go node bundles a prebuilt high-performance coding engine alongside the
+classic coding loop, and runs it **by default**: `agentfield-package.yaml`
+declares `SWE_PRO_ENGINE` with `default: "1"`, so an `af install` node
+supervises the engine as a sidecar and routes per-issue coding through it. Set
+`SWE_PRO_ENGINE=0` and builds use the classic coder → reviewer/QA loop
+instead. A missing binary is not fatal — the node logs a warning and keeps
+using the classic loop.
 
 Full env surface (including the `SWE_PRO_*` knobs above, model pools, and the
 sidecar's restart behaviour): [`docs/pro-engine.md`](docs/pro-engine.md).

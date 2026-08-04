@@ -1,15 +1,31 @@
-# Pro engine (opt-in preview)
+# Pro engine
 
-The Go node can run an optional high-performance coding engine, shipped as
-prebuilt binaries — one per supported platform, vendored at `go/bin` as
+The Go node runs a high-performance coding engine, shipped as prebuilt
+binaries — one per supported platform, vendored at `go/bin` as
 `swe-pro-darwin-arm64` and `swe-pro-linux-amd64`, because one checkout is
 installed on macOS and Linux alike and the node picks the matching build at
-startup. It is **off by default**: without the opt-in flag the node
-registers exactly the same reasoner surface as before, spawns no extra
-process, and every existing integration — reasoner calls, cron triggers,
-`execute_fn_target` overrides — behaves identically.
+startup.
 
-## Opting in
+It is **on by default** for nodes installed with `af install`:
+`agentfield-package.yaml` declares `SWE_PRO_ENGINE` with `default: "1"`, and
+the installer's env resolver injects that into the node process. Turning it
+off is a one-variable change and every existing integration — reasoner calls,
+cron triggers, `execute_fn_target` overrides — behaves identically either way.
+
+The gate itself is still purely the env var, so a binary launched outside the
+`af` runner (a bare `swe-planner`, a container that sets nothing) starts on the
+classic loop.
+
+## Opting out
+
+```sh
+SWE_PRO_ENGINE=0 swe-planner        # classic coder → reviewer/QA loop
+```
+
+`0`, `false`, `off`, and any other non-truthy value disable it; only
+`1`/`true`/`yes`/`on` (case-insensitive) enable it.
+
+## Opting back in explicitly
 
 ```sh
 SWE_PRO_ENGINE=1 \
@@ -18,7 +34,7 @@ swe-planner
 ```
 
 On startup the node logs an acknowledgement that the engine is enabled and how
-to switch back. Two things change, both additive:
+to switch back. Two things differ from the classic loop, both additive:
 
 1. **Engine node.** A supervised sidecar registers on the same control plane
    as its own node (default id `swe-pro`) exposing:
@@ -52,7 +68,7 @@ what keeps a macOS install from exec'ing the Linux build.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SWE_PRO_ENGINE` | unset | Truthy value opts in (`1`/`true`/`yes`/`on`) |
+| `SWE_PRO_ENGINE` | `1` via the manifest (unset = off for a bare binary) | Truthy (`1`/`true`/`yes`/`on`) enables; `0`/`false` opts out |
 | `SWE_PRO_BIN` | `/usr/local/bin/swe-pro`, else a `swe-pro-<GOOS>-<GOARCH>` / `swe-pro` sibling | Engine binary path (authoritative when set) |
 | `SWE_PRO_NODE_ID` | `swe-pro` | Engine's control-plane node id |
 | `SWE_PRO_PORT` | `8801` | Engine's listen port |
@@ -89,7 +105,7 @@ past the longest single issue you expect, or bound engine runs with
 
 ## Rollout
 
-The pro engine is an opt-in preview. It is planned to become the default in a
-future release; at that point the classic coding loop remains available by
-setting `SWE_PRO_ENGINE=0`. Existing reasoner names and input/output shapes
-are stable across the swap.
+The pro engine is the default for `af install` nodes as of this release. The
+classic coding loop remains fully supported and is one variable away
+(`SWE_PRO_ENGINE=0`); existing reasoner names and input/output shapes are
+identical either way, so switching costs nothing but a restart.

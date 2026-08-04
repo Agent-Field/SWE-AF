@@ -77,8 +77,8 @@ func ExecuteHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 	if in.ExecuteFnTarget == "" && deps.DefaultExecuteFnTarget != "" {
 		in.ExecuteFnTarget = deps.DefaultExecuteFnTarget
 		deps.Note(ctx, fmt.Sprintf(
-			"pro engine (opt-in preview): per-issue coding routed via %s — unset SWE_PRO_ENGINE to use the classic coding loop",
-			in.ExecuteFnTarget), "pro", "opt-in")
+			"pro engine: per-issue coding routed via %s — set SWE_PRO_ENGINE=0 to use the classic coding loop",
+			in.ExecuteFnTarget), "pro", "default")
 	}
 	var executeFn dag.ExecuteFn
 	if in.ExecuteFnTarget != "" {

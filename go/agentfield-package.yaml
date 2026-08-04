@@ -52,8 +52,12 @@ user_environment:
       description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash)
     - name: SWE_PRO_ENGINE
       description: >-
-        Opt in to the high-performance coding engine preview (1/true/yes/on).
-        Off by default; unset it to return to the classic coding loop.
+        High-performance coding engine. On by default — set it to 0 (or false)
+        to use the classic coding loop instead.
+      # The resolver injects this last unless the process env or a stored
+      # secret overrides it, so an `af install` gets the engine without asking
+      # and `SWE_PRO_ENGINE=0 af run` still opts out.
+      default: "1"
     - name: SWE_PRO_VARIANT
       description: Engine reasoning-effort variant (low | high) — unset keeps the engine default
     - name: SWE_PRO_MAX_COST
