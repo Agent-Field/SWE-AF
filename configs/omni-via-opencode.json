@@ -1,0 +1,15 @@
+{
+  "runtime": "open_code",
+  "models": {
+    "default": "omni/codex-terra",
+    "pm": "omni/codex-terra",
+    "architect": "omni/codex-terra",
+    "tech_lead": "omni/codex-terra",
+    "coder": "omni/codex-sol",
+    "code_reviewer": "omni/claude-sonnet-4-6",
+    "qa": "omni/claude-haiku-4-5",
+    "verifier": "omni/claude-sonnet-4-6",
+    "git": "omni/claude-haiku-4-5"
+  },
+  "enable_learning": true
+}

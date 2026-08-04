@@ -64,9 +64,11 @@ ENV PATH="/root/.opencode/bin:${PATH}"
 # Default HARNESS_MODEL inside the image so a fresh container with no
 # env override has *some* value to interpolate. Railway / docker-compose
 # overrides win because their env injects after the image's ENV.
-ENV HARNESS_MODEL=openrouter/moonshotai/kimi-k2.6
+# Use 9router/claude-sonnet-4-6 as default since the bundled opencode.json
+# (mounted by compose.override.yml) defines only the 9router provider.
+ENV HARNESS_MODEL=9router/claude-sonnet-4-6
 RUN mkdir -p /root/.config/opencode && \
-    echo '{"$schema":"https://opencode.ai/config.json","model":"{env:HARNESS_MODEL}","small_model":"{env:HARNESS_MODEL}","provider":{"openrouter":{"options":{"apiKey":"{env:OPENROUTER_API_KEY}"}}}}' \
+    echo '{"$schema":"https://opencode.ai/config.json","model":"{env:HARNESS_MODEL}","small_model":"{env:HARNESS_MODEL}","provider":{"9router":{"options":{"baseURL":"http://10.20.10.133:20128/v1","apiKey":"{env:ROUTER_API_KEY}"}}}}' \
     > /root/.config/opencode/opencode.json
 
 # Git identity — env vars take highest precedence and are inherited by all
@@ -101,6 +103,13 @@ EXPOSE 8003
 ENV PORT=8003 \
     AGENTFIELD_SERVER=http://control-plane:8080 \
     NODE_ID=swe-planner
+
+# Fail fast on a misconfigured HARNESS_MODEL provider before starting the app
+# (see docker/entrypoint.sh). Keeps the container from "hanging" at git_init
+# when HARNESS_MODEL points at an unconfigured opencode provider.
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1

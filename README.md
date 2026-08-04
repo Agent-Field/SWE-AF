@@ -258,6 +258,116 @@ curl -X POST https://<control-plane>.up.railway.app/api/v1/execute/async/swe-pla
   -d '{"input": {"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}}'
 ```
 
+### 9Router + OpenCode Runtime (Local Docker)
+
+This setup uses the **9Router** LLM gateway (`http://10.20.10.133:20128/v1`) with the **OpenCode** runtime for a fully local, open-source stack. The Docker image bundles an `opencode.json` with only the `9router` provider configured, and a fail-fast entrypoint validates `HARNESS_MODEL` at container startup to prevent silent 300s hangs.
+
+**1. Prerequisites**
+- Ubuntu 24.04 (or compatible) host
+- Docker + Docker Compose v2
+- 9Router gateway running at `http://10.20.10.133:20128` with `claude-sonnet-4-6` available (verify with `curl -H "Authorization: Bearer $ROUTER_API_KEY" http://10.20.10.133:20128/v1/models | jq '.data[].id' | grep claude-sonnet-4-6`)
+
+**2. Configure Environment**
+
+```bash
+cd /opt/swe-af
+cp .env.example .env
+```
+
+Edit `.env` and set:
+
+```bash
+# Required: 9Router API key (same as OMNI_API_KEY)
+OMNI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx
+
+# Required: GitHub token for PR workflow (repo scope)
+GH_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+
+# Runtime & model selection
+SWE_DEFAULT_RUNTIME=open_code
+SWE_DEFAULT_MODEL=9router/claude-sonnet-4-6
+
+# Codex auth mode (irrelevant for open_code, but harmless)
+SWE_CODEX_AUTH_MODE=chatgpt
+```
+
+**3. Deploy**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --build
+```
+
+The override file mounts:
+- `/opt/swe-af-data/config/opencode.json` → `/root/.config/opencode/opencode.json:ro` (host config wins over image default)
+- `/opt/swe-af-data/test-repos` → `/opt/swe-af-data/test-repos` (test repositories accessible inside containers)
+- Host OpenCode binary read-only at `/usr/local/bin/opencode`
+- `ROUTER_API_KEY=${OMNI_API_KEY:-}` injected into both `swe-agent` and `swe-fast`
+
+**4. Verify Health**
+
+```bash
+# Control plane
+curl http://10.20.10.103:5080/health
+# {"status":"healthy","node_id":"control-plane"}
+
+# swe-agent (planner)
+curl http://127.0.0.1:5803/health
+
+# swe-fast
+curl http://127.0.0.1:5804/health
+```
+
+**5. Trigger a Fast Build (Local Repo)**
+
+```bash
+./scripts/run-fast.sh \
+  --repo-path /opt/swe-af-data/test-repos/swe-af-smoke-test \
+  --goal 'Add a /health endpoint' \
+  --profile configs/opencode-balanced.json
+```
+
+Or via raw HTTP:
+
+```bash
+curl -X POST http://10.20.10.103:5080/api/v1/execute/async/swe-fast.build \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "goal": "Add a /health endpoint",
+      "repo_path": "/opt/swe-af-data/test-repos/swe-af-smoke-test",
+      "config": {
+        "runtime": "open_code",
+        "models": { "default": "9router/claude-sonnet-4-6" }
+      }
+    }
+  }'
+```
+
+**6. Trigger a Full Planner Build (Remote Repo + PR)**
+
+```bash
+curl -X POST http://10.20.10.103:5080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "goal": "Add JWT auth to all API endpoints",
+      "repo_url": "https://github.com/user/my-project",
+      "config": {
+        "runtime": "open_code",
+        "models": { "default": "9router/claude-sonnet-4-6" }
+      }
+    }
+  }'
+```
+
+**Expected Baseline Timing (on this hardware):**
+- `run_git_init`: ~100–260s
+- `fast_plan_tasks`: ~35–40s
+- Each `run_coder` task: ~100–120s
+- Full `swe-fast.build`: ~5–7 minutes, 6/6 tests passing
+
+---
+
 ### 1. Requirements (local)
 
 - Python 3.12+
@@ -507,6 +617,8 @@ Benchmark assets, logs, evaluator, and generated projects live in [`examples/age
 
 ## Docker
 
+### Default (Claude Runtime)
+
 ```bash
 cp .env.example .env
 # Add your API key: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
@@ -529,49 +641,118 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   }
 }
 JSON
-
-# With open-source runtime (set OPENROUTER_API_KEY in .env)
-curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
-  -H "Content-Type: application/json" \
-  -d @- <<'JSON'
-{
-  "input": {
-    "goal": "Add JWT auth",
-    "repo_url": "https://github.com/user/my-repo",
-    "config": {
-      "runtime": "open_code",
-      "models": {
-        "default": "openrouter/minimax/minimax-m2.5"
-      }
-    }
-  }
-}
-JSON
-
-# Local workspace mode (repo_path)
-curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
-  -H "Content-Type: application/json" \
-  -d @- <<'JSON'
-{
-  "input": {
-    "goal": "Add JWT auth",
-    "repo_path": "/workspaces/my-repo"
-  }
-}
-JSON
 ```
 
-Scale workers:
+### 9Router + OpenCode Runtime (Recommended Local Stack)
+
+This configuration uses the **9Router LLM gateway** with the **OpenCode runtime** for a fully local, open-source stack. The Docker image bundles an `opencode.json` with only the `9router` provider configured, and a fail-fast entrypoint validates `HARNESS_MODEL` at container startup to prevent silent 300s hangs.
+
+**1. Configure Environment**
+
+```bash
+cd /opt/swe-af
+cp .env.example .env
+```
+
+Edit `.env` and set:
+
+```bash
+# Required: 9Router API key
+OMNI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx
+
+# Required: GitHub token for PR workflow (repo scope)
+GH_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+
+# Runtime & model selection
+SWE_DEFAULT_RUNTIME=open_code
+SWE_DEFAULT_MODEL=9router/claude-sonnet-4-6
+```
+
+**2. Deploy with Override**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --build
+```
+
+The override file (`docker-compose.override.yml`) mounts:
+- `/opt/swe-af-data/config/opencode.json` → `/root/.config/opencode/opencode.json:ro` (host config wins over image default)
+- `/opt/swe-af-data/test-repos` → `/opt/swe-af-data/test-repos` (test repositories accessible inside containers)
+- Host OpenCode binary read-only at `/usr/local/bin/opencode`
+- `ROUTER_API_KEY=${OMNI_API_KEY:-}` injected into both `swe-agent` and `swe-fast`
+
+**3. Verify Health**
+
+```bash
+# Control plane (exposed via NPM at swe.go7s.net → 10.20.10.103:5080)
+curl http://10.20.10.103:5080/health
+
+# swe-agent (planner) — loopback only
+curl http://127.0.0.1:5803/health
+
+# swe-fast — loopback only
+curl http://127.0.0.1:5804/health
+```
+
+**4. Trigger a Fast Build (Local Repo)**
+
+```bash
+./scripts/run-fast.sh \
+  --repo-path /opt/swe-af-data/test-repos/swe-af-smoke-test \
+  --goal 'Add a /health endpoint' \
+  --profile configs/opencode-balanced.json
+```
+
+**5. Trigger a Full Planner Build (Remote Repo + PR)**
+
+```bash
+curl -X POST http://10.20.10.103:5080/api/v1/execute/async/swe-planner.build \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "goal": "Add JWT auth to all API endpoints",
+      "repo_url": "https://github.com/user/my-project",
+      "config": {
+        "runtime": "open_code",
+        "models": { "default": "9router/claude-sonnet-4-6" }
+      }
+    }
+  }'
+```
+
+### Scale Workers
 
 ```bash
 docker compose up --scale swe-agent=3 -d
 ```
 
-Use a host control plane instead of Docker control-plane service:
+### Use a Host Control Plane Instead of Docker Control-Plane Service
 
 ```bash
 docker compose -f docker-compose.local.yml up -d
 ```
+
+### Troubleshooting: HARNESS_MODEL Provider Mismatch
+
+**Symptom:** `run_git_init` hangs for ~300s then returns `success=false`, stalling the entire pipeline. Logs show no clear error from the model call.
+
+**Root Cause:** `HARNESS_MODEL` points at a provider that isn't defined in `/root/.config/opencode/opencode.json` (e.g., `omni/codex-terra` when only `9router` and `openrouter` are configured). OpenCode's subprocess waits out the full runner timeout (default 300s) per call before failing.
+
+**Fix:** The Docker image now includes a fail-fast entrypoint (`docker/entrypoint.sh`) that validates the provider prefix at container startup and exits immediately with a clear error:
+
+```
+ERROR: HARNESS_MODEL='omni/codex-terra' references provider 'omni'
+       which is not defined in /root/.config/opencode/opencode.json.
+       Set HARNESS_MODEL to a provider/model defined there, e.g.
+       9router/claude-sonnet-4-6  (9Router backend)
+       openrouter/<model>          (OpenRouter)
+```
+
+To resolve:
+1. Ensure `.env` sets `HARNESS_MODEL=9router/claude-sonnet-4-6` (or your chosen provider/model)
+2. Ensure the mounted `/opt/swe-af-data/config/opencode.json` defines that provider
+3. Rebuild: `docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --build`
+
+**Verification:** After fix, `run_git_init` completes in ~100–260s with `success=true`.
 
 ## GitHub Repo Workflow (Clone -> Build -> PR)
 

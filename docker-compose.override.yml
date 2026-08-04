@@ -1,0 +1,74 @@
+services:
+  control-plane:
+    ports: !override
+      - "10.20.10.103:5080:8080"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  build-db:
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  swe-agent:
+    command: ["python", "-m", "swe_af"]
+    ports: !override
+      - "127.0.0.1:5803:8003"
+    volumes: !override
+      - /opt/swe-af:/app:ro
+      - workspaces:/workspaces
+      - /opt/swe-af-data/test-repos:/opt/swe-af-data/test-repos
+      - ${HOME}/.codex:/root/.codex:ro
+      - /opt/swe-af-data/config/opencode.json:/root/.config/opencode/opencode.json:ro
+      - ${HOME}/.opencode/bin/opencode:/usr/local/bin/opencode:ro
+    restart: unless-stopped
+    environment:
+      - PYTHONPATH=/app
+      - ROUTER_API_KEY=${OMNI_API_KEY:-}
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  swe-fast:
+    command: ["python", "-m", "swe_af.fast"]
+    ports: !override
+      - "127.0.0.1:5804:8004"
+    volumes: !override
+      - /opt/swe-af:/app:ro
+      - workspaces:/workspaces
+      - /opt/swe-af-data/test-repos:/opt/swe-af-data/test-repos
+      - ${HOME}/.codex:/root/.codex:ro
+      - /opt/swe-af-data/config/opencode.json:/root/.config/opencode/opencode.json:ro
+      - ${HOME}/.opencode/bin/opencode:/usr/local/bin/opencode:ro
+    restart: unless-stopped
+    environment:
+      - PYTHONPATH=/app
+      - ROUTER_API_KEY=${OMNI_API_KEY:-}
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+volumes:
+  agentfield-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/swe-af-data/agentfield
+  workspaces:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/swe-af-data/workspaces

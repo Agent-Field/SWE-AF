@@ -1,0 +1,15 @@
+{
+  "runtime": "open_code",
+  "models": {
+    "default": "9router/claude-sonnet-4-6",
+    "pm": "9router/claude-sonnet-4-6",
+    "architect": "9router/claude-sonnet-4-6",
+    "tech_lead": "9router/claude-sonnet-4-6",
+    "coder": "9router/claude-sonnet-4-6",
+    "code_reviewer": "9router/claude-sonnet-4-6",
+    "qa": "9router/claude-sonnet-4-6",
+    "verifier": "9router/claude-sonnet-4-6",
+    "git": "9router/claude-sonnet-4-6"
+  },
+  "enable_learning": true
+}

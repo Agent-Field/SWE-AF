@@ -1,0 +1,7 @@
+{
+  "runtime": "codex",
+  "models": {
+    "default": "gpt-5.5"
+  },
+  "enable_learning": true
+}

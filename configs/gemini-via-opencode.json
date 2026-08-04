@@ -1,0 +1,13 @@
+{
+  "runtime": "open_code",
+  "models": {
+    "default": "9router/Gemini-Flash",
+    "pm": "9router/Gemini-Flash",
+    "architect": "9router/Gemini-Flash",
+    "coder": "9router/Gemini-Flash",
+    "code_reviewer": "9router/Gemini-Flash",
+    "qa": "9router/Gemini-Flash",
+    "verifier": "9router/Gemini-Flash"
+  },
+  "enable_learning": true
+}

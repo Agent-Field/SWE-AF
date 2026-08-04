@@ -1,0 +1,12 @@
+{
+  "runtime": "claude_code",
+  "models": {
+    "default": "sonnet",
+    "architect": "opus",
+    "coder": "sonnet",
+    "code_reviewer": "sonnet",
+    "qa": "haiku",
+    "verifier": "sonnet"
+  },
+  "enable_learning": true
+}
