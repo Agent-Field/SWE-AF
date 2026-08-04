@@ -4,6 +4,18 @@ version: 0.1.0
 description: SWE planning/execution agent node (plans and executes software-engineering tasks)
 author: Agent-Field
 
+# The Go node in go/ is the maintained SWE node: same reasoners, same
+# interface, one static binary, and it ships the coding engine. Installing this
+# repo installs that instead, and replaces an existing swe-planner — so
+# `af install https://github.com/Agent-Field/SWE-AF` is the one thing a user
+# has to know, before and after the switch.
+#
+# This manifest stays here as the redirect, so the Python node is still what
+# `python -m swe_af` and the Docker images run. The redirect is a git-install
+# behaviour only: to install this node deliberately, clone the repo and install
+# the checkout as a local path.
+superseded_by: https://github.com/Agent-Field/SWE-AF//go
+
 entrypoint:
   start: python -m swe_af
   healthcheck: /health
