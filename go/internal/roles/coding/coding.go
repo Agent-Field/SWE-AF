@@ -494,19 +494,34 @@ func RunQASynthesizer(ctx context.Context, deps *Deps, input map[string]any) (an
 	}, nil
 }
 
-// mapSynthModel maps the short role model alias (haiku/sonnet/opus, the coding
-// loop's cfg.QASynthesizerModel() default is "haiku") to a provider-qualified
-// model id when the direct-LLM client targets OpenRouter — its OpenAI-compatible
-// endpoint has no "haiku" model, so an unmapped alias 400s. Ids already carrying
-// a "/" (already provider-qualified) pass through unchanged, and when the client
-// is not OpenRouter (OpenAI-compatible or no key configured) the alias is left
-// as-is. The OpenRouter decision is re-derived from the same env ai.DefaultConfig
-// reads, matching the AIConfig wired onto the agent in node.BuildAgent.
+// mapSynthModel translates a role model id for the direct-LLM client. Two
+// translations, both only when that client targets OpenRouter:
+//
+//   - Short aliases (haiku/sonnet/opus — cfg.QASynthesizerModel() defaults to
+//     "haiku") become provider-qualified ids, because OpenRouter's
+//     OpenAI-compatible endpoint has no "haiku" model and 400s on an unmapped
+//     alias.
+//   - A leading "openrouter/" is stripped. Model ids are LiteLLM-style
+//     throughout this repo's config — config.openRouterAutoDefaultModel is
+//     "openrouter/deepseek/deepseek-v4-flash", which is exactly right for the
+//     open_code harness runtime — but OpenRouter's own API names that model
+//     "deepseek/deepseek-v4-flash" and rejects the routing prefix with a 400.
+//     The harness path keeps the prefix; only this direct boundary drops it.
+//
+// Other ids carrying a "/" are already in OpenRouter's namespace and pass
+// through. When the client is not OpenRouter (OpenAI-compatible or no key
+// configured) nothing is rewritten — including the prefix, which is meaningful
+// to a LiteLLM-style proxy. The OpenRouter decision is re-derived from the same
+// env ai.DefaultConfig reads, matching the AIConfig wired onto the agent in
+// node.BuildAgent.
 func mapSynthModel(model string) string {
-	if strings.Contains(model, "/") {
+	if !ai.DefaultConfig().IsOpenRouter() {
 		return model
 	}
-	if !ai.DefaultConfig().IsOpenRouter() {
+	if stripped, ok := strings.CutPrefix(model, "openrouter/"); ok {
+		return stripped
+	}
+	if strings.Contains(model, "/") {
 		return model
 	}
 	switch model {

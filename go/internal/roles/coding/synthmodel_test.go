@@ -25,7 +25,12 @@ func TestMapSynthModelOpenRouter(t *testing.T) {
 		"anthropic/claude-x":     "anthropic/claude-x", // already qualified -> passthrough
 		"deepseek/deepseek-chat": "deepseek/deepseek-chat",
 		"some-unknown-alias":     "some-unknown-alias", // unknown, no "/" -> passthrough
-		"openrouter/z-ai/glm-5":  "openrouter/z-ai/glm-5",
+		// LiteLLM-style ids carry an "openrouter/" routing prefix that
+		// OpenRouter's own API rejects with a 400. This is the id
+		// config.openRouterAutoDefaultModel hands every role on an
+		// OpenRouter-only install, so the direct client must drop the prefix.
+		"openrouter/deepseek/deepseek-v4-flash": "deepseek/deepseek-v4-flash",
+		"openrouter/z-ai/glm-5":                 "z-ai/glm-5",
 	}
 	for in, want := range cases {
 		if got := mapSynthModel(in); got != want {
@@ -48,5 +53,13 @@ func TestMapSynthModelNonOpenRouter(t *testing.T) {
 	// A "/" id still passes through unchanged.
 	if got := mapSynthModel("anthropic/claude-x"); got != "anthropic/claude-x" {
 		t.Errorf("qualified id must pass through, got %q", got)
+	}
+	// The "openrouter/" prefix is stripped ONLY for an OpenRouter client. To
+	// anything else — a LiteLLM-style proxy behind AI_BASE_URL, say — the
+	// prefix is the routing instruction, so removing it would send the request
+	// to the wrong provider.
+	const prefixed = "openrouter/deepseek/deepseek-v4-flash"
+	if got := mapSynthModel(prefixed); got != prefixed {
+		t.Errorf("mapSynthModel(%q) = %q, want passthrough — the prefix is only stripped for OpenRouter", prefixed, got)
 	}
 }
