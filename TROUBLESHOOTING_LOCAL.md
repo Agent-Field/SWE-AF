@@ -29,3 +29,35 @@ docker logs swe-af-swe-fast-1 --tail 20
 **Verification:** `run_git_init` completes in ~100–260s with `success=true`, and the full pipeline progresses to plan → coder → verifier → finalize.
 
 **Aug 2026 hardening:** The Docker image now includes `docker/entrypoint.sh` that validates `HARNESS_MODEL` at container startup. If the provider prefix isn't defined in `opencode.json`, the container exits immediately with exit code 2 and a clear error message, instead of silently hanging. See `Dockerfile` lines 110-112 and `.debug-journal.md` for the original incident (2026-08-04).
+
+## Build aborts with "Build timed out after 600s"
+
+**Symptom:** Multi-task fast build (3+ tasks) finishes all sub-stages but the root execution aborts with `Build timed out after 600s`, status `succeeded` but `success=false`.
+
+**Root cause:** `FastBuildConfig.build_timeout_seconds` default was 600, which is shorter than a typical 4-task pipeline on 9Router+OpenCode (~955s: 175s git_init + 100s plan + 680s coder tasks).
+
+**Fix:** Default raised to **1800s** in commit `2755a1e` (`swe_af/fast/schemas.py`). Rebuild `swe-fast` image to pick up the new default. Per-build overrides still work via the request config:
+
+```json
+{
+  "input": {
+    "goal": "...",
+    "repo_path": "...",
+    "config": {
+      "runtime": "open_code",
+      "models": {"default": "9router/claude-sonnet-4-6"},
+      "build_timeout_seconds": 3600
+    }
+  }
+}
+```
+
+**Verification:** 3–6 task pipelines now complete within the 1800s window on 9Router.
+
+## QA synthesizer fails: 'QASynthesisResult' object has no attribute 'parsed'
+
+**Symptom:** In a multi-iteration planner build, the QA synthesizer step raises `AttributeError: 'QASynthesisResult' object has no attribute 'parsed'` and falls back to a deterministic decision.
+
+**Root cause:** AgentField SDK's `router.ai(..., schema=...)` returns the parsed Pydantic model directly, not a wrapper with `.parsed`. SWE-AF was written for the older wrapper.
+
+**Fix:** Issue #113 fixed in `swe_af/reasoners/execution_agents.py` (commit `5a32796`) using `getattr(result, "parsed", result)`. Handles both old and new SDK versions. Rebuild the swe-fast image after pulling.
