@@ -60,3 +60,43 @@ func TestResolveBinSiblingOrder(t *testing.T) {
 		t.Fatalf("ResolveBin() = (%q, %v), want (%q, nil)", got, err, suffixed)
 	}
 }
+
+func TestResolveDaemonBin(t *testing.T) {
+	dir := t.TempDir()
+	runnableDaemon := filepath.Join(dir, "furrowd")
+	if err := os.WriteFile(runnableDaemon, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvDaemonBin, runnableDaemon)
+	if got, err := ResolveDaemonBin(); err != nil || got != runnableDaemon {
+		t.Fatalf("ResolveDaemonBin() = (%q, %v), want (%q, nil)", got, err, runnableDaemon)
+	}
+
+	missing := filepath.Join(dir, "missing")
+	t.Setenv(EnvDaemonBin, missing)
+	if got, err := ResolveDaemonBin(); err == nil || got != "" {
+		t.Fatalf("ResolveDaemonBin() with authoritative missing override = (%q, %v)", got, err)
+	}
+}
+
+func TestResolveDaemonBinSiblingOrder(t *testing.T) {
+	if runnable(DefaultDaemonBin) {
+		t.Skipf("%s exists and precedes sibling binaries", DefaultDaemonBin)
+	}
+	t.Setenv(EnvDaemonBin, "")
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "furrowd")
+	suffixed := filepath.Join(dir, "furrowd-"+runtime.GOOS+"-"+runtime.GOARCH)
+	for _, path := range []string{plain, suffixed} {
+		if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := osExecutable
+	osExecutable = func() (string, error) { return filepath.Join(dir, "swe-af"), nil }
+	t.Cleanup(func() { osExecutable = original })
+	got, err := ResolveDaemonBin()
+	if err != nil || got != suffixed {
+		t.Fatalf("ResolveDaemonBin() = (%q, %v), want (%q, nil)", got, err, suffixed)
+	}
+}

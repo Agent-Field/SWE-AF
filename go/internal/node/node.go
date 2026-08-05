@@ -168,6 +168,9 @@ func buildFurrowManager() furrow.Attacher {
 	if !m.Enabled() {
 		return nil
 	}
+	// furrowd is a best-effort sidecar. Its supervisor is silent unless the
+	// manager, public-address, and binary gates are all open.
+	furrow.NewSupervisor(m).Start(context.Background())
 	maxAge := time.Duration(envInt64("SWE_FURROW_TTL_HOURS", 72)) * time.Hour
 	maxBytes := envInt64("SWE_FURROW_MAX_GB", 20) * 1024 * 1024 * 1024
 	go sweepFurrow(m, maxAge, maxBytes)
