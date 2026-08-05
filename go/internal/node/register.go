@@ -54,6 +54,7 @@ const (
 func (n *Node) RegisterPlanner() {
 	n.registerRoles()
 	n.registerOrchestrators()
+	n.registerWorkspaceHandleReasoner()
 	n.registerIssueReasoner()
 	if pro.Available() {
 		n.registerProReasoners()
@@ -135,6 +136,7 @@ func (n *Node) registerOrchestrators() {
 		AgentFieldServer: n.AgentFieldServer,
 		CIGate:           orch.RunCIGate,
 		ApprovalGate:     orch.PlanApprovalGate,
+		Furrow:           n.Furrow,
 	}
 	// Engine default routing (seamless path): with the flag truthy AND the
 	// binary present, builds and execute calls that name no execute_fn_target
@@ -170,6 +172,29 @@ func (n *Node) registerOrchestrators() {
 		}
 		regHandler(n, name, deps, h, opts...)
 	}
+}
+
+// registerWorkspaceHandleReasoner exposes connection details for a workspace
+// only when furrow discovered and attached one for the requested run.
+func (n *Node) registerWorkspaceHandleReasoner() {
+	name := "get_workspace_handle"
+	n.registered = append(n.registered, name)
+	n.App.RegisterReasoner(name, func(_ context.Context, input map[string]any) (any, error) {
+		runID, _ := input["run_id"].(string)
+		if runID == "" || n.Furrow == nil {
+			return map[string]any{"available": false}, nil
+		}
+		handle := n.Furrow.Handle(runID)
+		if handle == nil {
+			return map[string]any{"available": false}, nil
+		}
+		data, _ := json.Marshal(handle)
+		result := map[string]any{}
+		_ = json.Unmarshal(data, &result)
+		return result, nil
+	}, agent.WithReasonerTags("entrypoint"), agent.WithDescription(
+		"Returns connection details for cloning a run's live workspace. Route here when a caller needs to clone or follow an active build workspace."),
+		agent.WithInputSchema(schema(`{"type":"object","additionalProperties":true,"required":["run_id"],"properties":{"run_id":{"type":"string"}}}`)))
 }
 
 // orchestratorDescriptions mirrors the Python side: build's explicit

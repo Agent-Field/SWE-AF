@@ -148,6 +148,12 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	}
 	manifestMap := dumpToMap(manifest)
 
+	workspaceHandle := deps.furrowAttach(scopeID, buildID, repoPath)
+	if workspaceHandle != nil {
+		deps.Note(ctx, fmt.Sprintf("Workspace mirror ready (namespace=%s)", workspaceHandle.Namespace),
+			"build", "furrow")
+	}
+
 	// 1. PLAN + GIT INIT (concurrent — no data dependency).
 	deps.Note(ctx, "Phase 1: Planning + Git init (parallel)", "build", "parallel")
 
@@ -488,6 +494,10 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		CIGateResults: ciGateResults,
 	}
 	buildResultMap := dumpToMap(buildResult)
+	deps.furrowPublish(scopeID, "build complete")
+	if workspaceHandle != nil {
+		buildResultMap["workspace_handle"] = dumpToMap(workspaceHandle)
+	}
 
 	// Empty-build guard: nothing shipped AND verification failed → report failed.
 	// Return the SDK's result-carrying &agent.ReasonerFailed so the async handler

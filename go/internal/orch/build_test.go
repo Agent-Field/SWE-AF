@@ -8,11 +8,33 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
 	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
+
+type fakeFurrow struct {
+	handle       *furrow.Handle
+	attachErr    error
+	attachedPath string
+	publishes    []string
+}
+
+func (f *fakeFurrow) Enabled() bool { return true }
+func (f *fakeFurrow) Attach(_, _, repoPath string) (*furrow.Handle, error) {
+	f.attachedPath = repoPath
+	return f.handle, f.attachErr
+}
+func (f *fakeFurrow) Publish(_ string, label string) error {
+	f.publishes = append(f.publishes, label)
+	return errors.New("ignored publish failure")
+}
+func (f *fakeFurrow) Handle(string) *furrow.Handle            { return f.handle }
+func (f *fakeFurrow) Detach(string) error                     { return nil }
+func (f *fakeFurrow) Sweep(time.Duration, int64) (int, error) { return 0, nil }
 
 // buildHandler routes mock reasoner responses by target suffix. Overridable
 // per-reasoner via the exec/verify hooks.
@@ -144,6 +166,63 @@ func TestBuildVerifiedSuccess(t *testing.T) {
 	}
 	if !asBool(out.(map[string]any)["success"]) {
 		t.Fatal("success should be true")
+	}
+}
+
+func TestBuildWorkspaceHandleAvailability(t *testing.T) {
+	defer withExecCtx("run-furrow", "exec-furrow")()
+	exec := func(map[string]any) map[string]any {
+		return map[string]any{
+			"completed_issues": []any{map[string]any{"name": "i1"}},
+			"merged_branches":  []any{"issue/x"},
+			"all_issues":       []any{map[string]any{"name": "i1"}},
+			"failed_issues":    []any{}, "skipped_issues": []any{}, "accumulated_debt": []any{},
+		}
+	}
+	verify := func(map[string]any) map[string]any {
+		return map[string]any{"passed": true, "criteria_results": []any{}, "summary": "ok"}
+	}
+
+	tests := []struct {
+		name       string
+		attacher   *fakeFurrow
+		wantHandle bool
+	}{
+		{name: "available", attacher: &fakeFurrow{handle: &furrow.Handle{
+			Version: 1, Remote: "dir:/mirror", Namespace: "run-furrow", Key: "secret-key",
+		}}, wantHandle: true},
+		{name: "unavailable", attacher: &fakeFurrow{}},
+		{name: "attach error", attacher: &fakeFurrow{attachErr: errors.New("attach failed")}},
+		{name: "nil dependency"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &mockApp{handler: buildHandler(exec, verify)}
+			deps := &Deps{App: app, NodeID: "swe-planner"}
+			if tc.attacher != nil {
+				deps.Furrow = tc.attacher
+			}
+			out, err := Build(context.Background(), deps, map[string]any{
+				"goal": "thing", "repo_path": t.TempDir(),
+				"config": map[string]any{"git_init_max_retries": 1},
+			})
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			result := out.(map[string]any)
+			_, gotHandle := result["workspace_handle"]
+			if gotHandle != tc.wantHandle {
+				t.Fatalf("workspace_handle present = %v, want %v", gotHandle, tc.wantHandle)
+			}
+			if tc.attacher != nil && len(tc.attacher.publishes) != 1 {
+				t.Fatalf("publishes = %v, want build completion", tc.attacher.publishes)
+			}
+			for _, note := range app.notes {
+				if strings.Contains(note, "secret-key") {
+					t.Fatalf("note leaked workspace key: %q", note)
+				}
+			}
+		})
 	}
 }
 

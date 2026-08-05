@@ -7,10 +7,11 @@ import (
 	"strings"
 )
 
-// harnessMetadataPatterns are the directories the build harness writes INTO the
-// target repository: the plan/issue/checkpoint artifacts and the per-issue
-// worktrees. They are ours, not the user's work.
-var harnessMetadataPatterns = []string{".artifacts/", ".worktrees/"}
+// harnessMetadataPatterns are the files and directories the build harness
+// writes INTO the target repository: the plan/issue/checkpoint artifacts, the
+// per-issue worktrees, and the furrow capture policy. They are ours, not the
+// user's work.
+var harnessMetadataPatterns = []string{".artifacts/", ".worktrees/", ".furrowpolicy"}
 
 // excludeHarnessMetadata keeps the harness's own bookkeeping out of the target
 // repository's git view.

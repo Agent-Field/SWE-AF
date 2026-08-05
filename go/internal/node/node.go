@@ -12,15 +12,21 @@ package node
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 	"github.com/Agent-Field/agentfield/sdk/go/ai"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/orch"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
 
 // Node bundles the constructed agent with the resolved environment config and
@@ -42,6 +48,10 @@ type Node struct {
 	// Bearer (agent.go:593), so the approval client below authenticates the same
 	// way the agent does.
 	Token string
+
+	// Furrow is the node-wide workspace mirror and registry. It is nil when the
+	// helper binary is unavailable, which is a normal feature-discovery result.
+	Furrow furrow.Attacher
 
 	// hax is the hax REST client, nil when HAX_API_KEY is unset (HITL disabled,
 	// mirroring build_hax_client_from_env() returning None).
@@ -123,6 +133,7 @@ func BuildAgent(defaultNodeID, defaultPort, description string) (*Node, error) {
 		Token:            token,
 		hax:              hitl.BuildHaxClientFromEnv(),
 	}
+	n.Furrow = buildFurrowManager()
 
 	// Wire the orchestrator pause seam once: the plan-approval gate pauses the
 	// execution through this provider. The *agent.Agent satisfies hitl.Pauser
@@ -134,6 +145,56 @@ func BuildAgent(defaultNodeID, defaultPort, description string) (*Node, error) {
 	})
 
 	return n, nil
+}
+
+func buildFurrowManager() furrow.Attacher {
+	bin, err := furrow.ResolveBin()
+	if err != nil {
+		log.Printf("DEBUG furrow unavailable: %v", err)
+		return nil
+	}
+	storeRoot := envOr("SWE_FURROW_DATA_DIR", filepath.Join(workspace.Root(), ".furrow-store"))
+	remotesRoot := envOr("SWE_FURROW_REMOTES_ROOT", filepath.Join(workspace.Root(), ".furrow-remotes"))
+	if err := os.Setenv("FURROW_DATA_DIR", storeRoot); err != nil {
+		log.Printf("DEBUG furrow unavailable: set FURROW_DATA_DIR: %v", err)
+		return nil
+	}
+	m := furrow.New(furrow.Options{
+		Bin:         bin,
+		StoreRoot:   storeRoot,
+		RemotesRoot: remotesRoot,
+		PublicAddr:  os.Getenv("FURROW_PUBLIC_ADDR"),
+	})
+	if !m.Enabled() {
+		return nil
+	}
+	maxAge := time.Duration(envInt64("SWE_FURROW_TTL_HOURS", 72)) * time.Hour
+	maxBytes := envInt64("SWE_FURROW_MAX_GB", 20) * 1024 * 1024 * 1024
+	go sweepFurrow(m, maxAge, maxBytes)
+	return m
+}
+
+func sweepFurrow(m *furrow.Manager, maxAge time.Duration, maxBytes int64) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		removed, err := m.Sweep(maxAge, maxBytes)
+		if err != nil {
+			log.Printf("furrow sweep: %v", err)
+			continue
+		}
+		if removed > 0 {
+			log.Printf("furrow sweep removed %d workspace(s)", removed)
+		}
+	}
+}
+
+func envInt64(key string, def int64) int64 {
+	value, err := strconv.ParseInt(os.Getenv(key), 10, 64)
+	if err != nil || value < 0 {
+		return def
+	}
+	return value
 }
 
 // newCallFn returns the app.Call + envelope-unwrap closure injected into the

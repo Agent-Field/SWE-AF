@@ -25,6 +25,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/coding"
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
@@ -63,6 +64,11 @@ type Deps struct {
 	AgentFieldServer string
 	CIGate           CIGateRunner
 	ApprovalGate     ApprovalGate
+
+	// Furrow mirrors a build's workspace to a per-run encrypted remote so a
+	// caller can clone and follow it while the build runs. A nil Attacher (the
+	// default) disables the whole feature silently.
+	Furrow furrow.Attacher
 
 	// DefaultExecuteFnTarget, when non-empty, is the external coder target
 	// applied by the execute path whenever a request does not name one — the
@@ -105,6 +111,26 @@ func executionIDFromCtx(ctx context.Context) string { return executionContextFro
 func (d *Deps) Note(ctx context.Context, message string, tags ...string) {
 	if d != nil && d.App != nil {
 		d.App.Note(ctx, message, tags...)
+	}
+}
+
+// furrowAttach forwards to the optional workspace mirror without allowing an
+// unavailable or failed attachment to affect the build.
+func (d *Deps) furrowAttach(runID, buildID, repoPath string) *furrow.Handle {
+	if d == nil || d.Furrow == nil {
+		return nil
+	}
+	handle, err := d.Furrow.Attach(runID, buildID, repoPath)
+	if err != nil {
+		return nil
+	}
+	return handle
+}
+
+// furrowPublish publishes a best-effort workspace snapshot.
+func (d *Deps) furrowPublish(runID, label string) {
+	if d != nil && d.Furrow != nil {
+		_ = d.Furrow.Publish(runID, label)
 	}
 }
 

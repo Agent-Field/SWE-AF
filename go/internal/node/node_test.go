@@ -50,7 +50,7 @@ var pythonRoleSurface = []string{
 
 // pythonOrchestrators is the 5 orchestrator reasoners defined on swe_af.app
 // (app.py @app.reasoner()): build, plan, execute, resolve, resume_build.
-var pythonOrchestrators = []string{"build", "plan", "execute", "resolve", "resume_build"}
+var pythonOrchestrators = []string{"build", "plan", "execute", "resolve", "resume_build", "get_workspace_handle"}
 
 // pythonFastReasoners is the 4 first-class fast reasoners: fast/app.py's build
 // plus fast_plan_tasks / fast_execute_tasks / fast_verify.
@@ -70,8 +70,8 @@ func TestRegisterPlannerExactSurface(t *testing.T) {
 	}
 	n.RegisterPlanner()
 
-	// swe-planner surface = 25 roles + 5 orchestrators + implement_issue
-	// = 31 unique names.
+	// swe-planner surface = 25 roles + 6 orchestrators + implement_issue
+	// = 32 unique names.
 	want := append(append([]string(nil), pythonRoleSurface...), pythonOrchestrators...)
 	want = append(want, pythonIssueReasoners...)
 	assertSurface(t, "swe-planner", n.RegisteredNames(), want)
