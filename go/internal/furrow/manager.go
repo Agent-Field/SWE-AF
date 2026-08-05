@@ -299,33 +299,35 @@ func (m *Manager) Sweep(maxAge time.Duration, maxBytes int64) (int, error) {
 	if m == nil || !m.Enabled() {
 		return 0, nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	removed := 0
 	now := m.now()
+
+	m.mu.RLock()
+	stale := make([]string, 0, len(m.entries))
 	for runID, entry := range m.entries {
 		if maxAge > 0 && now.Sub(entry.UpdatedAt) > maxAge {
-			if err := os.RemoveAll(entry.StoreDir); err != nil {
-				return removed, fmt.Errorf("furrow sweep %q: %w", runID, err)
-			}
-			delete(m.entries, runID)
+			stale = append(stale, runID)
+		}
+	}
+	m.mu.RUnlock()
+	for _, runID := range stale {
+		dropped, err := m.retire(runID, maxAge)
+		if err != nil {
+			return removed, err
+		}
+		if dropped {
 			removed++
 		}
 	}
-	if removed > 0 {
-		if err := m.saveRegistryLocked(); err != nil {
-			return removed, fmt.Errorf("furrow sweep: save registry: %w", err)
-		}
-	}
+
 	if maxBytes >= 0 {
 		for {
+			// Walking the store is I/O, so it happens with no lock held.
 			total, err := dirSize(m.remotesRoot)
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return removed, fmt.Errorf("furrow sweep size: %w", err)
 			}
-			if total <= maxBytes || len(m.entries) == 0 {
-				break
-			}
+			m.mu.RLock()
 			var oldestID string
 			var oldest Entry
 			for id, entry := range m.entries {
@@ -333,19 +335,60 @@ func (m *Manager) Sweep(maxAge time.Duration, maxBytes int64) (int, error) {
 					oldestID, oldest = id, entry
 				}
 			}
-			if err := os.RemoveAll(oldest.StoreDir); err != nil {
-				return removed, fmt.Errorf("furrow sweep %q: %w", oldestID, err)
+			empty := len(m.entries) == 0
+			m.mu.RUnlock()
+			if total <= maxBytes || empty {
+				break
 			}
-			delete(m.entries, oldestID)
+			dropped, err := m.retire(oldestID, 0)
+			if err != nil {
+				return removed, err
+			}
+			if !dropped {
+				// Something republished it while we were measuring; measuring
+				// again would pick the same victim forever.
+				break
+			}
 			removed++
-			// registry.json is part of remotesRoot's byte total. Persist each
-			// removal before measuring again so stale rows cannot over-evict.
-			if err := m.saveRegistryLocked(); err != nil {
-				return removed, fmt.Errorf("furrow sweep: save registry: %w", err)
-			}
 		}
 	}
 	return removed, nil
+}
+
+// retire deletes one run's remote store and its registry row. It takes that
+// run's lock so a publish in flight finishes first rather than pushing into a
+// directory being deleted, and re-checks staleness under the lock so a run that
+// became active in the meantime is left alone.
+func (m *Manager) retire(runID string, maxAge time.Duration) (bool, error) {
+	unlock := m.lockRun(runID)
+	defer unlock()
+
+	m.mu.RLock()
+	entry, ok := m.entries[runID]
+	m.mu.RUnlock()
+	if !ok {
+		return false, nil
+	}
+	if maxAge > 0 && m.now().Sub(entry.UpdatedAt) <= maxAge {
+		return false, nil
+	}
+	// Remove the files first: a failure here leaves the row in place so the next
+	// sweep retries, rather than orphaning a store nothing points at any more.
+	if err := os.RemoveAll(entry.StoreDir); err != nil {
+		return false, fmt.Errorf("furrow sweep %q: %w", runID, err)
+	}
+	m.mu.Lock()
+	delete(m.entries, runID)
+	// The run's lock is deliberately left behind. Dropping it here would let a
+	// goroutine already waiting on this mutex and one arriving afterwards end
+	// up holding two different mutexes for the same run, which is the one thing
+	// the per-run lock exists to prevent. A retired run leaves a bare mutex.
+	err := m.saveRegistryLocked()
+	m.mu.Unlock()
+	if err != nil {
+		return true, fmt.Errorf("furrow sweep: save registry: %w", err)
+	}
+	return true, nil
 }
 
 func dirSize(root string) (int64, error) {
