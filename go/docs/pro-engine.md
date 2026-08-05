@@ -1,4 +1,4 @@
-# Pro engine
+# Pro engine (beta)
 
 The Go node runs a high-performance coding engine, shipped as prebuilt
 binaries — one per supported platform, vendored at `go/bin` as
@@ -6,15 +6,21 @@ binaries — one per supported platform, vendored at `go/bin` as
 installed on macOS and Linux alike and the node picks the matching build at
 startup.
 
-It is **on by default** for nodes installed with `af install`:
-`agentfield-package.yaml` declares `SWE_PRO_ENGINE` with `default: "1"`, and
-the installer's env resolver injects that into the node process. Turning it
-off is a one-variable change and every existing integration — reasoner calls,
-cron triggers, `execute_fn_target` overrides — behaves identically either way.
+It is **on by default for nodes installed with `af install` or AgentField
+Desktop**: `agentfield-package.yaml` declares `SWE_PRO_ENGINE` with
+`default: "1"`, and the installer's env resolver injects that into the node
+process. Turning it off is a one-variable change and every existing
+integration — reasoner calls, cron triggers, `execute_fn_target` overrides —
+behaves identically either way.
 
-The gate itself is still purely the env var, so a binary launched outside the
-`af` runner (a bare `swe-planner`, a container that sets nothing) starts on the
-classic loop.
+**Everywhere else it is off**, because the gate is purely the env var and
+nothing but the installer sets it: a bare `swe-planner`, a clone or fork you
+run yourself, and the compose stacks (`docker-compose.go.yml` passes
+`SWE_PRO_ENGINE` through but leaves it empty) all start on the classic loop
+until you set `SWE_PRO_ENGINE=1`.
+
+This is a beta: it is the coding path we are actively developing, and rough
+edges are expected. `SWE_PRO_ENGINE=0` is always one restart away.
 
 ## Opting out
 
@@ -68,7 +74,7 @@ what keeps a macOS install from exec'ing the Linux build.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SWE_PRO_ENGINE` | `1` via the manifest (unset = off for a bare binary) | Truthy (`1`/`true`/`yes`/`on`) enables; `0`/`false` opts out |
+| `SWE_PRO_ENGINE` | `1` via the manifest on `af install` / Desktop; unset (off) for a clone, fork, compose stack or bare binary | Truthy (`1`/`true`/`yes`/`on`) enables; `0`/`false` opts out |
 | `SWE_PRO_BIN` | `/usr/local/bin/swe-pro`, else a `swe-pro-<GOOS>-<GOARCH>` / `swe-pro` sibling | Engine binary path (authoritative when set) |
 | `SWE_PRO_NODE_ID` | `swe-pro` | Engine's control-plane node id |
 | `SWE_PRO_PORT` | `8801` | Engine's listen port |
@@ -105,7 +111,8 @@ past the longest single issue you expect, or bound engine runs with
 
 ## Rollout
 
-The pro engine is the default for `af install` nodes as of this release. The
+The pro engine is the default for `af install` / Desktop nodes as of this
+release, and opt-in everywhere else (clone, fork, compose, bare binary). The
 classic coding loop remains fully supported and is one variable away
 (`SWE_PRO_ENGINE=0`); existing reasoner names and input/output shapes are
 identical either way, so switching costs nothing but a restart.
