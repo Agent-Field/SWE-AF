@@ -21,12 +21,20 @@ type fakeExec struct {
 	mu       sync.Mutex
 	commands [][]string
 	errFor   map[string]error
+	// onCommand runs outside the recording lock so a test can park inside a
+	// call and observe whether another one proceeds alongside it.
+	onCommand func(args []string)
 }
 
 func (f *fakeExec) run(cmd *exec.Cmd) ([]byte, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.commands = append(f.commands, append([]string(nil), cmd.Args...))
+	f.mu.Unlock()
+	if f.onCommand != nil {
+		f.onCommand(cmd.Args)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if !containsEnv(cmd.Env, "FURROW_DATA_DIR=") {
 		return nil, errors.New("FURROW_DATA_DIR missing")
 	}
@@ -163,6 +171,55 @@ func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 	}
 	if err := m.Publish("unknown", "label"); err == nil {
 		t.Fatal("Publish accepted unknown run ID")
+	}
+}
+
+// A node serves several builds at once and an initial capture of a large
+// repository is slow, so work on one run must not block another. This fails if
+// the manager ever goes back to holding one lock across furrow invocations:
+// each publish parks inside the fake exec until both have arrived, which can
+// only happen if they run concurrently.
+func TestPublishesForDifferentRunsDoNotSerialize(t *testing.T) {
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	blocking := &fakeExec{onCommand: func(args []string) {
+		if len(args) > 4 && args[4] == "sync" {
+			arrived <- struct{}{}
+			<-release
+		}
+	}}
+	m, repoA, _ := testManager(t, blocking, time.Now)
+	repoB := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoB, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ run, repo string }{{"run/a", repoA}, {"run/b", repoB}} {
+		if _, err := m.Attach(tc.run, "build", tc.repo); err != nil {
+			t.Fatalf("Attach(%s): %v", tc.run, err)
+		}
+	}
+
+	done := make(chan struct{}, 2)
+	for _, run := range []string{"run/a", "run/b"} {
+		go func(runID string) {
+			_ = m.Publish(runID, "checkpoint")
+			done <- struct{}{}
+		}(run)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-arrived:
+		case <-time.After(5 * time.Second):
+			t.Fatal("publishes serialized: the second never reached furrow while the first was in flight")
+		}
+	}
+	close(release)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("publish did not return")
+		}
 	}
 }
 

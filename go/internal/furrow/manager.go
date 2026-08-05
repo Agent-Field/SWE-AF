@@ -30,6 +30,13 @@ type Options struct {
 }
 
 // Manager owns the node's persistent run registry and furrow content store.
+//
+// Locking has two levels on purpose. mu guards the registry and is only ever
+// held for map access, never across a furrow invocation: a node serves several
+// builds at once, and an initial capture of a large repository takes long
+// enough that holding one lock across it would stall every other run's publish.
+// runLocks serializes work per run instead, which is the only ordering that
+// actually matters — two calls for the same run must not both pair it.
 type Manager struct {
 	mu          sync.RWMutex
 	bin         string
@@ -41,6 +48,23 @@ type Manager struct {
 	exec        func(*exec.Cmd) ([]byte, error)
 	enabled     bool
 	entries     map[string]Entry
+	runLocks    map[string]*sync.Mutex
+}
+
+// lockRun serializes callers working on one run and returns its unlock.
+func (m *Manager) lockRun(runID string) func() {
+	m.mu.Lock()
+	if m.runLocks == nil {
+		m.runLocks = make(map[string]*sync.Mutex)
+	}
+	lock, ok := m.runLocks[runID]
+	if !ok {
+		lock = &sync.Mutex{}
+		m.runLocks[runID] = lock
+	}
+	m.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 // New constructs a manager and loads its persisted registry. Missing helpers
@@ -122,10 +146,10 @@ func (m *Manager) Attach(runID, buildID, repoPath string) (*Handle, error) {
 		return nil, nil
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if entry, ok := m.entries[runID]; ok {
-		return m.handle(entry), nil
+	unlock := m.lockRun(runID)
+	defer unlock()
+	if handle := m.Handle(runID); handle != nil {
+		return handle, nil
 	}
 	// Every line must be `exclude <relative-subtree>`; furrow rejects the whole
 	// file otherwise and `watch` then fails, which would leave the mirror
@@ -170,9 +194,14 @@ func (m *Manager) Attach(runID, buildID, repoPath string) (*Handle, error) {
 	entry := Entry{RunID: runID, BuildID: buildID, RepoPath: repoPath, Namespace: namespace,
 		Key: paired.Key, Token: hex.EncodeToString(tokenBytes), Ref: namespace, StoreDir: storeDir,
 		CreatedAt: now, UpdatedAt: now}
+	m.mu.Lock()
 	m.entries[runID] = entry
-	if err := m.saveRegistryLocked(); err != nil {
+	err = m.saveRegistryLocked()
+	if err != nil {
 		delete(m.entries, runID)
+	}
+	m.mu.Unlock()
+	if err != nil {
 		return nil, fmt.Errorf("furrow attach %q: save registry: %w", runID, err)
 	}
 	return m.handle(entry), nil
@@ -209,9 +238,12 @@ func (m *Manager) Publish(runID, label string) error {
 	if m == nil || !m.Enabled() {
 		return nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock := m.lockRun(runID)
+	defer unlock()
+
+	m.mu.RLock()
 	entry, ok := m.entries[runID]
+	m.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("furrow publish: unknown run ID %q", runID)
 	}
@@ -223,11 +255,18 @@ func (m *Manager) Publish(runID, label string) error {
 		m.logf("furrow publish %q: sync: %v", runID, err)
 		return nil
 	}
-	entry.UpdatedAt = m.now()
-	m.entries[runID] = entry
-	if err := m.saveRegistryLocked(); err != nil {
-		m.logf("furrow publish %q: save registry: %v", runID, err)
+
+	m.mu.Lock()
+	// A sweep may have retired this run while the push was in flight; recording
+	// a fresh timestamp then would resurrect a row whose store is already gone.
+	if current, ok := m.entries[runID]; ok {
+		current.UpdatedAt = m.now()
+		m.entries[runID] = current
+		if err := m.saveRegistryLocked(); err != nil {
+			m.logf("furrow publish %q: save registry: %v", runID, err)
+		}
 	}
+	m.mu.Unlock()
 	return nil
 }
 
