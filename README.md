@@ -754,6 +754,17 @@ To resolve:
 
 **Verification:** After fix, `run_git_init` completes in ~100–260s with `success=true`.
 
+### Current Operational State & Verified Capabilities (August 2026)
+
+| Feature / Subsystem | Status | Verified / Notes |
+|---|---|---|
+| **9Router + OpenCode Stack** | **Operational** | Default runtime (`open_code`), model `9router/claude-sonnet-4-6`. Validated via `./scripts/verify-install.sh` (5/5 checks passed). |
+| **Fast Build Pipeline (`swe-fast.build`)** | **Operational** | Successfully runs plan → coder → verifier → finalize on local repos. Build timeout default raised to **1800s** (commit `2755a1e`). |
+| **QA Synthesizer (`run_qa_synthesizer`)** | **Operational** | Fixed issue #113 (commit `5a32796`) — compatible with AgentField SDK returning schemas directly without `.parsed`. |
+| **Docker Hardening** | **Operational** | `docker/entrypoint.sh` fails fast on `HARNESS_MODEL` provider mismatch against `opencode.json` (commit `a6bff87`). |
+| **Codex Runtime (`codex`)** | **Configured** | Works with ChatGPT auth (`SWE_CODEX_AUTH_MODE=chatgpt`); requires `permission_mode=danger-full-access` in isolated test nodes for git worktree metadata. |
+| **Remote Repo Clone (`repo_url`)** | **Known Issue** | `swe-fast` does not clone `repo_url` automatically (issue #52). Use pre-cloned local `repo_path` or `swe-planner.build`. |
+
 ## GitHub Repo Workflow (Clone -> Build -> PR)
 
 Pass `repo_url` instead of `repo_path` to let SWE-AF clone and open a PR after execution.
