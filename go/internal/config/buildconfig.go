@@ -30,6 +30,7 @@ type BuildConfig struct {
 	EnableIntegrationTesting  bool    `json:"enable_integration_testing"`
 	MaxCodingIterations       int     `json:"max_coding_iterations"`
 	AgentMaxTurns             int     `json:"agent_max_turns"`
+	DeterministicGit          bool    `json:"deterministic_git"`
 	ExecuteFnTarget           string  `json:"execute_fn_target"`
 	PermissionMode            string  `json:"permission_mode"`
 	RepoURL                   string  `json:"repo_url"`
@@ -69,6 +70,7 @@ func defaultBuildConfig() BuildConfig {
 		MaxIntegrationTestRetries:  1,
 		EnableIntegrationTesting:   true,
 		MaxCodingIterations:        5,
+		DeterministicGit:           true,
 		AgentMaxTurns:              DefaultAgentMaxTurns,
 		ExecuteFnTarget:            "",
 		PermissionMode:             "",
@@ -268,6 +270,7 @@ func (c *BuildConfig) ToExecutionConfigDict() map[string]any {
 		"enable_integration_testing":    c.EnableIntegrationTesting,
 		"max_coding_iterations":         c.MaxCodingIterations,
 		"agent_max_turns":               c.AgentMaxTurns,
+		"deterministic_git":             c.DeterministicGit,
 		"agent_timeout_seconds":         c.AgentTimeoutSeconds,
 		"max_advisor_invocations":       c.MaxAdvisorInvocations,
 		"enable_issue_advisor":          c.EnableIssueAdvisor,

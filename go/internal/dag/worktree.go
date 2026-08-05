@@ -40,17 +40,12 @@ func setupWorktrees(
 
 	// --- Single-repo path ---
 	if dagState.WorkspaceManifest == nil {
-		setup, err := callFn(ctx, nodeID+".run_workspace_setup", map[string]any{
-			"repo_path":          dagState.RepoPath,
-			"integration_branch": dagState.GitIntegrationBranch,
-			"issues":             activeIssues,
-			"worktrees_dir":      dagState.WorktreesDir,
-			"artifacts_dir":      dagState.ArtifactsDir,
-			"level":              dagState.CurrentLevel,
-			"model":              cfg.GitModel(),
-			"ai_provider":        cfg.AIProvider(),
-			"build_id":           buildID,
-		})
+		setup, err := dispatchWorkspaceSetup(
+			ctx, callFn, nodeID, cfg,
+			dagState.RepoPath, dagState.GitIntegrationBranch,
+			activeIssues, dagState.WorktreesDir, dagState.ArtifactsDir,
+			dagState.CurrentLevel, buildID, note,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -112,17 +107,12 @@ func setupWorktrees(
 		}
 
 		repoWorktreesDir := filepath.Join(wsRepo.AbsolutePath, ".worktrees")
-		setup, err := callFn(ctx, nodeID+".run_workspace_setup", map[string]any{
-			"repo_path":          wsRepo.AbsolutePath,
-			"integration_branch": integrationBranch,
-			"issues":             repoIssues,
-			"worktrees_dir":      repoWorktreesDir,
-			"artifacts_dir":      dagState.ArtifactsDir,
-			"level":              dagState.CurrentLevel,
-			"model":              cfg.GitModel(),
-			"ai_provider":        cfg.AIProvider(),
-			"build_id":           buildID,
-		})
+		setup, err := dispatchWorkspaceSetup(
+			ctx, callFn, nodeID, cfg,
+			wsRepo.AbsolutePath, integrationBranch,
+			repoIssues, repoWorktreesDir, dagState.ArtifactsDir,
+			dagState.CurrentLevel, buildID, note,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -220,19 +210,13 @@ func mergeLevelBranches(
 			"ai_provider":          cfg.AIProvider(),
 		}
 
-		mergeResult, err := callFn(ctx, nodeID+".run_merger", mergeKwargs)
+		mergeResult, err := dispatchMerge(
+			ctx, callFn, nodeID, cfg,
+			dagState.RepoPath, dagState.GitIntegrationBranch,
+			completedBranches, mergeKwargs, levelResult.LevelIndex, note,
+		)
 		if err != nil {
 			return nil, err
-		}
-		// Retry once on failure (handles transient auth errors, network blips).
-		if !asBool(mergeResult["success"]) && len(asStringSlice(mergeResult["failed_branches"])) > 0 {
-			if note != nil {
-				note("Merge failed, retrying once...", []string{"execution", "merge", "retry"})
-			}
-			mergeResult, err = callFn(ctx, nodeID+".run_merger", mergeKwargs)
-			if err != nil {
-				return nil, err
-			}
 		}
 
 		dagState.MergeResults = append(dagState.MergeResults, mergeResult)
@@ -375,7 +359,7 @@ func callMergerForRepo(
 		})
 	}
 
-	return callFn(ctx, nodeID+".run_merger", map[string]any{
+	mergeKwargs := map[string]any{
 		"repo_path":            wsRepo.AbsolutePath,
 		"integration_branch":   integrationBranch,
 		"branches_to_merge":    branchesToMerge,
@@ -386,7 +370,12 @@ func callMergerForRepo(
 		"level":                levelIndex,
 		"model":                cfg.MergerModel(),
 		"ai_provider":          cfg.AIProvider(),
-	})
+	}
+	return dispatchMerge(
+		ctx, callFn, nodeID, cfg,
+		wsRepo.AbsolutePath, integrationBranch,
+		branchesToMerge, mergeKwargs, levelIndex, nil,
+	)
 }
 
 // runIntegrationTests runs integration tests after a merge if the merger
@@ -518,6 +507,7 @@ func cleanupWorktrees(
 	note noteFunc,
 	level int,
 	model, aiProvider string,
+	deterministicGit bool,
 	completedResults []schemas.IssueResult,
 ) error {
 	if len(branchesToClean) == 0 {
@@ -560,7 +550,7 @@ func cleanupWorktrees(
 			}
 			repoWorktreesDir := filepath.Join(wsRepo.AbsolutePath, ".worktrees")
 			if err := cleanupSingleRepo(ctx, callFn, nodeID, wsRepo.AbsolutePath, repoWorktreesDir,
-				byRepo[repoName], dagState.ArtifactsDir, level, model, aiProvider, note); err != nil {
+				byRepo[repoName], dagState.ArtifactsDir, level, model, aiProvider, deterministicGit, note); err != nil {
 				return err
 			}
 		}
@@ -569,7 +559,7 @@ func cleanupWorktrees(
 
 	// --- Single-repo path ---
 	return cleanupSingleRepo(ctx, callFn, nodeID, dagState.RepoPath, dagState.WorktreesDir,
-		branchesToClean, dagState.ArtifactsDir, level, model, aiProvider, note)
+		branchesToClean, dagState.ArtifactsDir, level, model, aiProvider, deterministicGit, note)
 }
 
 // cleanupSingleRepo cleans up worktrees for a single repo, retrying once on
@@ -583,8 +573,25 @@ func cleanupSingleRepo(
 	artifactsDir string,
 	level int,
 	model, aiProvider string,
+	deterministicGit bool,
 	note noteFunc,
 ) error {
+	if deterministicGit {
+		result, err := fastCleanupWorktrees(repoPath, worktreesDir, branchesToClean)
+		if err == nil {
+			if note != nil {
+				note(fmt.Sprintf("Worktree cleanup complete (deterministic): %s",
+					pyStrList(asStringSlice(result["cleaned"]))),
+					[]string{"execution", "worktree_cleanup", "fast_path"})
+			}
+			return nil
+		}
+		if note != nil {
+			note(fmt.Sprintf("Deterministic cleanup failed (%v) — falling back to the cleanup agent", err),
+				[]string{"execution", "worktree_cleanup", "fallback"})
+		}
+	}
+
 	for attempt := 0; attempt < 2; attempt++ { // up to 1 retry
 		result, err := callFn(ctx, nodeID+".run_workspace_cleanup", map[string]any{
 			"repo_path":         repoPath,

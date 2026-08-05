@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/coding"
@@ -104,6 +105,13 @@ func asStringSlice(v any) []string {
 			out = append(out, asStr(e))
 		}
 		return out
+	case string:
+		// LLM shape tolerance (ports ensure_str_list): a bare string where a
+		// list is expected becomes a one-element list instead of vanishing.
+		if strings.TrimSpace(t) == "" {
+			return nil
+		}
+		return []string{t}
 	default:
 		return nil
 	}

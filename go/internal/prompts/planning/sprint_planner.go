@@ -83,6 +83,22 @@ and a way to verify completion? If an engineer would describe the issue as "a fe
 hours of focused work," it is the right size. If they would say "that is a day-long
 project with multiple concerns," it should be split.
 
+## Scope-Proportional Decomposition
+
+Decomposition is a cost, not a virtue: every extra issue adds a coder+reviewer
+loop, a branch, a merge, and coordination overhead downstream. Issue count must
+scale with the actual scope of the goal:
+
+- A well-specified change confined to 1-3 files is ONE issue — implementation
+  and tests together (vertical slices), even though the DAG could theoretically
+  be wider. Do not manufacture parallelism for small goals.
+- Never split a single-file change across issues.
+- Rough calibration: a trivial or small goal → 1-2 issues; a medium feature →
+  3-6; only genuinely large, multi-component features justify more.
+- 3-5 acceptance criteria per issue is the sweet spot. More than ~5 means the
+  issue is too big (split it) or the criteria are padded — procedural steps
+  like "run the tests" are not acceptance criteria; trim them.
+
 ## File Metadata
 
 Track which files each issue touches via ` + "`" + `` + "`" + `files_to_create` + "`" + `` + "`" + ` and ` + "`" + `` + "`" + `files_to_modify` + "`" + `` + "`" + `.

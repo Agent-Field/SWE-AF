@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from swe_af.execution.fatal_error import FatalHarnessError, check_fatal_harness_error
 from swe_af.execution.ci_gate import watch_pr_checks
+from swe_af.execution.dag_utils import normalize_issue_dict
 from swe_af.execution.schemas import (
     DEFAULT_AGENT_MAX_TURNS,
     AdvisorAction,
@@ -1376,7 +1377,15 @@ async def generate_fix_issues(
                 f"{len(result.parsed.debt_items)} debt items",
                 tags=["fix_generator", "complete"],
             )
-            return result.parsed.model_dump()
+            data = result.parsed.model_dump()
+            # fix_issues are raw dicts headed for DAGState.all_issues — coerce
+            # LLM scalar shapes (str acceptance_criteria etc.) at the boundary.
+            data["fix_issues"] = [
+                normalize_issue_dict(fi)
+                for fi in data.get("fix_issues", [])
+                if isinstance(fi, dict)
+            ]
+            return data
     except FatalHarnessError:
         raise  # Non-retryable — propagate immediately
     except Exception as e:

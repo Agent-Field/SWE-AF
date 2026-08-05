@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/runtimex"
@@ -15,7 +14,9 @@ import (
 
 const (
 	fastClaudeCodeDefault = "haiku"
-	fastOpenCodeDefault   = "qwen/qwen-2.5-coder-32b-instruct"
+	// Fast mode shares the open_code default with the main path so an
+	// OpenRouter-only install behaves the same on both nodes.
+	fastOpenCodeDefault = openRouterAutoDefaultModel
 )
 
 // fastRoles ports _FAST_ROLES — the four resolved model keys, in order.
@@ -44,13 +45,17 @@ var fastValidKeys = map[string]struct{}{
 	"git":      {},
 }
 
-// DefaultFastRuntime ports _default_fast_runtime. Note: no OpenRouter
-// auto-detect and no strip — os.getenv default is "claude_code", and any value
-// not in RUNTIME_VALUES falls back to "claude_code".
+// DefaultFastRuntime ports _default_fast_runtime, honoring SWE_DEFAULT_RUNTIME.
+// When unset (or blank), auto-selects open_code if only an OpenRouter key is
+// present — the same detection the main path uses (openRouterOnlyEnv) — else
+// claude_code. An invalid value falls back to claude_code.
 func DefaultFastRuntime() string {
-	value, ok := os.LookupEnv("SWE_DEFAULT_RUNTIME")
-	if !ok {
-		value = "claude_code"
+	value := envStripped("SWE_DEFAULT_RUNTIME")
+	if value == "" {
+		if openRouterOnlyEnv() {
+			return "open_code"
+		}
+		return "claude_code"
 	}
 	for _, rv := range runtimex.RuntimeValues {
 		if value == rv {
@@ -120,14 +125,25 @@ func LoadFastBuildConfig(raw map[string]any) (*FastBuildConfig, error) {
 }
 
 // FastResolveModels ports fast_resolve_models — resolves the four role model
-// strings. Resolution order (last wins): runtime default → models["default"] →
-// models["<role>"]. An unknown key yields the verbatim "Unknown role key" error.
+// strings. Resolution order (last wins): runtime default → env cascade
+// (SWE_DEFAULT_MODEL → AI_MODEL → HARNESS_MODEL, same as the main path) →
+// models["default"] → models["<role>"]. An unknown key yields the verbatim
+// "Unknown role key" error.
 func FastResolveModels(config *FastBuildConfig) (map[string]string, error) {
 	runtimeDefault := fastRuntimeDefault(config.Runtime)
 
 	resolved := make(map[string]string, len(fastRoles))
 	for _, role := range fastRoles {
 		resolved[role] = runtimeDefault
+	}
+
+	// Deployer env cascade: lets the same variable that selects a model for
+	// the main node select it for fast builds too. Caller-supplied models
+	// (below) still win.
+	if envModel := defaultModelFromEnv(); envModel != "" {
+		for _, role := range fastRoles {
+			resolved[role] = envModel
+		}
 	}
 
 	if config.Models != nil {

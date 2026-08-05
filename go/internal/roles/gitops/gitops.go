@@ -14,11 +14,9 @@
 // propagates *fatal.FatalHarnessError, and on a harness parse failure returns
 // the role's deterministic fallback (never an error).
 //
-// Model resolution is input-driven exactly as in Python: the reasoner reads the
-// model from its input (default "sonnet"). The caller (dag_executor) resolves
-// the per-role model — git_model for run_git_init, merger_model for run_merger,
-// integration_tester_model for run_integration_tester — and passes it in; the
-// reasoner does not re-resolve it here.
+// Explicit runtime/model inputs remain input-driven. Direct calls that omit
+// either value resolve the configured defaults at call time; orchestrators
+// already pass resolved values and therefore retain their existing behavior.
 package gitops
 
 import (
@@ -84,10 +82,7 @@ func Handlers() map[string]Handler {
 // Shared helpers (Python-parity string/number formatting + role plumbing)
 // ---------------------------------------------------------------------------
 
-// orDefault returns def when s is empty, else s. Reproduces a Python keyword
-// default: run_git_init(model="sonnet", ...) uses "sonnet" when the caller
-// omits model. Bind maps an absent key to "" (the Go zero), so "" == "use
-// default". Callers in practice always pass a resolved non-empty model.
+// orDefault returns def when s is empty, else s.
 func orDefault(s, def string) string {
 	if s == "" {
 		return def
@@ -95,14 +90,21 @@ func orDefault(s, def string) string {
 	return s
 }
 
-// resolveProvider maps the input ai_provider (default "claude") to the harness
+// resolveProvider maps the input ai_provider to the harness
 // adapter string, mirroring Python's
 // provider = runtime_to_harness_adapter(ai_provider). The adapter — not the
 // provider — is what the harness Options.Provider field expects (design §4.7).
 // An unsupported value returns the normalize error, matching Python raising
 // before the harness call.
 func resolveProvider(aiProvider string) (string, error) {
-	return runtimex.RuntimeToHarnessAdapter(orDefault(aiProvider, "claude"))
+	return runtimex.RuntimeToHarnessAdapter(orDefault(aiProvider, config.DefaultRuntime()))
+}
+
+func resolveModel(model, role string) (string, error) {
+	if model != "" {
+		return model, nil
+	}
+	return config.DefaultRoleModel(role)
 }
 
 // roleOptions builds the harness.Options for a role from its resolved

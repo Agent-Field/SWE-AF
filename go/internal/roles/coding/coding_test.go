@@ -167,6 +167,43 @@ func TestRunCoderSuccessKeySetAndIterationID(t *testing.T) {
 	}
 }
 
+func TestRunCoderDirectCallRuntimeDefaults(t *testing.T) {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "SWE_DEFAULT_RUNTIME", "SWE_MODEL_MED", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+	mh := &mockHarness{fn: func(dest any) (*harness.Result, error) {
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	if _, err := RunCoder(context.Background(), newDeps(mh, nil, &noteRecorder{}), map[string]any{
+		"issue": map[string]any{"name": "direct"}, "worktree_path": "/wt",
+	}); err != nil {
+		t.Fatalf("RunCoder: %v", err)
+	}
+	if mh.gotOpts.Provider != "opencode" || mh.gotOpts.Model != "openrouter/deepseek/deepseek-v4-flash" {
+		t.Fatalf("defaults = provider %q, model %q", mh.gotOpts.Provider, mh.gotOpts.Model)
+	}
+}
+
+func TestRunCoderExplicitRuntimeValuesUntouched(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("SWE_DEFAULT_RUNTIME", "")
+	mh := &mockHarness{fn: func(dest any) (*harness.Result, error) {
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	if _, err := RunCoder(context.Background(), newDeps(mh, nil, &noteRecorder{}), map[string]any{
+		"issue": map[string]any{"name": "explicit"}, "worktree_path": "/wt",
+		"ai_provider": "claude", "model": "sonnet",
+	}); err != nil {
+		t.Fatalf("RunCoder: %v", err)
+	}
+	if mh.gotOpts.Provider != "claude-code" || mh.gotOpts.Model != "sonnet" {
+		t.Fatalf("explicit = provider %q, model %q", mh.gotOpts.Provider, mh.gotOpts.Model)
+	}
+}
+
 // Contract: coder applies the web-search guardrail to its system prompt (via
 // tools.MaybeApplyCoderGuardrail) and runs with cwd = worktree.
 func TestRunCoderAppliesGuardrailAndCwd(t *testing.T) {
@@ -576,13 +613,16 @@ func TestHandlersRegistrationNames(t *testing.T) {
 	}
 }
 
-// Contract: input binding applies the Python default model per role.
+// Contract: input binding applies the configured call-time defaults per role.
 func TestInputDefaults(t *testing.T) {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "SWE_DEFAULT_RUNTIME", "SWE_MODEL_LOW", "SWE_MODEL_MED", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"} {
+		t.Setenv(key, "")
+	}
 	ci, err := bindInput[coderInput](map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ci.Model != "sonnet" || ci.AIProvider != "claude" || ci.Iteration != 1 {
+	if ci.Model != "sonnet" || ci.AIProvider != "claude_code" || ci.Iteration != 1 {
 		t.Fatalf("coder defaults wrong: %+v", ci)
 	}
 	si, err := bindInput[qaSynthInput](map[string]any{})
@@ -591,5 +631,35 @@ func TestInputDefaults(t *testing.T) {
 	}
 	if si.Model != "haiku" {
 		t.Fatalf("qa_synthesizer default model must be haiku, got %q", si.Model)
+	}
+}
+
+// Contract: models routinely answer the action in uppercase (the system prompt
+// names FIX/APPROVE/BLOCK and the reflected request schema carries no enum), so
+// parseSynthesis must case-normalize instead of dropping the synthesis and
+// triggering the deterministic fallback.
+func TestRunQASynthesizerNormalizesUppercaseAction(t *testing.T) {
+	nr := &noteRecorder{}
+	mai := &mockAI{resp: aiJSONResponse(`{"action":"APPROVE","summary":"env failures are pre-existing","stuck":false}`)}
+	mh := &mockHarness{fn: func(_ any) (*harness.Result, error) {
+		t.Fatal("run_qa_synthesizer must not call the harness")
+		return nil, nil
+	}}
+
+	out, err := RunQASynthesizer(context.Background(), newDeps(mh, mai, nr), map[string]any{
+		"qa_result":         map[string]any{"passed": false},
+		"review_result":     map[string]any{"approved": true},
+		"iteration_history": []any{},
+		"iteration_id":      "s2",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := asMap(t, out)
+	if m["action"] != "approve" {
+		t.Fatalf("expected normalized action \"approve\", got %v", m["action"])
+	}
+	if m["summary"] != "env failures are pre-existing" {
+		t.Fatalf("model synthesis was discarded for the fallback: %v", m)
 	}
 }

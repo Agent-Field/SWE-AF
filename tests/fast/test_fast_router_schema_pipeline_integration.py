@@ -562,17 +562,17 @@ class TestBuildConfigModelThreading:
                 f"claude_code runtime: role {role!r} should be 'haiku', got {model!r}"
             )
 
-    def test_open_code_runtime_produces_qwen_models_for_all_roles(self) -> None:
-        """For open_code runtime, all 4 resolved models must be qwen."""
+    def test_open_code_runtime_produces_default_models_for_all_roles(self) -> None:
+        """For open_code runtime, all 4 resolved models must be the shared default."""
         from swe_af.fast.schemas import FastBuildConfig, fast_resolve_models  # noqa: PLC0415
 
         cfg = FastBuildConfig(runtime="open_code")
         resolved = fast_resolve_models(cfg)
 
-        qwen_model = "qwen/qwen-2.5-coder-32b-instruct"
+        open_code_model = "openrouter/deepseek/deepseek-v4-flash"
         for role, model in resolved.items():
-            assert model == qwen_model, (
-                f"open_code runtime: role {role!r} should be {qwen_model!r}, got {model!r}"
+            assert model == open_code_model, (
+                f"open_code runtime: role {role!r} should be {open_code_model!r}, got {model!r}"
             )
 
     def test_custom_model_override_for_coder_role(self) -> None:

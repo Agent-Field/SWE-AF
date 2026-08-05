@@ -25,9 +25,20 @@ _ALL_FOUR_ROLES = ("pm_model", "coder_model", "verifier_model", "git_model")
 
 
 class TestFastBuildConfigDefaults:
-    def test_runtime_default(self) -> None:
+    def test_runtime_default(self, monkeypatch) -> None:
+        for var in ("SWE_DEFAULT_RUNTIME", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
+            monkeypatch.delenv(var, raising=False)
         cfg = FastBuildConfig()
         assert cfg.runtime == "claude_code"
+
+    def test_runtime_auto_selects_open_code_with_only_openrouter_key(self, monkeypatch) -> None:
+        # Same auto-detect as the main path: an OpenRouter key with no
+        # Anthropic key and no explicit runtime selects open_code.
+        monkeypatch.delenv("SWE_DEFAULT_RUNTIME", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
+        cfg = FastBuildConfig()
+        assert cfg.runtime == "open_code"
 
     def test_max_tasks_default(self) -> None:
         cfg = FastBuildConfig()
@@ -104,15 +115,45 @@ class TestFastResolveModelsCludeCode:
 # fast_resolve_models — open_code runtime (AC-5)
 # ---------------------------------------------------------------------------
 
-_QWEN_MODEL = "qwen/qwen-2.5-coder-32b-instruct"
+_OPEN_CODE_MODEL = "openrouter/deepseek/deepseek-v4-flash"
 
 
 class TestFastResolveModelsOpenCode:
-    def test_all_roles_are_qwen(self) -> None:
+    def test_open_code_default_matches_the_main_path(self) -> None:
+        """Fast mode and the main path must resolve open_code to the same model.
+
+        The constant is duplicated rather than imported at module scope (that
+        import would be circular), so nothing but this test stops the two from
+        drifting apart — each side's own tests would keep passing.
+        """
+        from swe_af.execution.schemas import _OPENROUTER_AUTO_DEFAULT_MODEL  # noqa: PLC0415
+        from swe_af.fast.schemas import _OPEN_CODE_DEFAULT  # noqa: PLC0415
+
+        assert _OPEN_CODE_DEFAULT == _OPENROUTER_AUTO_DEFAULT_MODEL
+
+    def test_all_roles_use_open_code_default(self, monkeypatch) -> None:
+        for var in ("SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"):
+            monkeypatch.delenv(var, raising=False)
         cfg = FastBuildConfig(runtime="open_code")
         resolved = fast_resolve_models(cfg)
         for role in _ALL_FOUR_ROLES:
-            assert resolved[role] == _QWEN_MODEL, f"{role} should be qwen model"
+            assert resolved[role] == _OPEN_CODE_MODEL, f"{role} should be the shared open_code default"
+
+    def test_env_cascade_applies_to_fast_roles(self, monkeypatch) -> None:
+        # SWE_DEFAULT_MODEL → AI_MODEL → HARNESS_MODEL applies to fast builds
+        # exactly like the main path.
+        monkeypatch.setenv("SWE_DEFAULT_MODEL", "openrouter/qwen/qwen-3-coder")
+        cfg = FastBuildConfig(runtime="open_code")
+        resolved = fast_resolve_models(cfg)
+        for role in _ALL_FOUR_ROLES:
+            assert resolved[role] == "openrouter/qwen/qwen-3-coder"
+
+    def test_config_models_beat_env_cascade(self, monkeypatch) -> None:
+        monkeypatch.setenv("SWE_DEFAULT_MODEL", "openrouter/qwen/qwen-3-coder")
+        cfg = FastBuildConfig(runtime="open_code", models={"default": "openrouter/z-ai/glm-5"})
+        resolved = fast_resolve_models(cfg)
+        for role in _ALL_FOUR_ROLES:
+            assert resolved[role] == "openrouter/z-ai/glm-5"
 
     def test_returns_all_four_roles(self) -> None:
         cfg = FastBuildConfig(runtime="open_code")

@@ -232,7 +232,7 @@ af install https://github.com/Agent-Field/SWE-AF
 af run swe-planner
 ```
 
-`af install` clones the repo, provisions an isolated Python environment, and registers the `swe-planner` node with your control plane. On first `af run` you're prompted for the required secrets — an LLM provider key (`ANTHROPIC_API_KEY` **or** `OPENROUTER_API_KEY`) plus `GH_TOKEN` — which are stored encrypted and reused across every node, so you enter each only once. Then kick off a build:
+`af install` clones the repo, provisions an isolated Python environment, and registers the `swe-planner` node with your control plane. On first `af run` you're prompted for the one required secret — an LLM provider key (`ANTHROPIC_API_KEY` **or** `OPENROUTER_API_KEY`) — which is stored encrypted and reused across every node, so you enter it only once. (Add `GH_TOKEN` when you want builds to clone private repos and open pull requests.) Then kick off a build:
 
 ```bash
 af call swe-planner.build --in '{"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}'
@@ -244,10 +244,14 @@ New to AgentField? Install the control plane first with `curl -fsSL https://agen
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/swe-af)
 
-One click deploys SWE-AF + AgentField control plane + PostgreSQL. Set two environment variables in Railway:
+One click deploys SWE-AF + AgentField control plane + PostgreSQL. Exactly **one** environment variable is required in Railway — an LLM provider key:
 
-- `CLAUDE_CODE_OAUTH_TOKEN` — run `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits)
-- `GH_TOKEN` — GitHub personal access token with `repo` scope for PR creation
+- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. With only this set (no `ANTHROPIC_API_KEY`, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash` — no further configuration needed.
+- *Alternative:* `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits), to run the `claude_code` runtime instead.
+
+Optional:
+
+- `GH_TOKEN` — GitHub personal access token with `repo` scope. Needed only to clone **private** repos, push branches, and open pull requests; builds against public repos work without it.
 
 Once deployed, trigger a build:
 
@@ -529,16 +533,22 @@ Benchmark assets, logs, evaluator, and generated projects live in [`examples/age
 
 ```bash
 cp .env.example .env
-# Add your API key: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
-# Optionally add GH_TOKEN for PR workflow
+# Uncomment exactly ONE provider key: OPENROUTER_API_KEY (recommended),
+# ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, or GOOGLE_API_KEY
+# Optionally add GH_TOKEN (private-repo clones, pushing branches, opening PRs)
 
 docker compose up -d
 ```
 
+> `.env.example` ships with **every** provider key commented out — uncomment
+> exactly one. In particular, don't leave a placeholder `ANTHROPIC_API_KEY`
+> value in place: any non-empty value forces the `claude_code` runtime and
+> breaks an OpenRouter-only setup.
+
 Submit a build:
 
 ```bash
-# Default (Claude)
+# Default runtime (auto-selected from whichever provider key is in .env)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'
@@ -620,7 +630,9 @@ JSON
 
 Requirements:
 
-- `GH_TOKEN` in `.env` with `repo` scope
+- `GH_TOKEN` in `.env` with `repo` scope — required for *this* workflow, since
+  it clones private repos, pushes the branch, and opens the PR. Builds that
+  stay local (`repo_path`) or target a public repo don't need it.
 - Repo access for that token
 
 ### Post-PR CI gate
@@ -643,6 +655,124 @@ Configuration on `BuildConfig`:
 | `ci_wait_seconds` | `1500` | Wall-clock cap per `gh pr checks` watch (25 min). |
 | `ci_poll_seconds` | `30` | Poll interval for `gh pr checks`. |
 
+## Use SWE-AF as a Sub-Harness (Issue-Level Builds)
+
+The full `build` pipeline is **feature-level**: it plans, decomposes, and
+verifies a whole feature, which takes hours. When the caller is itself a
+coding harness — Claude Code, Codex, OpenCode — it has already done the
+planning. For that case SWE-AF exposes an **issue-level** entry point,
+`implement_issue`, that skips every planning agent and runs just the coding
+loop on an isolated branch. Delegating well-scoped issues to SWE-AF on cheap
+or open-weight models keeps the main harness's token budget for the work that
+needs it.
+
+Rule of thumb for the two prompt shapes:
+
+| Prompt shape | Entry point |
+| --- | --- |
+| "Implement X feature" (needs decomposition) | `swe-planner.build` / `swe-fast.build` |
+| "Change this code in this file, like this" (fully scoped, context supplied) | `swe-planner.implement_issue` / `swe-fast.implement_issue` |
+
+A harness does not need this table hardcoded: both entry points register with
+the control plane carrying an `entrypoint` tag and a routing description, so
+`af ls --entrypoints` (or `GET /api/v1/discovery/capabilities`) lists them —
+with when-to-use guidance — on any AgentField control plane the node joins
+(agentfield ≥ 0.1.113).
+
+Each call creates its own git worktree and an `issue/<build_id>-<slug>` branch
+off `base_branch` (default: the current branch), implements the issue with the
+coder → reviewer loop (a QA + synthesizer path when `needs_deeper_qa` is set),
+optionally runs one verifier pass against the acceptance criteria, removes the
+worktree, and returns the branch. The caller's checkout, current branch, and
+`git status` are untouched — so a main harness can fan out several issues
+against the same `repo_path` concurrently and merge the returned branches
+itself. Nothing is pushed and no PR is opened unless `enable_github_pr` is set:
+the caller owns merge and CI. Typical cost is 4–8 LLM calls (vs hundreds for a
+feature-level build).
+
+```bash
+# Delegate one scoped issue (async; returns an execution_id immediately)
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.implement_issue \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "input": {
+    "issue": {
+      "title": "Add retry with exponential backoff to fetch_user",
+      "description": "In src/api/client.py, wrap fetch_user's HTTP call in a retry helper: 3 attempts, 0.5s base delay, doubling. Reuse the existing logger for retry warnings.",
+      "acceptance_criteria": [
+        "fetch_user retries up to 3 times on ConnectionError",
+        "tests cover the retry-then-succeed path"
+      ],
+      "files_to_modify": ["src/api/client.py"],
+      "testing_strategy": "pytest tests/api/test_client.py"
+    },
+    "repo_path": "/workspaces/my-project",
+    "base_branch": "main",
+    "config": { "models": { "default": "haiku" } }
+  },
+  "webhook": { "url": "https://my-harness.example/hooks/swe-af" }
+}
+JSON
+
+# Poll instead of (or in addition to) the webhook
+curl http://localhost:8080/api/v1/executions/<execution_id>
+# Progress notes while it runs
+curl http://localhost:8080/api/v1/executions/<execution_id>/notes
+```
+
+The result's `branch` field is the deliverable:
+
+```json
+{
+  "success": true,
+  "outcome": "completed",
+  "branch": "issue/a1b2c3d4-add-retry-with-exponential-backoff",
+  "base_branch": "main",
+  "commits": ["<sha>"],
+  "files_changed": ["src/api/client.py", "tests/api/test_client.py"],
+  "iterations": 1,
+  "verification": { "passed": true, "criteria_results": ["..."] },
+  "debt_items": [],
+  "pr_url": ""
+}
+```
+
+`issue` fields: `title` + `description` (required), `acceptance_criteria`,
+`files_to_create` / `files_to_modify`, `testing_strategy`, `needs_deeper_qa`
+(routes through QA + reviewer + synthesizer), `estimated_complexity`, `name`.
+`additional_context` (top-level) is appended to the description.
+
+`config` keys (full schema: [`swe_af/issue/schemas.py`](swe_af/issue/schemas.py)):
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `runtime` / `models` | as in `build` | Same runtime + flat role map; valid role keys: `default`, `coder`, `code_reviewer`, `qa`, `qa_synthesizer`, `verifier`, `git` |
+| `max_coding_iterations` | `3` | Inner-loop budget (the feature-level default is 5) |
+| `verify` | `true` | One verifier pass against the acceptance criteria |
+| `enable_github_pr` | `false` | Push the branch and open a PR (needs an `origin` remote) |
+| `agent_timeout_seconds` | `1800` | Per-agent timeout |
+| `agent_max_turns` | `50` | Tool-use turn budget per agent |
+| `keep_worktree` | `false` | Leave the worktree in place for debugging |
+
+Notes for main-harness authors:
+
+- `repo_path` must be a checkout the SWE-AF node can reach (same machine, or
+  the shared `workspaces` volume in the Docker setup) with at least one commit.
+- Uncommitted changes in the caller's tree are **not** visible to the issue
+  branch — it is created from the committed base state.
+- A failed build with commits still returns the branch (`success: false`) so
+  the caller can triage; a build that produced no commits deletes its branch
+  and returns `branch: ""`.
+- Cap your fan-out: each delegation is a paid multi-agent run. A handful of
+  concurrent issues per repo is the sweet spot — the node also bounds its own
+  concurrency.
+- Available identically on `swe-fast.implement_issue`, and on the Go
+  implementation under those same node ids.
+
+A ready-made Claude Code skill for this flow ships in
+[`.claude/skills/delegate-issue/`](.claude/skills/delegate-issue/SKILL.md).
+
 ## API Reference
 
 <details>
@@ -653,6 +783,9 @@ Core async endpoints (returns an `execution_id` immediately):
 ```bash
 # Full build: plan -> execute -> verify
 POST /api/v1/execute/async/swe-planner.build
+
+# Issue-level build (sub-harness entry): coding loop only, no planning
+POST /api/v1/execute/async/swe-planner.implement_issue
 
 # Plan only
 POST /api/v1/execute/async/swe-planner.plan
@@ -819,16 +952,32 @@ make clean-examples
 
 ---
 
-## Go implementation (opt-in)
+## Go implementation
 
-This repo also ships a Go port of the node under [`go/`](go/README.md). The
-**Python implementation is the default** — everything above is unchanged and
-still runs as `swe-planner` (`:8003`) / `swe-fast` (`:8004`). The Go port
-registers **separately** as `swe-planner-go` (`:8005`) and `swe-fast-go`
-(`:8006`), so both stacks can run against one control plane simultaneously.
-Opt in by targeting the `-go` reasoner path (e.g.
-`POST /api/v1/execute/async/swe-planner-go.build`). See
+The node under [`go/`](go/README.md) is what `af install` gives you, and it
+registers under the same ids as everything above — `swe-planner` and
+`swe-fast` — so no trigger, reasoner name, or API shape changes with it. The
+repo-root manifest declares itself `superseded_by` `//go`, so
+`af install https://github.com/Agent-Field/SWE-AF` lands there and replaces an
+existing Python install in place, keeping its node-scoped secrets.
+
+The Python implementation is unchanged and still what `python -m swe_af` and
+the compose stack in `docker-compose.yml` run. Because the two now answer to
+the same node ids, running both against one control plane needs an explicit
+`NODE_ID` on one of them — `docker-compose.go.yml` does that. See
 [`go/README.md`](go/README.md) for build, run, and Docker instructions.
+
+### Coding engine (opt-in preview)
+
+The Go node ships a prebuilt high-performance coding engine next to the
+classic coding loop. It is **inert by default** — nothing changes unless you
+set `SWE_PRO_ENGINE=1`. With the flag set, builds route per-issue coding
+through the engine; unset it and the node returns to the classic
+coder → reviewer/QA loop. If the binary isn't present, the node logs a
+warning and keeps using the classic loop, so the flag is safe to leave on.
+Tuning knobs (`SWE_PRO_VARIANT`, `SWE_PRO_MAX_COST`, `SWE_PRO_PUBLIC_URL`)
+and the full env surface are documented in
+[`go/docs/pro-engine.md`](go/docs/pro-engine.md).
 
 ---
 

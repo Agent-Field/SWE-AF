@@ -18,6 +18,7 @@ load_dotenv()
 
 from agentfield import Agent
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
+from swe_af.execution.schemas import _workspace_root
 from swe_af.fast import fast_router
 from swe_af.fast.schemas import FastBuildConfig, FastBuildResult, fast_resolve_models
 
@@ -39,6 +40,11 @@ app.include_router(fast_router)
 from swe_af.reasoners import router as _execution_router  # noqa: E402
 app.include_router(_execution_router)
 
+# Issue-level entry point (implement_issue) — shared with swe-planner so a
+# main harness can delegate scoped issues to either node.
+from swe_af.issue import issue_router as _issue_router  # noqa: E402
+app.include_router(_issue_router)
+
 
 def _repo_name_from_url(url: str) -> str:
     """Extract repo name from a GitHub URL."""
@@ -55,7 +61,15 @@ def _runtime_to_provider(runtime: str) -> str:
     return "opencode"
 
 
-@app.reasoner()
+@app.reasoner(
+    tags=["entrypoint"],
+    description=(
+        "Fast-mode build: one planning pass into a small task list, then code and "
+        "verify with tight timeouts. Same goal/repo_path interface as "
+        "swe-planner.build, but lighter and cheaper — suited to small features "
+        "where full DAG planning is overkill."
+    ),
+)
 async def build(
     goal: str,
     repo_path: str = "",
@@ -77,7 +91,9 @@ async def build(
 
     # Auto-derive repo_path from repo_url when not specified
     if effective_repo_url and not repo_path:
-        repo_path = f"/workspaces/{_repo_name_from_url(effective_repo_url)}"
+        repo_path = os.path.join(
+            _workspace_root(), _repo_name_from_url(effective_repo_url)
+        )
     if not repo_path:
         raise ValueError("Either repo_path or repo_url must be provided")
 

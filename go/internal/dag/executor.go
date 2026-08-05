@@ -11,7 +11,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
-// CallFn dispatches to a reasoner by target (e.g. "swe-planner-go.run_merger") with
+// CallFn dispatches to a reasoner by target (e.g. "swe-planner.run_merger") with
 // the same keyword args Python passes. Callers supply a closure over agent.Call
 // + envelope.UnwrapCallResult (so results arrive already unwrapped); a returned
 // *fatal.FatalHarnessError is honoured throughout. Alias of coding.CallFn so the
@@ -126,7 +126,7 @@ func RunDAG(
 		cfg = def
 	}
 	if nodeID == "" {
-		nodeID = "swe-planner-go"
+		nodeID = "swe-planner"
 	}
 
 	dagState := initDAGState(planResult, repoPath, o.gitConfig, o.buildID)
@@ -184,7 +184,7 @@ func RunDAG(
 		cleanupDone = make(chan struct{})
 		go func() {
 			cleanupErr = cleanupWorktrees(ctx, dagState, branches, callFn, nodeID, note,
-				level, cfg.GitModel(), cfg.AIProvider(), completed)
+				level, cfg.GitModel(), cfg.AIProvider(), cfg.DeterministicGit, completed)
 			close(cleanupDone)
 		}()
 	}
@@ -536,7 +536,7 @@ mainLoop:
 					[]string{"execution", "worktree_cleanup", "final_sweep"})
 			}
 			if err := cleanupWorktrees(ctx, dagState, allBranches, callFn, nodeID, note,
-				dagState.CurrentLevel, cfg.GitModel(), cfg.AIProvider(), nil); err != nil {
+				dagState.CurrentLevel, cfg.GitModel(), cfg.AIProvider(), cfg.DeterministicGit, nil); err != nil {
 				return nil, err
 			}
 		}

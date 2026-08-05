@@ -20,6 +20,6 @@ services:
   swe-agent-go:
     ports: !override
       - "18005:8005"
-  swe-fast-go:
+  swe-fast:
     ports: !override
       - "18006:8006"

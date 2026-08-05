@@ -88,6 +88,15 @@ Read <architecture_path> Section X.Y (<component name>) for:
 - The Testing Strategy section MUST be concrete: name exact test file paths,
   the test framework, and map acceptance criteria to test categories.
   Do NOT write vague strategies like "add unit tests."
+- Acceptance criteria describe the DELIVERABLE, never the state of the whole
+  repository. Never write a criterion that constrains global cleanliness —
+  `git status` being empty, or `git diff --name-only` listing an exact set
+  of files. The build harness and the coding engine both write bookkeeping into
+  the working tree, so such a criterion can never hold and the issue can never
+  be completed. "`ordinals.go` contains the corrected modulus" is a good
+  criterion; "`git diff --name-only HEAD` lists only `ordinals.go`" is not.
+  Constraining which files the coder must not MODIFY is fine — say it in prose
+  ("do not change the tests"), not as a command over the whole index.
 - Use the numbered naming convention: `issue-<NN>-<name>.md` (e.g. `issue-01-lexer.md`)
 
 ## Tools Available

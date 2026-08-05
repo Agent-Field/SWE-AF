@@ -4,7 +4,36 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 
-from swe_af.execution.schemas import DAGState, ReplanAction, ReplanDecision
+from swe_af.execution.schemas import (
+    DAGState,
+    ReplanAction,
+    ReplanDecision,
+    ensure_str_list,
+)
+
+# Issue-dict fields that must be list[str]. LLM-sourced issues (fix generator,
+# replanner updates/additions) sometimes carry a bare string here.
+_ISSUE_LIST_FIELDS: tuple[str, ...] = (
+    "acceptance_criteria",
+    "depends_on",
+    "provides",
+    "files_to_create",
+    "files_to_modify",
+)
+
+
+def normalize_issue_dict(issue: dict) -> dict:
+    """Coerce LLM-emitted scalar shapes on a raw issue dict, in place.
+
+    Raw issue dicts bypass Pydantic (DAGState.all_issues is list[dict]), so a
+    bare-string acceptance criterion survives until something re-validates the
+    state — a checkpoint reload or the replanner's DAGState — and kills the
+    build long after the cheap moment to catch it. Normalize at ingestion.
+    """
+    for field in _ISSUE_LIST_FIELDS:
+        if field in issue:
+            issue[field] = ensure_str_list(issue[field])
+    return issue
 
 
 def recompute_levels(
@@ -129,7 +158,7 @@ def apply_replan(dag_state: DAGState, decision: ReplanDecision) -> DAGState:
     for updated in decision.updated_issues:
         name = updated.get("name", "")
         if name in remaining_by_name:
-            remaining_by_name[name].update(updated)
+            remaining_by_name[name].update(normalize_issue_dict(dict(updated)))
 
     # 4. Add new issues (with next-available sequence numbers)
     # Build target_repo lookup from all existing issues for inheritance
@@ -141,6 +170,7 @@ def apply_replan(dag_state: DAGState, decision: ReplanDecision) -> DAGState:
 
     max_seq = max((i.get("sequence_number") or 0 for i in dag_state.all_issues), default=0)
     for new_issue in decision.new_issues:
+        new_issue = normalize_issue_dict(dict(new_issue))
         name = new_issue.get("name", "")
         if name and name not in remaining_by_name:
             if not new_issue.get("sequence_number"):

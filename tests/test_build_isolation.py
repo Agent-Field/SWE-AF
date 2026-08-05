@@ -9,6 +9,7 @@ Ref: https://github.com/Agent-Field/SWE-AF/issues/43
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -26,7 +27,8 @@ class TestBuildWorkspaceIsolation:
         """When repo_url is provided without repo_path, the derived path
         must include the build_id to isolate concurrent builds."""
         assert re.search(
-            r'repo_path\s*=\s*f"/workspaces/\{repo_name\}-\{build_id\}"',
+            r'repo_path\s*=\s*os\.path\.join\(\s*_workspace_root\(\),\s*'
+            r'f"\{repo_name\}-\{build_id\}"\s*\)',
             APP_SOURCE,
         ), (
             "Auto-derived repo_path must include build_id suffix to isolate "
@@ -52,7 +54,8 @@ class TestBuildWorkspaceIsolation:
         assert multi_repo_start > 0, "Multi-repo section not found"
         multi_repo_section = APP_SOURCE[multi_repo_start:multi_repo_start + 500]
         assert re.search(
-            r'repo_path\s*=\s*f"/workspaces/\{repo_name\}-\{build_id\}"',
+            r'repo_path\s*=\s*os\.path\.join\(\s*_workspace_root\(\),\s*'
+            r'f"\{repo_name\}-\{build_id\}"\s*\)',
             multi_repo_section,
         ), (
             "Multi-repo derived repo_path must include build_id suffix (see issue #43)"
@@ -103,3 +106,63 @@ class TestBuildWorkspaceIsolation:
         assert artifacts_a != artifacts_b, (
             "Artifacts dirs must differ between concurrent builds"
         )
+
+
+class TestWorkspaceRoot:
+    """Issue #107: the default workspace root must never resolve to the
+    drive-relative ``/workspaces`` on Windows."""
+
+    def test_override_wins_on_every_platform(self, monkeypatch) -> None:
+        """SWE_WORKSPACE_ROOT, when set, is the base regardless of os.name."""
+        from swe_af.execution.schemas import _workspace_root
+
+        monkeypatch.setenv("SWE_WORKSPACE_ROOT", "/mnt/scratch/ws")
+
+        monkeypatch.setattr(os, "name", "nt")
+        assert _workspace_root() == "/mnt/scratch/ws"
+
+        monkeypatch.setattr(os, "name", "posix")
+        assert _workspace_root() == "/mnt/scratch/ws"
+
+    def test_windows_default_uses_localappdata(self, monkeypatch) -> None:
+        """On Windows with no override, the base is under %LOCALAPPDATA% —
+        absolute, never the drive-relative '/workspaces'."""
+        from swe_af.execution.schemas import _workspace_root
+
+        monkeypatch.delenv("SWE_WORKSPACE_ROOT", raising=False)
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\me\AppData\Local")
+
+        got = _workspace_root()
+        assert got == os.path.join(
+            r"C:\Users\me\AppData\Local", "agentfield", "workspaces"
+        )
+        assert got != "/workspaces"
+
+    def test_windows_falls_back_to_tempdir_without_localappdata(
+        self, monkeypatch
+    ) -> None:
+        """On Windows with neither override nor LOCALAPPDATA, fall back to the
+        temp dir — still an absolute base, never '/workspaces'."""
+        import tempfile
+
+        from swe_af.execution.schemas import _workspace_root
+
+        monkeypatch.delenv("SWE_WORKSPACE_ROOT", raising=False)
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+        monkeypatch.setattr(os, "name", "nt")
+
+        got = _workspace_root()
+        assert got == os.path.join(
+            tempfile.gettempdir(), "agentfield", "workspaces"
+        )
+        assert got != "/workspaces"
+
+    def test_non_windows_default_is_exactly_workspaces(self, monkeypatch) -> None:
+        """Non-Windows with no override derives exactly '/workspaces' — no
+        behavior change (Docker parity)."""
+        from swe_af.execution.schemas import _workspace_root
+
+        monkeypatch.delenv("SWE_WORKSPACE_ROOT", raising=False)
+        monkeypatch.setattr(os, "name", "posix")
+        assert _workspace_root() == "/workspaces"

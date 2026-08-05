@@ -14,14 +14,16 @@ package node
 //     those role names, backed by the full-pipeline role handlers (fast.Wrappers
 //     is the identity delegation map that documents this).
 //
-// Tags: the Go port registers under a distinct identity from the Python node
-// (swe-planner-go / swe-fast-go) so both stacks can run against one control
-// plane. Role reasoners carry ["swe-planner-go"] on BOTH nodes — mirroring the
-// Python structure where they are registered through the swe-planner-tagged
-// AgentRouter, but grouped under the Go node's -go identity. The four fast-node
-// reasoners carry ["swe-fast-go"] (Python: fast_router tags=["swe-fast"]). The
-// five orchestrators carry ["swe-planner-go"] to group them with the node in the
-// control-plane UI (design §8).
+// Tags match the Python node's exactly, because this registers under the same
+// identity: a caller's trigger does not change when the implementation does.
+// Role reasoners carry ["swe-planner"] on BOTH nodes — mirroring the Python
+// structure where they are registered through the swe-planner-tagged
+// AgentRouter. The four fast-node reasoners carry ["swe-fast"] (Python:
+// fast_router tags=["swe-fast"]). The five orchestrators carry ["swe-planner"]
+// to group them with the node in the control-plane UI (design §8).
+//
+// Running this alongside the Python node against one control plane therefore
+// needs an explicit NODE_ID on one of them; docker-compose.go.yml does that.
 
 import (
 	"context"
@@ -38,26 +40,34 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/roles/planning"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fast"
+	"github.com/Agent-Field/SWE-AF/go/internal/issue"
+	"github.com/Agent-Field/SWE-AF/go/internal/pro"
 )
 
 const (
-	tagPlanner = "swe-planner-go"
-	tagFast    = "swe-fast-go"
+	tagPlanner = "swe-planner"
+	tagFast    = "swe-fast"
 )
 
 // RegisterPlanner registers the full swe-planner surface: 25 role reasoners +
-// 5 orchestrators (30 total). Ports swe_af/app.py.
+// 5 orchestrators + the issue-level entry point (31 total). Ports swe_af/app.py.
 func (n *Node) RegisterPlanner() {
 	n.registerRoles()
 	n.registerOrchestrators()
+	n.registerIssueReasoner()
+	if pro.Available() {
+		n.registerProReasoners()
+	}
 }
 
 // RegisterFast registers the swe-fast surface: the same 25 role reasoners + the
-// 4 fast reasoners (29 total). Ports swe_af/fast/app.py. It deliberately does
-// NOT register the orchestrators — fast/app.py only defines its own build.
+// 4 fast reasoners + the issue-level entry point (30 total). Ports
+// swe_af/fast/app.py. It deliberately does NOT register the orchestrators —
+// fast/app.py only defines its own build.
 func (n *Node) RegisterFast() {
 	n.registerRoles()
 	n.registerFastReasoners()
+	n.registerIssueReasoner()
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +76,7 @@ func (n *Node) RegisterFast() {
 
 // registerRoles wires the 25 execution/planning role reasoners, each backed by
 // its package handler and threaded with the Deps built from the agent. All are
-// tagged ["swe-planner-go"] (Python groups them under the swe-planner router).
+// tagged ["swe-planner"] (Python groups them under the swe-planner router).
 func (n *Node) registerRoles() {
 	tag := agent.WithReasonerTags(tagPlanner)
 
@@ -126,6 +136,16 @@ func (n *Node) registerOrchestrators() {
 		CIGate:           orch.RunCIGate,
 		ApprovalGate:     orch.PlanApprovalGate,
 	}
+	// Engine default routing (seamless path): with the flag truthy AND the
+	// binary present, builds and execute calls that name no execute_fn_target
+	// route per-issue coding through pro_execute on this node. Callers that pass
+	// a target keep full control. Flag-on with a missing binary degrades to the
+	// classic loop
+	// (pro.Start logs the warning) instead of routing to a node that never
+	// joined.
+	if pro.Available() {
+		deps.DefaultExecuteFnTarget = n.NodeID + ".pro_execute"
+	}
 
 	handlers := orch.Handlers() // {"build": Build}
 	orch.RegisterPlan(handlers) // adds {"plan": Plan}
@@ -133,16 +153,38 @@ func (n *Node) registerOrchestrators() {
 	handlers["resolve"] = orch.ResolveHandler
 	handlers["resume_build"] = orch.ResumeBuildHandler
 
-	// Python registers the orchestrators via @app.reasoner() with NO tags
-	// (only router-registered roles carry tags) — keep the registration
-	// payload identical.
+	// Python registers the orchestrators via @app.reasoner(): only `build`
+	// carries tags (["entrypoint"]) plus an explicit routing description; the
+	// others get their docstring summaries as descriptions — keep the
+	// registration payload identical.
 	for name, h := range handlers {
 		var opts []agent.ReasonerOption
+		if name == "build" {
+			opts = append(opts, agent.WithReasonerTags("entrypoint"))
+		}
+		if d, ok := orchestratorDescriptions[name]; ok {
+			opts = append(opts, agent.WithDescription(d))
+		}
 		if s, ok := orchestratorSchemas[name]; ok {
 			opts = append(opts, agent.WithInputSchema(s))
 		}
 		regHandler(n, name, deps, h, opts...)
 	}
+}
+
+// orchestratorDescriptions mirrors the Python side: build's explicit
+// description= kwarg, and the docstring first paragraphs the Python SDK
+// auto-registers for the other orchestrators (swe_af/app.py).
+var orchestratorDescriptions = map[string]string{
+	"build": "Feature-level build: plans a PRD → architecture → issue DAG, then codes, " +
+		"reviews, merges and verifies end-to-end. Give it a goal plus repo_path or " +
+		"repo_url; returns a verified feature branch (optionally a draft PR). " +
+		"Typical wall-clock 25-60 min. For one well-scoped change with known files, " +
+		"prefer implement_issue.",
+	"plan":         "Run the full planning pipeline.",
+	"execute":      "Execute a planned DAG with self-healing replanning.",
+	"resolve":      "Update an existing PR: merge base, fix CI, address review comments, push.",
+	"resume_build": "Resume a crashed build from the last checkpoint.",
 }
 
 // ---------------------------------------------------------------------------
@@ -160,14 +202,82 @@ func (n *Node) registerFastReasoners() {
 
 	// Python tags: fast_plan_tasks/fast_execute_tasks/fast_verify come from
 	// fast_router (tags=["swe-fast"]); the fast `build` is @app.reasoner()
-	// with NO tags. Mirror that exactly.
+	// tagged ["entrypoint"] with a routing description. Mirror that exactly.
 	tag := agent.WithReasonerTags(tagFast)
 	for name, h := range fast.Handlers() {
 		var opts []agent.ReasonerOption
-		if name != "build" {
+		if name == "build" {
+			opts = append(opts,
+				agent.WithReasonerTags("entrypoint"),
+				agent.WithDescription(
+					"Fast-mode build: one planning pass into a small task list, then code and "+
+						"verify with tight timeouts. Same goal/repo_path interface as "+
+						"swe-planner.build, but lighter and cheaper — suited to small features "+
+						"where full DAG planning is overkill."),
+			)
+		} else {
 			opts = append(opts, tag)
 		}
 		if s, ok := fastSchemas[name]; ok {
+			opts = append(opts, agent.WithInputSchema(s))
+		}
+		regHandler(n, name, deps, h, opts...)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Issue-level entry point (both nodes)
+// ---------------------------------------------------------------------------
+
+// registerIssueReasoner wires implement_issue — the sub-harness entry point a
+// main coding harness delegates fully-scoped issues to. Python includes the
+// swe-issue-tagged issue_router in BOTH apps; the Go port mirrors that on both
+// nodes under the -go tag convention.
+func (n *Node) registerIssueReasoner() {
+	deps := &issue.Deps{
+		Call:   newCallFn(n.App),
+		Note:   n.App,
+		NodeID: n.NodeID,
+	}
+	tag := agent.WithReasonerTags("swe-issue-go", "entrypoint")
+	for name, h := range issue.Handlers() {
+		opts := []agent.ReasonerOption{tag, agent.WithDescription(
+			"Issue-level build (sub-harness entry): implements ONE fully-scoped issue " +
+				"on an isolated branch of a local repo — no planning agents, ~4-8 LLM " +
+				"calls, minutes not hours. Give it issue{title, description, " +
+				"acceptance_criteria, files_to_*} plus repo_path; returns the deliverable " +
+				"branch. Prefer this over build when you already know exactly what to change."),
+		}
+		if s, ok := issueSchemas[name]; ok {
+			opts = append(opts, agent.WithInputSchema(s))
+		}
+		regHandler(n, name, deps, h, opts...)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pro-engine surface (SWE_PRO_ENGINE-gated, swe-planner only)
+// ---------------------------------------------------------------------------
+
+// registerProReasoners wires the pro-engine adapter. Called only when
+// pro.Available(), so the classic surface — and the parity test asserting it —
+// is unchanged whenever SWE_PRO_ENGINE is falsy or the binary is missing.
+func (n *Node) registerProReasoners() {
+	deps := &pro.Deps{
+		Call:       newCallFn(n.App),
+		Note:       n.App,
+		EngineNode: pro.NodeID(),
+	}
+	for name, h := range pro.Handlers() {
+		opts := []agent.ReasonerOption{
+			agent.WithReasonerTags(tagPlanner),
+			agent.WithDescription(
+				"Pro-engine executor: implements ONE fully-scoped issue via the " +
+					"bundled pro coding engine. Matches the execute_fn_target contract — " +
+					"set config.execute_fn_target to \"<node>.pro_execute\" on build/execute " +
+					"to route per-issue coding through it."),
+		}
+		if s, ok := proSchemas[name]; ok {
 			opts = append(opts, agent.WithInputSchema(s))
 		}
 		regHandler(n, name, deps, h, opts...)
@@ -248,6 +358,22 @@ var orchestratorSchemas = map[string]json.RawMessage{
 	"resume_build": schema(`{"type":"object","additionalProperties":true,"required":["repo_path"],"properties":{` +
 		`"repo_path":{"type":"string"},"artifacts_dir":{"type":"string"},"config":{"type":"object"},` +
 		`"git_config":{"type":"object"}}}`),
+}
+
+// issueSchemas maps the issue-level reasoner to its input schema.
+var issueSchemas = map[string]json.RawMessage{
+	// implement_issue(issue, repo_path, base_branch="", artifacts_dir=".artifacts",
+	//                 additional_context="", config=None)
+	"implement_issue": schema(`{"type":"object","additionalProperties":true,"required":["issue","repo_path"],"properties":{` +
+		`"issue":{"type":"object"},"repo_path":{"type":"string"},"base_branch":{"type":"string"},` +
+		`"artifacts_dir":{"type":"string"},"additional_context":{"type":"string"},"config":{"type":"object"}}}`),
+}
+
+// proSchemas maps the opt-in pro-engine reasoners to their input schemas.
+var proSchemas = map[string]json.RawMessage{
+	// pro_execute(issue, repo_path) — the execute_fn_target calling convention.
+	"pro_execute": schema(`{"type":"object","additionalProperties":true,"required":["issue","repo_path"],"properties":{` +
+		`"issue":{"type":"object"},"repo_path":{"type":"string"}}}`),
 }
 
 // fastSchemas maps the 4 fast reasoner names to their input schemas.

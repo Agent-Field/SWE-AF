@@ -145,7 +145,7 @@ func planApp(sprint map[string]any) (*Deps, *planMock) {
 		"run_sprint_planner":  constResp(sprint),
 		"run_issue_writer":    constResp(map[string]any{"success": true, "path": "/tmp/x.md"}),
 	}}
-	return &Deps{App: m, NodeID: "swe-planner-go"}, m
+	return &Deps{App: m, NodeID: "swe-planner"}, m
 }
 
 func runPlan(t *testing.T, deps *Deps, repoPath string, extra map[string]any) (map[string]any, error) {
@@ -421,7 +421,8 @@ func TestPlanWritesArtifactsAtExactPaths(t *testing.T) {
 
 func TestPlanOpenRouterOnlyDefaults(t *testing.T) {
 	for _, k := range []string{"ANTHROPIC_API_KEY", "SWE_DEFAULT_RUNTIME",
-		"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"} {
+		"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL",
+		"SWE_MODEL_LOW", "SWE_MODEL_MED", "SWE_MODEL_HIGH"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
@@ -433,7 +434,7 @@ func TestPlanOpenRouterOnlyDefaults(t *testing.T) {
 		"run_sprint_planner":  constResp(sprintResult(issue("my-issue", nil, []any{"thing.py"}))),
 		"run_issue_writer":    constResp(map[string]any{"success": true}),
 	}}
-	deps := &Deps{App: m, NodeID: "swe-planner-go"}
+	deps := &Deps{App: m, NodeID: "swe-planner"}
 
 	// Omit ai_provider/*_model so env resolution runs.
 	if _, err := Plan(context.Background(), deps, map[string]any{

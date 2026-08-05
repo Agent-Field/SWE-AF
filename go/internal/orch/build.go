@@ -19,6 +19,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
 
 // Handlers is the name→handler registration surface consumed by node wiring.
@@ -73,7 +74,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	// Auto-derive repo_path from repo_url, build-scoped.
 	if cfg.RepoURL != "" && repoPath == "" {
 		repoName := deriveRepoName(cfg.RepoURL)
-		repoPath = fmt.Sprintf("/workspaces/%s-%s", repoName, buildID)
+		repoPath = filepath.Join(workspace.Root(), fmt.Sprintf("%s-%s", repoName, buildID))
 	}
 
 	// Multi-repo: derive repo_path from the primary repo.
@@ -83,7 +84,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			primary = &cfg.Repos[0]
 		}
 		repoName := deriveRepoName(primary.RepoURL)
-		repoPath = fmt.Sprintf("/workspaces/%s-%s", repoName, buildID)
+		repoPath = filepath.Join(workspace.Root(), fmt.Sprintf("%s-%s", repoName, buildID))
 	}
 
 	if repoPath == "" {
@@ -176,6 +177,13 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		planCh <- callRes{raw: raw, err: perr}
 	}()
 
+	// Keep the harness's own .artifacts/ and .worktrees/ out of the target
+	// repo's git view before any stage can stage them, and record the commit
+	// the workspace starts on so the integration branch can be checked against
+	// it below.
+	excludeHarnessMetadata(ctx, repoPath)
+	buildBaseSHA := headSHA(ctx, repoPath)
+
 	maxGitInitRetries := cfg.GitInitMaxRetries
 	var gitInit map[string]any
 	var previousError any // None on first attempt, string thereafter
@@ -219,6 +227,20 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		if asBool(gitInit["success"]) {
 			deps.Note(ctx, fmt.Sprintf("Git init succeeded on attempt %d", attempt),
 				"build", "git_init", "success")
+			// The agent branches by hand; make sure it branched from where this
+			// run actually started, or the issue it was asked to fix may not
+			// even be present on the branch the work merges into.
+			if integrationBranchBase(
+				ctx, repoPath, mapStr(gitInit, "integration_branch", ""), buildBaseSHA,
+			) {
+				deps.Note(ctx, fmt.Sprintf(
+					"Integration branch %s did not descend from the run's starting commit %s — re-cut from it",
+					mapStr(gitInit, "integration_branch", ""), buildBaseSHA),
+					"build", "git_init", "rebased")
+			}
+			// git_init is told to create .worktrees/ and may rewrite
+			// .gitignore; re-assert the exclusions and drop anything it staged.
+			excludeHarnessMetadata(ctx, repoPath)
 			break
 		}
 
@@ -491,7 +513,11 @@ func prepareSingleRepo(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	switch {
 	case cfg.RepoURL != "" && !pathExists(gitDir):
 		deps.Note(ctx, fmt.Sprintf("Cloning %s → %s", cfg.RepoURL, repoPath), "build", "clone")
-		_ = os.MkdirAll(repoPath, 0o755)
+		// Create only the parent; git clone creates the leaf itself. Pre-creating
+		// the destination leaf makes git refuse it as "already exists and is not
+		// an empty directory" on Windows, where it cannot re-open the dir the node
+		// just made (issue #107).
+		_ = os.MkdirAll(filepath.Dir(repoPath), 0o755)
 		r := runGit(ctx, "", "clone", cfg.RepoURL, repoPath)
 		if r.ExitCode != 0 {
 			errMsg := strings.TrimSpace(r.Stderr)
@@ -524,7 +550,8 @@ func prepareSingleRepo(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 			deps.Note(ctx, fmt.Sprintf("Reset to origin/%s failed — re-cloning", defaultBranch),
 				"build", "clone", "reclone")
 			_ = os.RemoveAll(repoPath)
-			_ = os.MkdirAll(repoPath, 0o755)
+			// Parent-only: git clone re-creates the leaf (issue #107).
+			_ = os.MkdirAll(filepath.Dir(repoPath), 0o755)
 			clone := runGit(ctx, "", "clone", cfg.RepoURL, repoPath)
 			if clone.ExitCode != 0 {
 				return fmt.Errorf("git re-clone failed: %s", strings.TrimSpace(clone.Stderr))

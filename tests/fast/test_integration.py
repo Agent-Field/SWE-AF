@@ -137,14 +137,14 @@ print('OK')
 # ---------------------------------------------------------------------------
 
 
-def test_ac_5_open_code_defaults_to_qwen():
-    """AC-5: fast_resolve_models() returns qwen model for all roles with open_code runtime."""
+def test_ac_5_open_code_defaults_to_shared_default():
+    """AC-5: fast_resolve_models() returns the shared open_code default for all roles."""
     code = """
 from swe_af.fast.schemas import fast_resolve_models, FastBuildConfig
 cfg = FastBuildConfig(runtime='open_code')
 resolved = fast_resolve_models(cfg)
 for role, model in resolved.items():
-    assert model == 'qwen/qwen-2.5-coder-32b-instruct', f'{role}={model!r}'
+    assert model == 'openrouter/deepseek/deepseek-v4-flash', f'{role}={model!r}'
 print('OK')
 """
     result = _run(code)

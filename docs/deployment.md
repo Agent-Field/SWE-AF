@@ -20,18 +20,16 @@ Copy `.env.example` to `.env` and configure at least one authentication method:
 cp .env.example .env
 ```
 
-**Required (one of):**
+**Required — exactly one LLM provider key.** `.env.example` ships with all of
+them commented out; uncomment one. Note that any non-empty `ANTHROPIC_API_KEY`
+(including a leftover placeholder) forces the `claude_code` runtime, so leave
+it commented out unless you mean to use it.
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude models |
+| `OPENROUTER_API_KEY` | **Recommended** — OpenRouter key (200+ models). The only secret needed to get started: on its own it auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash` |
+| `ANTHROPIC_API_KEY` | Anthropic API key for Claude models (`claude_code` runtime) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code subscription token (uses Pro/Max credits) |
-
-**For open-source models (alternative to Claude):**
-
-| Variable | Purpose |
-|---|---|
-| `OPENROUTER_API_KEY` | OpenRouter API key (200+ models) |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GOOGLE_API_KEY` | Google Gemini API key |
 | `MINIMAX_API_KEY` | MiniMax API key for direct OpenAI- and Anthropic-compatible `open_code` providers |
@@ -54,7 +52,7 @@ cp .env.example .env
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `GH_TOKEN` | GitHub PAT with `repo` scope for draft PRs | *(none)* |
+| `GH_TOKEN` | GitHub PAT with `repo` scope — needed only to clone private repos, push branches, and open PRs. Builds on local or public repos work without it | *(none)* |
 | `AGENTFIELD_SERVER` | Control plane URL | `http://control-plane:8080` (Docker) |
 | `NODE_ID` | Agent node identifier | `swe-planner` |
 | `PORT` | Agent listen port | `8003` |
@@ -79,7 +77,7 @@ The image registers `MiniMax-M3` and `MiniMax-M2.7` under the direct OpenAI-comp
 ```bash
 git clone https://github.com/Agent-Field/SWE-AF
 cd SWE-AF
-cp .env.example .env   # fill in API keys
+cp .env.example .env   # uncomment exactly ONE provider key
 docker compose up -d
 ```
 
@@ -97,7 +95,7 @@ If you already have an AgentField control plane running:
 ```bash
 git clone https://github.com/Agent-Field/SWE-AF
 cd SWE-AF
-cp .env.example .env   # fill in API keys
+cp .env.example .env   # uncomment exactly ONE provider key
 
 # Set AGENTFIELD_SERVER in .env to your control plane URL
 docker compose -f docker-compose.local.yml up -d

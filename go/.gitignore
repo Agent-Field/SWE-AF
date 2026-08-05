@@ -1,3 +1,11 @@
+# Local build outputs. bin/ is a versioned directory — it carries the vendored
+# pro-engine builds under their swe-pro-<GOOS>-<GOARCH> names — so the
+# unsuffixed names a local `go build -o bin/...` or the installer's build step
+# produces are ignored individually rather than by ignoring bin/ wholesale.
+bin/swe-planner
+bin/swe-fast
+bin/swe-pro
+
 # Local Go workspace used during SDK-parity development to resolve the
 # agentfield Go SDK to the parity worktree. Must NOT be committed — CI/Docker
 # rely on the go.mod replace + a pinned agentfield checkout instead.

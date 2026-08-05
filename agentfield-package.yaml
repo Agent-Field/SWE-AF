@@ -4,6 +4,21 @@ version: 0.1.0
 description: SWE planning/execution agent node (plans and executes software-engineering tasks)
 author: Agent-Field
 
+# The Go node in go/ is the maintained SWE node: same reasoners, same
+# interface, one static binary, and it ships the coding engine. Installing this
+# repo installs that instead — so `af install https://github.com/Agent-Field/SWE-AF`
+# is the one thing a user has to know, before and after the switch.
+#
+# go/ declares this same name deliberately, so the switch is a replacement in
+# place: same node id, same triggers, node-scoped secrets kept. Only one of the
+# two can be installed at a time, which is the point.
+#
+# This manifest stays here as the redirect, so the Python node is still what
+# `python -m swe_af` and the Docker images run. The redirect is a git-install
+# behaviour only: to install this node deliberately, clone the repo and install
+# the checkout as a local path.
+superseded_by: https://github.com/Agent-Field/SWE-AF//go
+
 entrypoint:
   start: python -m swe_af
   healthcheck: /health
@@ -36,18 +51,17 @@ user_environment:
           description: Anthropic-compatible auth token for the Claude runtime
           type: secret
           scope: global
-  required:
-    # SWE-AF's core loop clones a repo, pushes a branch, and opens a pull
-    # request — all of which need GitHub write access. `gh`/`git` read this
-    # token for authentication (see prompts/github_pr.py). Required so setup
-    # prompts for it up front rather than failing partway through a build.
+  optional:
+    # `gh`/`git` read this token for authentication (see prompts/github_pr.py).
+    # Optional so an LLM key is the only secret needed to get started: builds
+    # on local/public repos run without it; it is needed to clone private
+    # repos, push branches, and open pull requests.
     - name: GH_TOKEN
-      description: GitHub token (repo scope) for cloning repos and opening pull requests
+      description: GitHub token (repo scope) — needed to clone private repos, push branches, and open pull requests
       type: secret
       scope: global
-  optional:
     - name: SWE_DEFAULT_RUNTIME
-      description: Default runtime (claude_code, open_code, or codex)
+      description: Coding runtime for every role (claude_code | open_code | codex)
     - name: SWE_DEFAULT_MODEL
       description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash)
     - name: ANTHROPIC_BASE_URL

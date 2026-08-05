@@ -85,10 +85,10 @@ func RunProductManager(ctx context.Context, deps *Deps, input map[string]any) (a
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
 	additionalContext := getString(input, "additional_context", "")
-	model := getString(input, "model", "sonnet")
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
-	aiProvider := getString(input, "ai_provider", "claude")
+	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 	initialPrior := getPriorResponses(input)
 
 	_, paths, err := ensurePaths(repoPath, artifactsDir)
@@ -183,10 +183,10 @@ func RunEnvironmentScout(ctx context.Context, deps *Deps, input map[string]any) 
 	prd := getMap(input, "prd")
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
-	model := getString(input, "model", "sonnet")
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
-	aiProvider := getString(input, "ai_provider", "claude")
+	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 	initialPrior := getPriorResponses(input)
 
 	// Ensure the artifact dirs exist; the scout writes no artifacts of its own.
@@ -302,10 +302,10 @@ func RunArchitect(ctx context.Context, deps *Deps, input map[string]any) (any, e
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
 	feedback := getString(input, "feedback", "")
-	model := getString(input, "model", "sonnet")
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
-	aiProvider := getString(input, "ai_provider", "claude")
+	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 
 	_, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
@@ -374,10 +374,10 @@ func RunTechLead(ctx context.Context, deps *Deps, input map[string]any) (any, er
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
 	revisionNumber := getInt(input, "revision_number", 0)
-	model := getString(input, "model", "sonnet")
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
-	aiProvider := getString(input, "ai_provider", "claude")
+	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 
 	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
@@ -460,10 +460,10 @@ func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (an
 
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
-	model := getString(input, "model", "sonnet")
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
-	aiProvider := getString(input, "ai_provider", "claude")
+	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 
 	_, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
@@ -637,6 +637,13 @@ func getString(input map[string]any, key, def string) string {
 		}
 	}
 	return def
+}
+
+func orResolvedDefault(value, def string) string {
+	if value == "" {
+		return def
+	}
+	return value
 }
 
 // getInt returns input[key] as an int when present, else def. Tolerates the

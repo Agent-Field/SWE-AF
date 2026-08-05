@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
+	"github.com/Agent-Field/SWE-AF/go/internal/dagutil"
 	"github.com/Agent-Field/SWE-AF/go/internal/harnessx"
 	"github.com/Agent-Field/SWE-AF/go/internal/prompts/advisor"
 	"github.com/Agent-Field/SWE-AF/go/internal/prompts/coding"
@@ -186,6 +187,11 @@ func GenerateFixIssues(ctx context.Context, deps *Deps, input map[string]any) (a
 		deps.note(ctx, fmt.Sprintf(
 			"Fix generator complete: %d fix issues, %d debt items", len(parsed.FixIssues), len(parsed.DebtItems)),
 			"fix_generator", "complete")
+		// fix_issues are raw dicts headed for DAGState.all_issues — coerce
+		// LLM scalar shapes (str acceptance_criteria etc.) at the boundary.
+		for i, fi := range parsed.FixIssues {
+			parsed.FixIssues[i] = dagutil.NormalizeIssueDict(fi)
+		}
 		return parsed, nil
 	}
 

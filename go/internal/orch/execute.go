@@ -3,6 +3,7 @@ package orch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/dag"
@@ -69,6 +70,16 @@ func ExecuteHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 	//   await app.call(execute_fn_target, issue=issue, repo_path=dag_state.repo_path)
 	// callFn already dispatches to the raw target and unwraps the envelope, so it
 	// is the correct primitive for an external (non-node-local) call.
+	//
+	// A request that names no target falls back to the node-level default (the
+	// engine opt-in seam); build forwards its config's value here, so this one
+	// check covers both direct execute calls and full builds.
+	if in.ExecuteFnTarget == "" && deps.DefaultExecuteFnTarget != "" {
+		in.ExecuteFnTarget = deps.DefaultExecuteFnTarget
+		deps.Note(ctx, fmt.Sprintf(
+			"pro engine: per-issue coding routed via %s — set SWE_PRO_ENGINE=0 to use the classic coding loop",
+			in.ExecuteFnTarget), "pro", "default")
+	}
 	var executeFn dag.ExecuteFn
 	if in.ExecuteFnTarget != "" {
 		target := in.ExecuteFnTarget

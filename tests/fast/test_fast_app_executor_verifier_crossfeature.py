@@ -153,8 +153,8 @@ class TestConfigToCallArgThreading:
             "fast_execute_tasks must accept 'coder_model' param — "
             "schemas→executor cross-feature contract broken"
         )
-        assert resolved["coder_model"] == "qwen/qwen-2.5-coder-32b-instruct", (
-            f"open_code runtime default must be qwen model, got {resolved['coder_model']!r}"
+        assert resolved["coder_model"] == "openrouter/deepseek/deepseek-v4-flash", (
+            f"open_code runtime default must be the shared default, got {resolved['coder_model']!r}"
         )
 
     def test_verifier_model_key_matches_fast_verify_param(self) -> None:

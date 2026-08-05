@@ -9,8 +9,8 @@
 # remap host ports.
 #
 # Nodes register under the Go port's opt-in-sibling identities:
-#     swe-agent-go  ->  node id "swe-planner-go", :8005
-#     swe-fast-go   ->  node id "swe-fast-go",    :8006
+#     swe-agent-go  ->  node id "swe-planner", :8005
+#     swe-fast   ->  node id "swe-fast",    :8006
 services:
   control-plane:
     image: agentfield/control-plane:latest
@@ -53,10 +53,10 @@ services:
     env_file: ../../../.env
     environment:
       - AGENTFIELD_SERVER=http://control-plane:8080
-      - NODE_ID=swe-planner-go
+      - NODE_ID=swe-planner
       - PORT=8005
       - AGENT_CALLBACK_URL=http://swe-agent-go:8005
-      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -72,7 +72,7 @@ services:
       build-db:
         condition: service_healthy
 
-  swe-fast-go:
+  swe-fast:
     build:
       context: ../../..
       dockerfile: go/Dockerfile
@@ -80,9 +80,9 @@ services:
     env_file: ../../../.env
     environment:
       - AGENTFIELD_SERVER=http://control-plane:8080
-      - NODE_ID=swe-fast-go
+      - NODE_ID=swe-fast
       - PORT=8006
-      - AGENT_CALLBACK_URL=http://swe-fast-go:8006
+      - AGENT_CALLBACK_URL=http://swe-fast:8006
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
       - GH_TOKEN=${GH_TOKEN}
@@ -90,7 +90,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - OPENCODE_MODEL=${OPENCODE_MODEL:-}
-      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}

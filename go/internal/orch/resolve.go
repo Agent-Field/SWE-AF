@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
 
 // resolveInput mirrors the Python resolve() signature (param names + defaults).
@@ -58,13 +60,16 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 
 	buildID := newBuildID()
 	repoName := deriveRepoName(in.RepoURL)
-	repoPath := fmt.Sprintf("/workspaces/%s-resolve-%s", repoName, buildID)
+	repoPath := filepath.Join(workspace.Root(), fmt.Sprintf("%s-resolve-%s", repoName, buildID))
 
 	deps.Note(ctx, fmt.Sprintf("Resolve starting (build_id=%s) — PR #%d", buildID, in.PRNumber),
 		"resolve", "start")
 
 	// ---- 1. Clone ----------------------------------------------------------
-	_ = os.MkdirAll(repoPath, 0o755)
+	// Create only the parent; git clone creates the leaf. Pre-creating the leaf
+	// makes git refuse it as "already exists and is not an empty directory" on
+	// Windows, where it cannot re-open the node-created dir (issue #107).
+	_ = os.MkdirAll(filepath.Dir(repoPath), 0o755)
 	clone := runGit(ctx, "", "clone", in.RepoURL, repoPath)
 	if clone.ExitCode != 0 {
 		errMsg := strings.TrimSpace(clone.Stderr)

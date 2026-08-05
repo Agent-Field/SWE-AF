@@ -1,9 +1,38 @@
 package schemas
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // This file ports the data/result models (not the config models — those live
 // in internal/config) from execution/schemas.py.
+
+// StrList is a []string that also accepts a bare JSON string, coercing it to a
+// one-element list (blank → empty). Ports the ensure_str_list before-validator
+// in execution/schemas.py: weaker models sometimes emit a single criterion as
+// a string where the schema wants a list, and pre-fix checkpoints may have
+// persisted that shape — decoding must tolerate both.
+type StrList []string
+
+// UnmarshalJSON accepts either a JSON array of strings or a bare string.
+func (s *StrList) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		if strings.TrimSpace(one) == "" {
+			*s = StrList{}
+		} else {
+			*s = StrList{one}
+		}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(b, &many); err != nil {
+		return err
+	}
+	*s = StrList(many)
+	return nil
+}
 
 // ---------------------------------------------------------------------------
 // Multi-repo models
@@ -89,15 +118,15 @@ type IssueAdaptation struct {
 
 // SplitIssueSpec is a sub-issue spec when the advisor decides to SPLIT.
 type SplitIssueSpec struct {
-	Name               string   `json:"name"`
-	Title              string   `json:"title"`
-	Description        string   `json:"description"`
-	AcceptanceCriteria []string `json:"acceptance_criteria"`
-	DependsOn          []string `json:"depends_on"`
-	Provides           []string `json:"provides"`
-	FilesToCreate      []string `json:"files_to_create"`
-	FilesToModify      []string `json:"files_to_modify"`
-	ParentIssueName    string   `json:"parent_issue_name"`
+	Name               string  `json:"name"`
+	Title              string  `json:"title"`
+	Description        string  `json:"description"`
+	AcceptanceCriteria StrList `json:"acceptance_criteria"`
+	DependsOn          StrList `json:"depends_on"`
+	Provides           StrList `json:"provides"`
+	FilesToCreate      StrList `json:"files_to_create"`
+	FilesToModify      StrList `json:"files_to_modify"`
+	ParentIssueName    string  `json:"parent_issue_name"`
 }
 
 // IssueAdvisorDecision is the structured output from the Issue Advisor agent.
@@ -154,7 +183,7 @@ type IssueResult struct {
 	DebtItems               []map[string]any  `json:"debt_items"`
 	SplitRequest            *[]SplitIssueSpec `json:"split_request"`
 	EscalationContext       string            `json:"escalation_context"`
-	FinalAcceptanceCriteria []string          `json:"final_acceptance_criteria"`
+	FinalAcceptanceCriteria StrList           `json:"final_acceptance_criteria"`
 	IterationHistory        []map[string]any  `json:"iteration_history"`
 }
 

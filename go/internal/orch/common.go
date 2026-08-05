@@ -46,7 +46,7 @@ type Handler func(ctx context.Context, deps *Deps, input map[string]any) (any, e
 // Deps carries the collaborators an orchestrator handler needs.
 //
 //   - App: the control-plane-routed call + note surface (a *agent.Agent).
-//   - NodeID: the node id calls are addressed to (NODE_ID, default "swe-planner-go").
+//   - NodeID: the node id calls are addressed to (NODE_ID, default "swe-planner").
 //   - AgentFieldServer: the control-plane base URL — the approval webhook base.
 //     (The empty-build failure carrier no longer POSTs here: build returns the
 //     SDK's &agent.ReasonerFailed and the async handler posts status=failed +
@@ -63,6 +63,14 @@ type Deps struct {
 	AgentFieldServer string
 	CIGate           CIGateRunner
 	ApprovalGate     ApprovalGate
+
+	// DefaultExecuteFnTarget, when non-empty, is the external coder target
+	// applied by the execute path whenever a request does not name one — the
+	// node-level engine opt-in seam. A caller-supplied execute_fn_target
+	// (request kwarg or config key) always wins; empty leaves the built-in
+	// coding loop as the default, so the wiring is inert unless the node
+	// registration sets it.
+	DefaultExecuteFnTarget string
 }
 
 // ---------------------------------------------------------------------------
@@ -122,12 +130,12 @@ func (d *Deps) CallRaw(ctx context.Context, name string, kwargs map[string]any) 
 }
 
 // target renders the fully-qualified "<NodeID>.<name>" call target. At runtime
-// NodeID is always set (BuildAgent default "swe-planner-go" or the NODE_ID env);
+// NodeID is always set (BuildAgent default "swe-planner" or the NODE_ID env);
 // the fallback only guards zero-value Deps in tests.
 func (d *Deps) target(name string) string {
 	nodeID := d.NodeID
 	if nodeID == "" {
-		nodeID = "swe-planner-go"
+		nodeID = "swe-planner"
 	}
 	return nodeID + "." + name
 }

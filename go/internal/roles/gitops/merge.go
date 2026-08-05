@@ -57,7 +57,11 @@ func RunMerger(ctx context.Context, deps *Deps, input map[string]any) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	opts := roleOptions(provider, orDefault(in.Model, "sonnet"), gitprompts.MergerSystemPrompt, in.RepoPath,
+	model, err := resolveModel(in.Model, "merger")
+	if err != nil {
+		return nil, err
+	}
+	opts := roleOptions(provider, model, gitprompts.MergerSystemPrompt, in.RepoPath,
 		[]string{"Bash", "Read", "Write", "Glob", "Grep"}, in.PermissionMode)
 
 	val, ok, err := runRole[schemas.MergeResult](ctx, deps, taskPrompt, opts, "merger", "Merger agent failed")
@@ -128,7 +132,11 @@ func RunIntegrationTester(ctx context.Context, deps *Deps, input map[string]any)
 	if err != nil {
 		return nil, err
 	}
-	opts := roleOptions(provider, orDefault(in.Model, "sonnet"), gitprompts.IntegrationTesterSystemPrompt, in.RepoPath,
+	model, err := resolveModel(in.Model, "integration_tester")
+	if err != nil {
+		return nil, err
+	}
+	opts := roleOptions(provider, model, gitprompts.IntegrationTesterSystemPrompt, in.RepoPath,
 		[]string{"Bash", "Read", "Write", "Glob", "Grep"}, in.PermissionMode)
 
 	val, ok, err := runRole[schemas.IntegrationTestResult](ctx, deps, taskPrompt, opts, "integration_tester", "Integration tester agent failed")
