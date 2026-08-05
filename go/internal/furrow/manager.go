@@ -226,7 +226,11 @@ func sanitizeNamespace(runID string) string {
 }
 
 func (m *Manager) handle(entry Entry) *Handle {
-	remote := "dir:" + m.remotesRoot
+	// The run's own store, not the root that holds every run's: a caller pairs
+	// directly with this path, and the root is not a furrow remote at all.
+	// Over the network the path stays on the node — furrowd resolves it from
+	// the token — so the address is all the caller needs.
+	remote := "dir:" + entry.StoreDir
 	if m.publicAddr != "" {
 		remote = "ssh://" + m.publicAddr
 	}

@@ -76,7 +76,14 @@ func TestRealBinaryAttachPublishAndClone(t *testing.T) {
 	}
 	git(t, "", "init", "--quiet", "--", dest)
 	cloneStore := filepath.Join(root, "store-clone")
-	remoteDir := filepath.Join(root, "remotes", "run-int-0001")
+
+	// Everything below comes from the handle alone — no path assembled by the
+	// test. A consumer only ever has the handle, so if it is not sufficient on
+	// its own, the mirror is unreachable however correct the rest is.
+	remoteDir, ok := strings.CutPrefix(handle.Remote, "dir:")
+	if !ok {
+		t.Fatalf("remote = %q, want a dir: handle when no public address is set", handle.Remote)
+	}
 	furrowCmd(t, bin, cloneStore, dest, "watch", "--no-daemon")
 	furrowCmd(t, bin, cloneStore, dest, "pair", remoteDir, "--name", handle.Namespace, "--key", handle.Key)
 	furrowCmd(t, bin, cloneStore, dest, "sync", "--pull", "--bootstrap")

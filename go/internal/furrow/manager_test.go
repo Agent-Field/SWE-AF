@@ -142,7 +142,9 @@ func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 	if handle.Key != testKey {
 		t.Fatalf("Handle.Key = %q, want key_hex value", handle.Key)
 	}
-	if handle.Remote != "dir:"+remotes || len(handle.Token) != 64 {
+	// The run's own store, not the root. Pairing with the root would find no
+	// workspace there, so a handle pointing at it is unusable.
+	if handle.Remote != "dir:"+filepath.Join(remotes, "run/one") || len(handle.Token) != 64 {
 		t.Fatalf("unexpected handle: %+v", handle)
 	}
 	second, err := m.Attach("run/one", "different", repo)
