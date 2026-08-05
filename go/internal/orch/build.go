@@ -177,6 +177,13 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		planCh <- callRes{raw: raw, err: perr}
 	}()
 
+	// Keep the harness's own .artifacts/ and .worktrees/ out of the target
+	// repo's git view before any stage can stage them, and record the commit
+	// the workspace starts on so the integration branch can be checked against
+	// it below.
+	excludeHarnessMetadata(ctx, repoPath)
+	buildBaseSHA := headSHA(ctx, repoPath)
+
 	maxGitInitRetries := cfg.GitInitMaxRetries
 	var gitInit map[string]any
 	var previousError any // None on first attempt, string thereafter
@@ -220,6 +227,20 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		if asBool(gitInit["success"]) {
 			deps.Note(ctx, fmt.Sprintf("Git init succeeded on attempt %d", attempt),
 				"build", "git_init", "success")
+			// The agent branches by hand; make sure it branched from where this
+			// run actually started, or the issue it was asked to fix may not
+			// even be present on the branch the work merges into.
+			if integrationBranchBase(
+				ctx, repoPath, mapStr(gitInit, "integration_branch", ""), buildBaseSHA,
+			) {
+				deps.Note(ctx, fmt.Sprintf(
+					"Integration branch %s did not descend from the run's starting commit %s — re-cut from it",
+					mapStr(gitInit, "integration_branch", ""), buildBaseSHA),
+					"build", "git_init", "rebased")
+			}
+			// git_init is told to create .worktrees/ and may rewrite
+			// .gitignore; re-assert the exclusions and drop anything it staged.
+			excludeHarnessMetadata(ctx, repoPath)
 			break
 		}
 
