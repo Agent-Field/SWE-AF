@@ -1258,13 +1258,14 @@ async def run_qa_synthesizer(
             schema=QASynthesisResult,
             model=model,
         )
-        if result.parsed is not None:
+        parsed_result = getattr(result, "parsed", result)
+        if parsed_result is not None:
             router.note(
-                f"QA synthesizer complete: action={result.parsed.action.value}, "
-                f"stuck={result.parsed.stuck}",
+                f"QA synthesizer complete: action={getattr(parsed_result.action, 'value', parsed_result.action)}, "
+                f"stuck={parsed_result.stuck}",
                 tags=["qa_synthesizer", "complete"],
             )
-            out = result.parsed.model_dump()
+            out = parsed_result.model_dump() if hasattr(parsed_result, "model_dump") else dict(parsed_result)
             out["iteration_id"] = iteration_id
             return out
     except FatalHarnessError:
