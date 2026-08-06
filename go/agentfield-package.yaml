@@ -63,6 +63,33 @@ user_environment:
       description: Engine reasoning-effort variant (low | high) — unset keeps the engine default
     - name: SWE_PRO_MAX_COST
       description: Per-run USD ceiling for the engine — unset means no per-run cap
+    - name: SWE_FURROW_ENABLED
+      description: Enable furrow workspace mirroring (set to 0 to disable)
+      default: "1"
+    - name: SWE_FURROW_BIN
+      description: Path to the furrow client binary
+      default: /usr/local/bin/furrow
+    - name: SWE_FURROWD_BIN
+      description: Path to the furrow daemon binary
+      default: /usr/local/bin/furrowd
+    - name: SWE_FURROW_DATA_DIR
+      description: Furrow client data directory — cloud deployments should use a persistent volume path
+      default: /workspaces/.furrow-store
+    - name: SWE_FURROW_REMOTES_ROOT
+      description: Furrow remote stores root — cloud deployments should use a persistent volume path
+      default: /workspaces/.furrow-remotes
+    - name: SWE_FURROW_TTL_HOURS
+      description: Retention time for mirrored workspaces in hours
+      default: "72"
+    - name: SWE_FURROW_MAX_GB
+      description: Maximum aggregate furrow store size in GB
+      default: "20"
+    - name: FURROWD_ADDR
+      description: Address on which furrowd listens
+      default: ":8802"
+    - name: FURROW_PUBLIC_ADDR
+      description: Public furrowd host and port advertised in workspace handles
+      default: ""
     - name: AGENTFIELD_SERVER
       description: Control-plane URL
       default: http://localhost:8080
