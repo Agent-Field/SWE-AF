@@ -67,16 +67,16 @@ user_environment:
       description: Enable furrow workspace mirroring (set to 0 to disable)
       default: "1"
     - name: SWE_FURROW_BIN
-      description: Path to the furrow client binary — unset auto-resolves (vendored bin/furrow-<os>-<arch>, then /usr/local/bin/furrow)
+      description: Path to the furrow client binary — unset auto-resolves (/usr/local/bin/furrow, then vendored bin/furrow-<os>-<arch>)
       default: ""
     - name: SWE_FURROWD_BIN
-      description: Path to the furrow daemon binary — unset auto-resolves (vendored bin/furrowd-<os>-<arch>, then /usr/local/bin/furrowd)
+      description: Path to the furrow daemon binary — unset auto-resolves (/usr/local/bin/furrowd, then vendored bin/furrowd-<os>-<arch>)
       default: ""
     - name: SWE_FURROW_DATA_DIR
-      description: Furrow client data directory — unset computes <workspace root>/.furrow-store; cloud deployments should point this at a persistent volume path
+      description: Furrow client data directory — unset uses $AGENTFIELD_HOME/furrow/store when AGENTFIELD_HOME is set, otherwise <workspace root>/.furrow-store
       default: ""
     - name: SWE_FURROW_REMOTES_ROOT
-      description: Furrow remote stores root — unset computes <workspace root>/.furrow-remotes; cloud deployments should point this at a persistent volume path
+      description: Furrow remote stores root — unset uses $AGENTFIELD_HOME/furrow/remotes when AGENTFIELD_HOME is set, otherwise <workspace root>/.furrow-remotes
       default: ""
     - name: SWE_FURROW_TTL_HOURS
       description: Retention time for mirrored workspaces in hours
@@ -90,6 +90,14 @@ user_environment:
     - name: FURROW_PUBLIC_ADDR
       description: Public furrowd host and port advertised in workspace handles
       default: ""
+    - name: FURROW_DIAL_TOKEN
+      description: Token from an ssh:// workspace handle used by furrow clients
+    - name: FURROW_DIAL_INSECURE
+      description: Allow the default self-signed furrowd certificate; required for ssh:// handles until certificate pinning is available
+    - name: FURROWD_TLS_CERT
+      description: Path to an operator-provided furrowd TLS certificate
+    - name: FURROWD_TLS_KEY
+      description: Path to the matching operator-provided furrowd TLS private key
     - name: AGENTFIELD_SERVER
       description: Control-plane URL
       default: http://localhost:8080

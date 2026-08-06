@@ -153,8 +153,7 @@ func buildFurrowManager() furrow.Attacher {
 		log.Printf("DEBUG furrow unavailable: %v", err)
 		return nil
 	}
-	storeRoot := envOr("SWE_FURROW_DATA_DIR", filepath.Join(workspace.Root(), ".furrow-store"))
-	remotesRoot := envOr("SWE_FURROW_REMOTES_ROOT", filepath.Join(workspace.Root(), ".furrow-remotes"))
+	storeRoot, remotesRoot := furrowRoots()
 	if err := os.Setenv("FURROW_DATA_DIR", storeRoot); err != nil {
 		log.Printf("DEBUG furrow unavailable: set FURROW_DATA_DIR: %v", err)
 		return nil
@@ -170,11 +169,23 @@ func buildFurrowManager() furrow.Attacher {
 	}
 	// furrowd is a best-effort sidecar. Its supervisor is silent unless the
 	// manager, public-address, and binary gates are all open.
-	furrow.NewSupervisor(m).Start(context.Background())
+	supervisor := furrow.NewSupervisor(m)
+	m.SetTransportHealth(supervisor.Healthy)
+	supervisor.Start(context.Background())
 	maxAge := time.Duration(envInt64("SWE_FURROW_TTL_HOURS", 72)) * time.Hour
 	maxBytes := envInt64("SWE_FURROW_MAX_GB", 20) * 1024 * 1024 * 1024
 	go sweepFurrow(m, maxAge, maxBytes)
 	return m
+}
+
+func furrowRoots() (string, string) {
+	storeDefault := filepath.Join(workspace.Root(), ".furrow-store")
+	remotesDefault := filepath.Join(workspace.Root(), ".furrow-remotes")
+	if home := os.Getenv("AGENTFIELD_HOME"); home != "" {
+		storeDefault = filepath.Join(home, "furrow", "store")
+		remotesDefault = filepath.Join(home, "furrow", "remotes")
+	}
+	return envOr("SWE_FURROW_DATA_DIR", storeDefault), envOr("SWE_FURROW_REMOTES_ROOT", remotesDefault)
 }
 
 func sweepFurrow(m *furrow.Manager, maxAge time.Duration, maxBytes int64) {

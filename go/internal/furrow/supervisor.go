@@ -3,8 +3,10 @@ package furrow
 import (
 	"context"
 	"log"
+	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -25,9 +27,12 @@ type Supervisor struct {
 	now            func() time.Time
 	after          func(time.Duration) <-chan time.Time
 
-	mu      sync.Mutex
-	started bool
-	done    chan struct{}
+	mu            sync.Mutex
+	started       bool
+	running       bool
+	done          chan struct{}
+	healthChecked time.Time
+	healthy       bool
 }
 
 // NewSupervisor constructs an inert supervisor unless every feature gate is
@@ -67,6 +72,33 @@ func (s *Supervisor) Addr() string {
 		return ""
 	}
 	return s.addr
+}
+
+// Healthy reports whether the supervised process is running and accepting TCP
+// connections on its local listen address. Results are briefly cached.
+func (s *Supervisor) Healthy() bool {
+	if s == nil || s.bin == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running {
+		return false
+	}
+	if s.now().Sub(s.healthChecked) < 250*time.Millisecond {
+		return s.healthy
+	}
+	addr := s.addr
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+	}
+	s.healthChecked = s.now()
+	s.healthy = err == nil
+	return s.healthy
 }
 
 // Start begins supervision and returns immediately.
@@ -152,6 +184,16 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.running = true
+	s.healthChecked = time.Time{}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.running = false
+		s.healthy = false
+		s.mu.Unlock()
+	}()
 	wait := make(chan error, 1)
 	go func() { wait <- cmd.Wait() }()
 	select {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -33,10 +34,37 @@ func TestSupervisorInertWithoutDaemonBinary(t *testing.T) {
 	t.Setenv("FURROW_PUBLIC_ADDR", "mirror.example:8802")
 	t.Setenv(EnvDaemonBin, filepath.Join(t.TempDir(), "missing"))
 	s := NewSupervisor(m)
-	if !s.Enabled() || s.Available() {
+	if !s.Enabled() || s.Available() || s.Healthy() {
 		t.Fatalf("gates = enabled %v, available %v; want true, false", s.Enabled(), s.Available())
 	}
 	s.Start(context.Background())
+}
+
+func TestSupervisorHealthyRequiresRunningProcessAndTCPListener(t *testing.T) {
+	m := supervisorManager(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	t.Setenv("FURROW_PUBLIC_ADDR", "mirror.example:8802")
+	t.Setenv("FURROWD_ADDR", listener.Addr().String())
+	t.Setenv(EnvDaemonBin, daemonScript(t, "while :; do sleep 1; done\n"))
+	ctx, cancel := context.WithCancel(context.Background())
+	s := NewSupervisor(m)
+	s.Start(ctx)
+	deadline := time.Now().Add(time.Second)
+	for !s.Healthy() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !s.Healthy() {
+		t.Fatal("Healthy() = false with a running process and TCP listener")
+	}
+	cancel()
+	s.Wait(time.Second)
+	if s.Healthy() {
+		t.Fatal("Healthy() = true after supervisor stopped")
+	}
 }
 
 func TestNilSupervisorNoOps(t *testing.T) {

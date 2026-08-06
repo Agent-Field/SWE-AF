@@ -144,7 +144,7 @@ func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 	}
 	// The run's own store, not the root. Pairing with the root would find no
 	// workspace there, so a handle pointing at it is unusable.
-	if handle.Remote != "dir:"+filepath.Join(remotes, "run/one") || len(handle.Token) != 64 {
+	if handle.Remote != "dir:"+filepath.Join(remotes, "run-one") || len(handle.Token) != 64 {
 		t.Fatalf("unexpected handle: %+v", handle)
 	}
 	second, err := m.Attach("run/one", "different", repo)
@@ -157,7 +157,7 @@ func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 	bin := m.bin
 	want := [][]string{
 		{bin, "--repo", repo, "--json", "watch", "--no-daemon"},
-		{bin, "--repo", repo, "--json", "remote", "add", filepath.Join(remotes, "run/one"), "--name", "run-one"},
+		{bin, "--repo", repo, "--json", "remote", "add", filepath.Join(remotes, "run-one"), "--name", "run-one"},
 		{bin, "--repo", repo, "--json", "snap", "-m", "attached"},
 		{bin, "--repo", repo, "--json", "sync", "--push"},
 		{bin, "--repo", repo, "--json", "snap", "-m", "checkpoint"},
@@ -175,6 +175,53 @@ func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 	}
 	if err := m.Publish("unknown", "label"); err == nil {
 		t.Fatal("Publish accepted unknown run ID")
+	}
+}
+
+func TestPublicHandleRequiresHealthyTransport(t *testing.T) {
+	fake := &fakeExec{}
+	m, repo, remotes := testManager(t, fake, time.Now)
+	m.publicAddr = "mirror.example:8802"
+
+	m.SetTransportHealth(func() bool { return false })
+	handle, err := m.Attach("run", "build", repo)
+	if err != nil || handle == nil {
+		t.Fatalf("Attach() = (%v, %v)", handle, err)
+	}
+	if want := "dir:" + filepath.Join(remotes, "run"); handle.Remote != want {
+		t.Fatalf("unhealthy Remote = %q, want %q", handle.Remote, want)
+	}
+
+	m.SetTransportHealth(func() bool { return true })
+	if got := m.Handle("run").Remote; got != "ssh://mirror.example:8802" {
+		t.Fatalf("healthy Remote = %q", got)
+	}
+}
+
+func TestAttachSanitizesRemoteStorePath(t *testing.T) {
+	for _, runID := range []string{"../escape", "/absolute", "..", "."} {
+		t.Run(runID, func(t *testing.T) {
+			fake := &fakeExec{}
+			m, repo, remotes := testManager(t, fake, time.Now)
+			outside := filepath.Join(filepath.Dir(remotes), "escape")
+			if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			handle, err := m.Attach(runID, "build", repo)
+			if err != nil || handle == nil {
+				t.Fatalf("Attach() = (%v, %v)", handle, err)
+			}
+			entry := m.entries[runID]
+			if filepath.Dir(entry.StoreDir) != remotes || filepath.Base(entry.StoreDir) != sanitizeNamespace(runID) {
+				t.Fatalf("StoreDir %q escaped remotes root %q", entry.StoreDir, remotes)
+			}
+			if _, err := m.Sweep(0, 0); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := os.ReadFile(outside); err != nil || string(got) != "keep" {
+				t.Fatalf("outside sentinel = %q, %v", got, err)
+			}
+		})
 	}
 }
 

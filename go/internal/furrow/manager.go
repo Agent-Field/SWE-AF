@@ -38,17 +38,29 @@ type Options struct {
 // runLocks serializes work per run instead, which is the only ordering that
 // actually matters — two calls for the same run must not both pair it.
 type Manager struct {
-	mu          sync.RWMutex
-	bin         string
-	storeRoot   string
-	remotesRoot string
-	publicAddr  string
-	logger      *log.Logger
-	now         func() time.Time
-	exec        func(*exec.Cmd) ([]byte, error)
-	enabled     bool
-	entries     map[string]Entry
-	runLocks    map[string]*sync.Mutex
+	mu               sync.RWMutex
+	bin              string
+	storeRoot        string
+	remotesRoot      string
+	publicAddr       string
+	transportHealthy func() bool
+	logger           *log.Logger
+	now              func() time.Time
+	exec             func(*exec.Cmd) ([]byte, error)
+	enabled          bool
+	entries          map[string]Entry
+	runLocks         map[string]*sync.Mutex
+}
+
+// SetTransportHealth supplies the public transport health gate used when
+// issuing handles. Without a gate, public transport is treated as unavailable.
+func (m *Manager) SetTransportHealth(healthy func() bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.transportHealthy = healthy
+	m.mu.Unlock()
 }
 
 // lockRun serializes callers working on one run and returns its unlock.
@@ -165,7 +177,7 @@ func (m *Manager) Attach(runID, buildID, repoPath string) (*Handle, error) {
 	}
 
 	namespace := sanitizeNamespace(runID)
-	storeDir := filepath.Join(m.remotesRoot, runID)
+	storeDir := filepath.Join(m.remotesRoot, namespace)
 	if err := os.MkdirAll(storeDir, 0o700); err != nil {
 		m.logf("furrow attach %q: create remote: %v", runID, err)
 		return nil, nil
@@ -225,7 +237,13 @@ func sanitizeNamespace(runID string) string {
 	if b.Len() == 0 {
 		return "run"
 	}
-	return b.String()[:min(b.Len(), 96)]
+	out := b.String()[:min(b.Len(), 96)]
+	// Dots survive sanitization, and "." / ".." are the two surviving names
+	// the filesystem treats as traversal rather than a directory of its own.
+	if out == "." || out == ".." {
+		return "run"
+	}
+	return out
 }
 
 func (m *Manager) handle(entry Entry) *Handle {
@@ -235,7 +253,11 @@ func (m *Manager) handle(entry Entry) *Handle {
 	// the token — so the address is all the caller needs.
 	remote := "dir:" + entry.StoreDir
 	if m.publicAddr != "" {
-		remote = "ssh://" + m.publicAddr
+		if m.transportHealthy != nil && m.transportHealthy() {
+			remote = "ssh://" + m.publicAddr
+		} else {
+			m.logf("WARN furrow: public address configured but furrowd is not running or its local listen address is unreachable; using local handle")
+		}
 	}
 	return &Handle{Version: HandleVersion, Remote: remote, Namespace: entry.Namespace,
 		Key: entry.Key, Token: entry.Token, RepoPath: entry.RepoPath, Ref: entry.Ref}

@@ -2,13 +2,39 @@ package node
 
 import (
 	"context"
+	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fast"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
+
+func TestFurrowRootResolutionPrecedence(t *testing.T) {
+	t.Setenv("AGENTFIELD_HOME", "")
+	t.Setenv("SWE_FURROW_DATA_DIR", "")
+	t.Setenv("SWE_FURROW_REMOTES_ROOT", "")
+	store, remotes := furrowRoots()
+	if store != filepath.Join(workspace.Root(), ".furrow-store") || remotes != filepath.Join(workspace.Root(), ".furrow-remotes") {
+		t.Fatalf("legacy roots = (%q, %q)", store, remotes)
+	}
+
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+	store, remotes = furrowRoots()
+	if store != filepath.Join(home, "furrow", "store") || remotes != filepath.Join(home, "furrow", "remotes") {
+		t.Fatalf("AGENTFIELD_HOME roots = (%q, %q)", store, remotes)
+	}
+
+	t.Setenv("SWE_FURROW_DATA_DIR", "/override/store")
+	t.Setenv("SWE_FURROW_REMOTES_ROOT", "/override/remotes")
+	store, remotes = furrowRoots()
+	if store != "/override/store" || remotes != "/override/remotes" {
+		t.Fatalf("override roots = (%q, %q)", store, remotes)
+	}
+}
 
 // pythonRoleSurface is the independent parity checklist: the exact 25 role
 // reasoner names the Python swe_af.reasoners.router registers (pipeline.py's 5
