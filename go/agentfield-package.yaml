@@ -49,7 +49,7 @@ user_environment:
     - name: SWE_DEFAULT_RUNTIME
       description: Coding runtime for every role (claude_code | open_code | codex)
     - name: SWE_DEFAULT_MODEL
-      description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash)
+      description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash-0731)
     - name: SWE_PRO_ENGINE
       description: >-
         High-performance coding engine (beta). On by default for nodes

@@ -180,7 +180,7 @@ func TestProductManagerDirectCallRuntimeDefaults(t *testing.T) {
 		clearRuntimeEnv(t)
 		t.Setenv("OPENROUTER_API_KEY", "test-key")
 		opts := run(t, map[string]any{})
-		if opts.Provider != "opencode" || opts.Model != "openrouter/deepseek/deepseek-v4-flash" {
+		if opts.Provider != "opencode" || opts.Model != "openrouter/deepseek/deepseek-v4-flash-0731" {
 			t.Fatalf("defaults = provider %q, model %q", opts.Provider, opts.Model)
 		}
 	})

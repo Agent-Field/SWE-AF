@@ -115,7 +115,7 @@ class TestFastResolveModelsCludeCode:
 # fast_resolve_models — open_code runtime (AC-5)
 # ---------------------------------------------------------------------------
 
-_OPEN_CODE_MODEL = "openrouter/deepseek/deepseek-v4-flash"
+_OPEN_CODE_MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 
 class TestFastResolveModelsOpenCode:

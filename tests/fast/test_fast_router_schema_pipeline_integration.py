@@ -569,7 +569,7 @@ class TestBuildConfigModelThreading:
         cfg = FastBuildConfig(runtime="open_code")
         resolved = fast_resolve_models(cfg)
 
-        open_code_model = "openrouter/deepseek/deepseek-v4-flash"
+        open_code_model = "openrouter/deepseek/deepseek-v4-flash-0731"
         for role, model in resolved.items():
             assert model == open_code_model, (
                 f"open_code runtime: role {role!r} should be {open_code_model!r}, got {model!r}"

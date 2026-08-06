@@ -385,7 +385,7 @@ async def test_plan_openrouter_only_defaults_to_open_code(mock_agent_ai, tmp_pat
     pm_call = mock_agent_ai.call_args_list[0]
     assert pm_call.args[0].endswith("run_product_manager")
     assert pm_call.kwargs["ai_provider"] == "open_code"
-    assert pm_call.kwargs["model"] == "openrouter/deepseek/deepseek-v4-flash"
+    assert pm_call.kwargs["model"] == "openrouter/deepseek/deepseek-v4-flash-0731"
 
 
 @pytest.mark.asyncio

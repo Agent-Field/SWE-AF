@@ -246,7 +246,7 @@ New to AgentField? Install the control plane first with `curl -fsSL https://agen
 
 One click deploys SWE-AF + AgentField control plane + PostgreSQL. Exactly **one** environment variable is required in Railway — an LLM provider key:
 
-- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. With only this set (no `ANTHROPIC_API_KEY`, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash` — no further configuration needed.
+- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. With only this set (no `ANTHROPIC_API_KEY`, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash-0731` — no further configuration needed.
 - *Alternative:* `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits), to run the `claude_code` runtime instead.
 
 Optional:

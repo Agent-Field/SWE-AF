@@ -755,7 +755,7 @@ class TestPlannerAiParamThreading:
         config = FastBuildConfig(runtime="open_code")
         resolved = fast_resolve_models(config)
 
-        expected = "openrouter/deepseek/deepseek-v4-flash"
+        expected = "openrouter/deepseek/deepseek-v4-flash-0731"
         for role in ("pm_model", "coder_model", "verifier_model", "git_model"):
             assert resolved[role] == expected, (
                 f"open_code runtime: {role} should be {expected!r}, got {resolved[role]!r}"

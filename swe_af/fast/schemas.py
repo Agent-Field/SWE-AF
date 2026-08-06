@@ -17,7 +17,7 @@ _CLAUDE_CODE_DEFAULT = "haiku"
 # OpenRouter-only install behaves the same on both nodes. Keep in sync with
 # ``swe_af.execution.schemas._OPENROUTER_AUTO_DEFAULT_MODEL`` (not imported at
 # module scope to avoid a circular import).
-_OPEN_CODE_DEFAULT = "openrouter/deepseek/deepseek-v4-flash"
+_OPEN_CODE_DEFAULT = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 _RUNTIME_DEFAULTS: dict[str, str] = {
     "claude_code": _CLAUDE_CODE_DEFAULT,

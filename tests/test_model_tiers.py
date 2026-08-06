@@ -26,7 +26,7 @@ from swe_af.execution.schemas import (
 _HIGH_FIELDS = {"pm_model", "architect_model", "tech_lead_model", "replan_model"}
 _LOW_FIELDS = {"qa_synthesizer_model", "git_model"}
 
-_OPEN_CODE_BASE = "openrouter/deepseek/deepseek-v4-flash"
+_OPEN_CODE_BASE = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 # Env vars that steer provider/runtime/model selection. Cleared before every
 # test so assertions never depend on the developer's ambient shell.
@@ -92,7 +92,7 @@ class TestTierEnvApplication:
         tier_models = {
             "high": "openrouter/z-ai/glm-5.2",
             "med": "openrouter/deepseek/deepseek-v4-pro",
-            "low": "openrouter/deepseek/deepseek-v4-flash",
+            "low": "openrouter/deepseek/deepseek-v4-flash-0731",
         }
         for tier, model in tier_models.items():
             monkeypatch.setenv(TIER_MODEL_ENV_VARS[tier], model)
