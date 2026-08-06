@@ -67,17 +67,17 @@ user_environment:
       description: Enable furrow workspace mirroring (set to 0 to disable)
       default: "1"
     - name: SWE_FURROW_BIN
-      description: Path to the furrow client binary
-      default: /usr/local/bin/furrow
+      description: Path to the furrow client binary — unset auto-resolves (vendored bin/furrow-<os>-<arch>, then /usr/local/bin/furrow)
+      default: ""
     - name: SWE_FURROWD_BIN
-      description: Path to the furrow daemon binary
-      default: /usr/local/bin/furrowd
+      description: Path to the furrow daemon binary — unset auto-resolves (vendored bin/furrowd-<os>-<arch>, then /usr/local/bin/furrowd)
+      default: ""
     - name: SWE_FURROW_DATA_DIR
-      description: Furrow client data directory — cloud deployments should use a persistent volume path
-      default: /workspaces/.furrow-store
+      description: Furrow client data directory — unset computes <workspace root>/.furrow-store; cloud deployments should point this at a persistent volume path
+      default: ""
     - name: SWE_FURROW_REMOTES_ROOT
-      description: Furrow remote stores root — cloud deployments should use a persistent volume path
-      default: /workspaces/.furrow-remotes
+      description: Furrow remote stores root — unset computes <workspace root>/.furrow-remotes; cloud deployments should point this at a persistent volume path
+      default: ""
     - name: SWE_FURROW_TTL_HOURS
       description: Retention time for mirrored workspaces in hours
       default: "72"
