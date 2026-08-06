@@ -61,6 +61,24 @@ func TestRealBinaryAttachPublishAndClone(t *testing.T) {
 		t.Fatalf("incomplete handle: %+v", handle)
 	}
 
+	// Attach itself must publish a HEAD. A caller receives the handle before any
+	// build milestone, so it must be able to pair and materialize immediately.
+	dest := filepath.Join(root, "clone")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, "", "init", "--quiet", "--", dest)
+	cloneStore := filepath.Join(root, "store-clone")
+	remoteDir, ok := strings.CutPrefix(handle.Remote, "dir:")
+	if !ok {
+		t.Fatalf("remote = %q, want a dir: handle when no public address is set", handle.Remote)
+	}
+	furrowCmd(t, bin, cloneStore, dest, "watch", "--no-daemon")
+	furrowCmd(t, bin, cloneStore, dest, "pair", remoteDir, "--name", handle.Namespace, "--key", handle.Key)
+	furrowCmd(t, bin, cloneStore, dest, "sync", "--pull", "--bootstrap")
+	assertFileContains(t, dest, "solver.py", "return 42")
+	assertFileContains(t, dest, ".env", "TOKEN=shhh")
+
 	// Work lands after the attach, exactly as a coding agent produces it.
 	write(t, filepath.Join(repo, "feature.py"), "print('agent wrote this')\n")
 	if err := m.Publish("run-int-0001", "issue-01 complete"); err != nil {
@@ -70,22 +88,9 @@ func TestRealBinaryAttachPublishAndClone(t *testing.T) {
 	// Materialize on a fresh store, standing in for another machine. `furrow
 	// clone` only accepts ssh:// and s3:// URLs, so a directory remote is
 	// reproduced by the sequence clone performs internally.
-	dest := filepath.Join(root, "clone")
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	git(t, "", "init", "--quiet", "--", dest)
-	cloneStore := filepath.Join(root, "store-clone")
-
 	// Everything below comes from the handle alone — no path assembled by the
 	// test. A consumer only ever has the handle, so if it is not sufficient on
 	// its own, the mirror is unreachable however correct the rest is.
-	remoteDir, ok := strings.CutPrefix(handle.Remote, "dir:")
-	if !ok {
-		t.Fatalf("remote = %q, want a dir: handle when no public address is set", handle.Remote)
-	}
-	furrowCmd(t, bin, cloneStore, dest, "watch", "--no-daemon")
-	furrowCmd(t, bin, cloneStore, dest, "pair", remoteDir, "--name", handle.Namespace, "--key", handle.Key)
 	furrowCmd(t, bin, cloneStore, dest, "sync", "--pull", "--bootstrap")
 
 	for _, tc := range []struct{ path, want string }{
@@ -104,6 +109,17 @@ func TestRealBinaryAttachPublishAndClone(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, ".git")); err != nil {
 		t.Errorf("mirror has no .git, so the caller cannot diff or commit: %v", err)
+	}
+}
+
+func assertFileContains(t *testing.T, root, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(filepath.Join(root, path))
+	if err != nil {
+		t.Fatalf("%s missing from mirror: %v", path, err)
+	}
+	if !strings.Contains(string(got), want) {
+		t.Fatalf("%s = %q, want it to contain %q", path, got, want)
 	}
 }
 

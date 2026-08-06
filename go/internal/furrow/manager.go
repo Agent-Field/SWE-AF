@@ -204,6 +204,9 @@ func (m *Manager) Attach(runID, buildID, repoPath string) (*Handle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("furrow attach %q: save registry: %w", runID, err)
 	}
+	// Attach already owns the run lock, so use the locked publish path directly:
+	// calling Publish here would try to acquire the same non-reentrant mutex.
+	_ = m.publishLocked(runID, "attached")
 	return m.handle(entry), nil
 }
 
@@ -244,7 +247,11 @@ func (m *Manager) Publish(runID, label string) error {
 	}
 	unlock := m.lockRun(runID)
 	defer unlock()
+	return m.publishLocked(runID, label)
+}
 
+// publishLocked snapshots and pushes a run while its per-run lock is held.
+func (m *Manager) publishLocked(runID, label string) error {
 	m.mu.RLock()
 	entry, ok := m.entries[runID]
 	m.mu.RUnlock()

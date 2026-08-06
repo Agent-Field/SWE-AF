@@ -158,6 +158,8 @@ func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 	want := [][]string{
 		{bin, "--repo", repo, "--json", "watch", "--no-daemon"},
 		{bin, "--repo", repo, "--json", "remote", "add", filepath.Join(remotes, "run/one"), "--name", "run-one"},
+		{bin, "--repo", repo, "--json", "snap", "-m", "attached"},
+		{bin, "--repo", repo, "--json", "sync", "--push"},
 		{bin, "--repo", repo, "--json", "snap", "-m", "checkpoint"},
 		{bin, "--repo", repo, "--json", "sync", "--push"},
 	}
@@ -184,8 +186,9 @@ func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 func TestPublishesForDifferentRunsDoNotSerialize(t *testing.T) {
 	arrived := make(chan struct{}, 2)
 	release := make(chan struct{})
+	block := false
 	blocking := &fakeExec{onCommand: func(args []string) {
-		if len(args) > 4 && args[4] == "sync" {
+		if block && len(args) > 4 && args[4] == "sync" {
 			arrived <- struct{}{}
 			<-release
 		}
@@ -200,6 +203,7 @@ func TestPublishesForDifferentRunsDoNotSerialize(t *testing.T) {
 			t.Fatalf("Attach(%s): %v", tc.run, err)
 		}
 	}
+	block = true
 
 	done := make(chan struct{}, 2)
 	for _, run := range []string{"run/a", "run/b"} {
@@ -226,12 +230,13 @@ func TestPublishesForDifferentRunsDoNotSerialize(t *testing.T) {
 }
 
 func TestPublishTransportFailuresAreNonFatal(t *testing.T) {
-	for _, operation := range []string{"snap -m label", "sync --push"} {
+	for _, operation := range []string{"snap -m attached", "snap -m label", "sync --push"} {
 		t.Run(operation, func(t *testing.T) {
 			fake := &fakeExec{errFor: map[string]error{operation: errors.New("transport down")}}
 			m, repo, _ := testManager(t, fake, time.Now)
-			if _, err := m.Attach("run", "build", repo); err != nil {
-				t.Fatal(err)
+			handle, err := m.Attach("run", "build", repo)
+			if err != nil || handle == nil {
+				t.Fatalf("Attach() = (%v, %v), want a handle despite publish failure", handle, err)
 			}
 			if err := m.Publish("run", "label"); err != nil {
 				t.Fatalf("Publish returned transport error: %v", err)
