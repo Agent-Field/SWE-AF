@@ -30,7 +30,7 @@ func TestMapSynthModelOpenRouter(t *testing.T) {
 		// config.openRouterAutoDefaultModel hands every role on an
 		// OpenRouter-only install, so the direct client must drop the prefix.
 		"openrouter/deepseek/deepseek-v4-flash-0731": "deepseek/deepseek-v4-flash-0731",
-		"openrouter/z-ai/glm-5":                 "z-ai/glm-5",
+		"openrouter/z-ai/glm-5":                      "z-ai/glm-5",
 	}
 	for in, want := range cases {
 		if got := mapSynthModel(in); got != want {
