@@ -489,7 +489,14 @@ func CoderTaskPrompt(o CoderTaskPromptOpts) string {
 			"3. Write or update tests per the Testing Strategy/guidance.\n"+
 			"4. Run tests and report results (tests_passed, test_summary).\n"+
 			"5. Commit your changes.\n"+
-			"6. Report codebase_learnings and agent_retro in your output.")
+			"6. MANDATORY output contract: write a file named `.agentfield_output.json` "+
+			"in your current working directory (the worktree path). "+
+			"The file MUST exist on disk before you finish. "+
+			"Use the Write tool with valid JSON conforming to the CoderResult schema: "+
+			`{"summary": string, "files_changed": [string], "complete": bool, "test_results": {"passed": int, "failed": int, "summary": string}, "codebase_learnings": [string], "agent_retro": object}. `+
+			"The harness validates this file on every run; without it, the coder run "+
+			"fails with `The output file was NOT created.`. "+
+			"Then report codebase_learnings and agent_retro.")
 	}
 
 	return strings.Join(sections, "\n")
