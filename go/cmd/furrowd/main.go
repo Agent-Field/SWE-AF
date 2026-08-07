@@ -238,8 +238,16 @@ func lookupEntry(path, token string) (furrow.Entry, bool) {
 }
 
 func (s *server) runChild(conn net.Conn, input io.Reader, entry furrow.Entry, namespace string) error {
+	// The manager records the run's store under a SANITIZED directory name;
+	// rebuilding the path from the raw run ID here would serve the wrong
+	// directory for any ID sanitization alters — and hand a traversal-shaped
+	// ID a path outside the root.
+	dataDir := entry.StoreDir
+	if dataDir == "" {
+		dataDir = filepath.Join(s.cfg.root, entry.Namespace)
+	}
 	cmd := exec.Command(s.cfg.furrowBin, "__remote", namespace)
-	cmd.Env = append(os.Environ(), "FURROW_REMOTE_DATA_DIR="+filepath.Join(s.cfg.root, entry.RunID))
+	cmd.Env = append(os.Environ(), "FURROW_REMOTE_DATA_DIR="+dataDir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

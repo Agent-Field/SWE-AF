@@ -22,6 +22,7 @@ import (
 
 type testServer struct {
 	addr   string
+	root   string
 	cancel context.CancelFunc
 	done   chan error
 }
@@ -51,7 +52,7 @@ func startTestServer(t *testing.T, maxConns int, script string) testServer {
 	case <-time.After(5 * time.Second):
 		t.Fatal("server did not start")
 	}
-	s := testServer{addr: addr.String(), cancel: cancel, done: done}
+	s := testServer{addr: addr.String(), root: root, cancel: cancel, done: done}
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -120,6 +121,30 @@ func TestBlindedNamespaceIsAcceptedAndPassedThrough(t *testing.T) {
 	}
 	if got, want := stdout.String(), "NS:payload"; got != want {
 		t.Fatalf("round trip = %q, want %q", got, want)
+	}
+}
+
+// The manager records each run's store under a SANITIZED directory; the
+// daemon must serve the recorded path, not one rebuilt from the raw run ID —
+// a traversal-shaped ID would otherwise name a directory outside the root.
+func TestChildServesRecordedStoreDirNotRawRunID(t *testing.T) {
+	s := startTestServer(t, 32, `printf 'DIR:%s' "$FURROW_REMOTE_DATA_DIR"`)
+	storeDir := filepath.Join(s.root, "remotes", "run")
+	entries := map[string]furrow.Entry{"../escape": {Token: "dir-token", Namespace: "run", StoreDir: storeDir}}
+	data, _ := json.Marshal(entries)
+	if err := os.WriteFile(filepath.Join(s.root, "registry.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(buildDialer(t), "-T", "-o", "BatchMode=yes", "--", s.addr, "furrow", "__remote", "workspace")
+	cmd.Env = append(os.Environ(), "FURROW_DIAL_TOKEN=dir-token", "FURROW_DIAL_INSECURE=1")
+	cmd.Stdin = strings.NewReader("")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("dialer failed: %v: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "DIR:"+storeDir; got != want {
+		t.Fatalf("data dir = %q, want %q", got, want)
 	}
 }
 
