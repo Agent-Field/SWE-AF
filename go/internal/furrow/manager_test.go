@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -129,6 +130,60 @@ func TestAttachMissingGit(t *testing.T) {
 	handle, err := m.Attach("run", "build", t.TempDir())
 	if err != nil || handle != nil || len(fake.snapshot()) != 0 {
 		t.Fatalf("Attach() = (%v, %v), commands=%v", handle, err, fake.snapshot())
+	}
+}
+
+func TestCommandTimesOut(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	t.Setenv(EnvEnabled, "1")
+	root := t.TempDir()
+	bin := filepath.Join(root, "furrow")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Bin: bin, StoreRoot: filepath.Join(root, "store"), CmdTimeout: 200 * time.Millisecond,
+		Logger: log.New(&bytes.Buffer{}, "", 0)})
+	started := time.Now()
+	_, err := m.command(root, "snap")
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("command error = %v, want timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("timed-out command returned after %s", elapsed)
+	}
+}
+
+func TestAttachRefusesWhenAggregateStoreExceedsBudget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/false")
+	}
+	t.Setenv(EnvEnabled, "1")
+	root := t.TempDir()
+	store := filepath.Join(root, "store")
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "client-data"), make([]byte, 100), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	m := New(Options{Bin: "/bin/false", StoreRoot: store, RemotesRoot: filepath.Join(root, "remotes"),
+		MaxBytes: 10, Logger: log.New(&logs, "", 0)})
+	handle, err := m.Attach("run", "build", repo)
+	if err == nil || !strings.Contains(err.Error(), "disk budget") || handle != nil {
+		t.Fatalf("Attach() = (%v, %v), want disk budget error", handle, err)
+	}
+	if len(m.entries) != 0 {
+		t.Fatalf("registered entries = %v, want none", m.entries)
+	}
+	if got := strings.Count(logs.String(), "WARN "); got != 1 {
+		t.Fatalf("warning count = %d, logs = %q", got, logs.String())
 	}
 }
 

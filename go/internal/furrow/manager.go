@@ -1,6 +1,7 @@
 package furrow
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,8 @@ type Options struct {
 	Logger      *log.Logger
 	Now         func() time.Time
 	Exec        func(*exec.Cmd) ([]byte, error)
+	CmdTimeout  time.Duration
+	MaxBytes    int64
 }
 
 // Manager owns the node's persistent run registry and furrow content store.
@@ -47,6 +51,8 @@ type Manager struct {
 	logger           *log.Logger
 	now              func() time.Time
 	exec             func(*exec.Cmd) ([]byte, error)
+	cmdTimeout       time.Duration
+	maxBytes         int64
 	enabled          bool
 	entries          map[string]Entry
 	runLocks         map[string]*sync.Mutex
@@ -89,6 +95,8 @@ func New(opts Options) *Manager {
 		logger:      opts.Logger,
 		now:         opts.Now,
 		exec:        opts.Exec,
+		cmdTimeout:  opts.CmdTimeout,
+		maxBytes:    opts.MaxBytes,
 		entries:     make(map[string]Entry),
 	}
 	if m.logger == nil {
@@ -99,6 +107,12 @@ func New(opts Options) *Manager {
 	}
 	if m.exec == nil {
 		m.exec = func(cmd *exec.Cmd) ([]byte, error) { return cmd.Output() }
+	}
+	if m.cmdTimeout == 0 {
+		m.cmdTimeout = 5 * time.Minute
+	}
+	if m.maxBytes == 0 {
+		m.maxBytes = configuredMaxBytes()
 	}
 	if m.storeRoot == "" {
 		m.storeRoot = filepath.Join(workspace.Root(), "furrow")
@@ -144,10 +158,17 @@ func (m *Manager) Enabled() bool {
 }
 
 func (m *Manager) command(repoPath string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), m.cmdTimeout)
+	defer cancel()
 	argv := append([]string{"--repo", repoPath, "--json"}, args...)
-	cmd := exec.Command(m.bin, argv...)
+	cmd := exec.CommandContext(ctx, m.bin, argv...)
+	cmd.WaitDelay = time.Second
 	cmd.Env = append(os.Environ(), "FURROW_DATA_DIR="+m.storeRoot)
-	return m.exec(cmd)
+	out, err := m.exec(cmd)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, fmt.Errorf("furrow command timeout after %s: %w", m.cmdTimeout, ctx.Err())
+	}
+	return out, err
 }
 
 func (m *Manager) Attach(runID, buildID, repoPath string) (*Handle, error) {
@@ -162,6 +183,17 @@ func (m *Manager) Attach(runID, buildID, repoPath string) (*Handle, error) {
 	defer unlock()
 	if handle := m.Handle(runID); handle != nil {
 		return handle, nil
+	}
+	if m.maxBytes > 0 {
+		total, err := m.aggregateSize()
+		if err != nil {
+			return nil, fmt.Errorf("furrow attach %q: measure aggregate store size: %w", runID, err)
+		}
+		if total > m.maxBytes {
+			err := fmt.Errorf("furrow attach %q: aggregate store size %d exceeds disk budget %d", runID, total, m.maxBytes)
+			m.logf("WARN %v; new mirrors are disabled until space is freed", err)
+			return nil, err
+		}
 	}
 	// Every line must be `exclude <relative-subtree>`; furrow rejects the whole
 	// file otherwise and `watch` then fails, which would leave the mirror
@@ -356,7 +388,7 @@ func (m *Manager) Sweep(maxAge time.Duration, maxBytes int64) (int, error) {
 	if maxBytes >= 0 {
 		for {
 			// Walking the store is I/O, so it happens with no lock held.
-			total, err := dirSize(m.remotesRoot)
+			total, err := m.aggregateSize()
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return removed, fmt.Errorf("furrow sweep size: %w", err)
 			}
@@ -370,7 +402,11 @@ func (m *Manager) Sweep(maxAge time.Duration, maxBytes int64) (int, error) {
 			}
 			empty := len(m.entries) == 0
 			m.mu.RUnlock()
-			if total <= maxBytes || empty {
+			if total <= maxBytes {
+				break
+			}
+			if empty {
+				m.logf("WARN furrow sweep: aggregate store size %d exceeds disk budget %d with no remote entries; new mirrors are disabled until space is freed", total, maxBytes)
 				break
 			}
 			dropped, err := m.retire(oldestID, 0)
@@ -436,4 +472,36 @@ func dirSize(root string) (int64, error) {
 		return nil
 	})
 	return size, err
+}
+
+func (m *Manager) aggregateSize() (int64, error) {
+	storeSize, err := dirSize(m.storeRoot)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+	remotesSize, err := dirSize(m.remotesRoot)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+	if within(m.storeRoot, m.remotesRoot) {
+		return storeSize, nil
+	}
+	if within(m.remotesRoot, m.storeRoot) {
+		return remotesSize, nil
+	}
+	return storeSize + remotesSize, nil
+}
+
+func within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func configuredMaxBytes() int64 {
+	const defaultMaxGB = 20
+	maxGB, err := strconv.ParseInt(os.Getenv("SWE_FURROW_MAX_GB"), 10, 64)
+	if err != nil || maxGB < 0 {
+		maxGB = defaultMaxGB
+	}
+	return maxGB * 1024 * 1024 * 1024
 }

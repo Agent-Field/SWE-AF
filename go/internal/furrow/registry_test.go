@@ -88,9 +88,15 @@ func TestSweepByAgeAndSize(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(remotes, "new", "data"), make([]byte, 10), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		// The registry itself counts toward remotesRoot's total. Pick a ceiling
-		// just below the current total so exactly the oldest data directory goes.
-		total, err := dirSize(remotes)
+		if err := os.MkdirAll(m.storeRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(m.storeRoot, "client-data"), make([]byte, 100), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// The client store and registry both count toward the total. Pick a
+		// ceiling just below the aggregate so exactly the oldest remote goes.
+		total, err := m.aggregateSize()
 		if err != nil {
 			t.Fatal(err)
 		}
