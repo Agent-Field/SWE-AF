@@ -236,7 +236,7 @@ func (m *Manager) Attach(runID, buildID, repoPath string) (*Handle, error) {
 	}
 	now := m.now()
 	entry := Entry{RunID: runID, BuildID: buildID, RepoPath: repoPath, Namespace: namespace,
-		Key: paired.Key, Token: hex.EncodeToString(tokenBytes), Ref: namespace, StoreDir: storeDir,
+		Key: paired.Key, Token: hex.EncodeToString(tokenBytes), StoreDir: storeDir,
 		CreatedAt: now, UpdatedAt: now}
 	m.mu.Lock()
 	m.entries[runID] = entry
@@ -292,7 +292,7 @@ func (m *Manager) handle(entry Entry) *Handle {
 		}
 	}
 	return &Handle{Version: HandleVersion, Remote: remote, Namespace: entry.Namespace,
-		Key: entry.Key, Token: entry.Token, RepoPath: entry.RepoPath, Ref: entry.Ref}
+		Key: entry.Key, Token: entry.Token, RepoPath: entry.RepoPath}
 }
 
 func (m *Manager) Publish(runID, label string) error {

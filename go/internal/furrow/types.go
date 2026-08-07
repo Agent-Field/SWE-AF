@@ -38,9 +38,14 @@ type Handle struct {
 	// RepoPath is the workspace's absolute path on the node. It is advisory —
 	// useful when the caller shares the filesystem, meaningless otherwise.
 	RepoPath string `json:"repo_path,omitempty"`
-	// Ref is the furrow ref this run publishes to. Distinct refs never contend,
-	// so concurrent runs against one remote are safe.
-	Ref string `json:"ref,omitempty"`
+	// Deliberately no Ref: every run gets its OWN remote directory (the
+	// namespace IS the directory), so there is nothing on a remote to
+	// disambiguate, and publishing under a named ref would break the pull the
+	// agentfield-use skill documents — `sync --pull --bootstrap`, which reads
+	// the default HEAD. Verified live: publishing to a named ref makes that
+	// exact command fail with "no such file or directory". If remotes are ever
+	// shared between runs, add the ref to the publish, the handle, and the
+	// skill's recipe together — never one without the others.
 }
 
 // Entry is one run's row in the registry: the mapping from a control-plane run
@@ -52,7 +57,6 @@ type Entry struct {
 	Namespace string    `json:"namespace"`
 	Key       string    `json:"key"`
 	Token     string    `json:"token,omitempty"`
-	Ref       string    `json:"ref,omitempty"`
 	StoreDir  string    `json:"store_dir"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
