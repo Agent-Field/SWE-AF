@@ -316,14 +316,7 @@ func (m *Manager) publishLocked(runID, label string) error {
 		m.logf("furrow publish %q: snapshot: %v", runID, err)
 		return nil
 	}
-	// --ref is what makes the handle's Ref true: without it furrow publishes to
-	// the default HEAD, and a caller who honors the advertised ref gets
-	// "sync remote has no published ref" — verified live against a real build.
-	push := []string{"sync", "--push"}
-	if entry.Ref != "" {
-		push = append(push, "--ref", entry.Ref)
-	}
-	if _, err := m.command(entry.RepoPath, push...); err != nil {
+	if _, err := m.command(entry.RepoPath, "sync", "--push"); err != nil {
 		m.logf("furrow publish %q: sync: %v", runID, err)
 		return nil
 	}

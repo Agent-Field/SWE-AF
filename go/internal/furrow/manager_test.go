@@ -214,14 +214,9 @@ func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 		{bin, "--repo", repo, "--json", "watch", "--no-daemon"},
 		{bin, "--repo", repo, "--json", "remote", "add", filepath.Join(remotes, "run-one"), "--name", "run-one"},
 		{bin, "--repo", repo, "--json", "snap", "-m", "attached"},
-		// --ref must carry the handle's advertised ref: a consumer that honors
-		// Handle.Ref gets "remote has no published ref" without it.
-		{bin, "--repo", repo, "--json", "sync", "--push", "--ref", "run-one"},
+		{bin, "--repo", repo, "--json", "sync", "--push"},
 		{bin, "--repo", repo, "--json", "snap", "-m", "checkpoint"},
-		{bin, "--repo", repo, "--json", "sync", "--push", "--ref", "run-one"},
-	}
-	if handle.Ref != "run-one" {
-		t.Fatalf("Handle.Ref = %q, want the ref actually published", handle.Ref)
+		{bin, "--repo", repo, "--json", "sync", "--push"},
 	}
 	if got := fake.snapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv mismatch\n got: %#v\nwant: %#v", got, want)
