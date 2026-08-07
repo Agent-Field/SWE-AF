@@ -9,9 +9,12 @@ import (
 
 // harnessMetadataPatterns are the files and directories the build harness
 // writes INTO the target repository: the plan/issue/checkpoint artifacts, the
-// per-issue worktrees, and the furrow capture policy. They are ours, not the
-// user's work.
-var harnessMetadataPatterns = []string{".artifacts/", ".worktrees/", ".furrowpolicy"}
+// per-issue worktrees, and furrow's capture policy and its workspace metadata
+// directory. They are ours, not the user's work. .furrow/ matters as much as
+// the policy file: `furrow watch` creates it inside the repo, so without this
+// every furrow-enabled build leaves a permanent `?? .furrow/` in the user's
+// own git status — and a `git add -A` would commit it.
+var harnessMetadataPatterns = []string{".artifacts/", ".worktrees/", ".furrowpolicy", ".furrow/"}
 
 // excludeHarnessMetadata keeps the harness's own bookkeeping out of the target
 // repository's git view.
