@@ -15,20 +15,31 @@ const (
 	DefaultDaemonBin = "/usr/local/bin/furrowd"
 )
 
-// runnable reports whether path is an executable regular file — repairing a
-// copy that lost its execute bit on the way in, which is exactly what `af`
-// does to vendored binaries (verified live: an install delivers
-// bin/furrow-linux-amd64 as rw-r--r--, so every install logged "no runnable
-// furrow binary found" and the feature was silently off on the one platform
-// it ships for). When the repair fails (read-only fs, foreign owner) the
-// candidate stays rejected, as before.
+// runnable rejects copies that exist but lost their execute bit during install.
+// It is a pure probe: an operator-supplied path (SWE_FURROW_BIN, /usr/local/bin)
+// is never modified, so an explicit override that is not executable still fails
+// loudly instead of being silently rewritten.
 func runnable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+}
+
+// vendoredRunnable is runnable for the binaries WE ship, beside our own
+// executable. `af` only started preserving file modes in v0.1.121
+// (agentfield#865); every older CLI copies these into the package as 0644.
+// Verified live on af 0.1.119: a checkout that is rwxr-xr-x installs as
+// rw-r--r--, so the node logged "no runnable furrow binary found" and the
+// feature was silently off on the one platform it ships for. Repairing is safe
+// precisely here — the file is one we vendored, inside our own install tree,
+// and never a path anyone else chose. When the repair fails (read-only fs,
+// foreign owner) the candidate stays rejected.
+func vendoredRunnable(path string) bool {
+	if runnable(path) {
+		return true
+	}
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return false
-	}
-	if info.Mode().Perm()&0o111 != 0 {
-		return true
 	}
 	return os.Chmod(path, info.Mode().Perm()|0o755) == nil
 }
@@ -50,7 +61,7 @@ func ResolveDaemonBin() (string, error) {
 		dir := filepath.Dir(executable)
 		for _, name := range []string{"furrowd-" + runtime.GOOS + "-" + runtime.GOARCH, "furrowd"} {
 			path := filepath.Join(dir, name)
-			if runnable(path) {
+			if vendoredRunnable(path) {
 				return path, nil
 			}
 		}
@@ -76,7 +87,7 @@ func ResolveBin() (string, error) {
 		dir := filepath.Dir(executable)
 		for _, name := range []string{"furrow-" + runtime.GOOS + "-" + runtime.GOARCH, "furrow"} {
 			path := filepath.Join(dir, name)
-			if runnable(path) {
+			if vendoredRunnable(path) {
 				return path, nil
 			}
 		}

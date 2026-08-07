@@ -26,9 +26,9 @@ func TestResolveBin(t *testing.T) {
 	}{
 		{"authoritative runnable override", runnableBin, runnableBin, false},
 		{"authoritative missing override", filepath.Join(dir, "missing"), "", true},
-		// `af` strips the execute bit from vendored binaries on install; a
-		// regular file is repaired and used rather than rejected.
-		{"non-executable override is repaired", nonExecutable, nonExecutable, false},
+		// An operator-chosen path is never rewritten: an explicit override that
+		// is not executable fails loudly rather than being silently chmod'd.
+		{"authoritative non-executable override", nonExecutable, "", true},
 		{"directory is not runnable", dir, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
