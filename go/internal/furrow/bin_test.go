@@ -26,7 +26,9 @@ func TestResolveBin(t *testing.T) {
 	}{
 		{"authoritative runnable override", runnableBin, runnableBin, false},
 		{"authoritative missing override", filepath.Join(dir, "missing"), "", true},
-		{"authoritative non-executable override", nonExecutable, "", true},
+		// `af` strips the execute bit from vendored binaries on install; a
+		// regular file is repaired and used rather than rejected.
+		{"non-executable override is repaired", nonExecutable, nonExecutable, false},
 		{"directory is not runnable", dir, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -36,6 +38,33 @@ func TestResolveBin(t *testing.T) {
 				t.Fatalf("ResolveBin() = (%q, %v), want (%q, error=%v)", got, err, tc.want, tc.wantErr)
 			}
 		})
+	}
+}
+
+// The real install shape that loses the bit: a vendored sibling binary next
+// to the node executable, delivered rw-r--r-- by the installer.
+func TestResolveBinRepairsStrippedSibling(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "swe-planner")
+	if err := os.WriteFile(self, []byte("self"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	vendored := filepath.Join(dir, "furrow-"+runtime.GOOS+"-"+runtime.GOARCH)
+	if err := os.WriteFile(vendored, []byte("binary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := osExecutable
+	t.Cleanup(func() { osExecutable = orig })
+	osExecutable = func() (string, error) { return self, nil }
+	t.Setenv(EnvBin, "")
+
+	got, err := ResolveBin()
+	if err != nil || got != vendored {
+		t.Fatalf("ResolveBin() = (%q, %v), want repaired %q", got, err, vendored)
+	}
+	info, err := os.Stat(vendored)
+	if err != nil || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("execute bit not repaired: mode=%v err=%v", info.Mode(), err)
 	}
 }
 

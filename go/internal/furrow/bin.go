@@ -15,10 +15,22 @@ const (
 	DefaultDaemonBin = "/usr/local/bin/furrowd"
 )
 
-// runnable rejects copies that exist but lost their execute bit during install.
+// runnable reports whether path is an executable regular file — repairing a
+// copy that lost its execute bit on the way in, which is exactly what `af`
+// does to vendored binaries (verified live: an install delivers
+// bin/furrow-linux-amd64 as rw-r--r--, so every install logged "no runnable
+// furrow binary found" and the feature was silently off on the one platform
+// it ships for). When the repair fails (read-only fs, foreign owner) the
+// candidate stays rejected, as before.
 func runnable(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	if info.Mode().Perm()&0o111 != 0 {
+		return true
+	}
+	return os.Chmod(path, info.Mode().Perm()|0o755) == nil
 }
 
 // ResolveDaemonBin returns the first runnable furrowd binary. An explicit
