@@ -72,7 +72,10 @@ func isDirty(repoPath string) bool {
 
 // addWorktree creates an isolated worktree on a new branch off baseSHA,
 // retrying briefly because concurrent `git worktree add` calls contend on the
-// repo lock — the exact scenario a fan-out caller creates.
+// repo lock — the exact scenario a fan-out caller creates. -B rather than -b:
+// a failed attempt can die after creating the branch, and the name embeds a
+// per-call build ID nothing else can own, so resetting it is always recovery,
+// never theft.
 func addWorktree(repoPath, worktreePath, branch, baseSHA string) error {
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return gitOpsErrf("mkdir for worktree failed: %v", err)
@@ -80,7 +83,7 @@ func addWorktree(repoPath, worktreePath, branch, baseSHA string) error {
 	const attempts = 3
 	var lastDetail string
 	for attempt := 1; attempt <= attempts; attempt++ {
-		_, detail, code := runGit(repoPath, "worktree", "add", "-b", branch, worktreePath, baseSHA)
+		_, detail, code := runGit(repoPath, "worktree", "add", "-B", branch, worktreePath, baseSHA)
 		if code == 0 {
 			return nil
 		}
