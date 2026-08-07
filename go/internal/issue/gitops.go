@@ -72,22 +72,36 @@ func isDirty(repoPath string) bool {
 
 // addWorktree creates an isolated worktree on a new branch off baseSHA,
 // retrying briefly because concurrent `git worktree add` calls contend on the
-// repo lock — the exact scenario a fan-out caller creates. -B rather than -b:
-// a failed attempt can die after creating the branch, and the name embeds a
-// per-call build ID nothing else can own, so resetting it is always recovery,
-// never theft.
+// repo lock — the exact scenario a fan-out caller creates. An attempt that
+// loses that race can still die AFTER creating the branch, so retries after a
+// transient failure use -B to reclaim our own leftover. A branch that exists
+// before anything went transiently wrong predates this call — issue branches
+// with commits are deliverables that outlive their build, and build IDs are
+// only 32 random bits — so that stays a hard failure, never a reset.
 func addWorktree(repoPath, worktreePath, branch, baseSHA string) error {
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return gitOpsErrf("mkdir for worktree failed: %v", err)
 	}
 	const attempts = 3
 	var lastDetail string
+	ownLeftover := false
 	for attempt := 1; attempt <= attempts; attempt++ {
-		_, detail, code := runGit(repoPath, "worktree", "add", "-B", branch, worktreePath, baseSHA)
+		flag := "-b"
+		if ownLeftover {
+			flag = "-B"
+		}
+		_, detail, code := runGit(repoPath, "worktree", "add", flag, branch, worktreePath, baseSHA)
 		if code == 0 {
 			return nil
 		}
 		lastDetail = detail
+		if strings.Contains(detail, "a branch named") {
+			if !ownLeftover {
+				return gitOpsErrf("branch %s already exists", branch)
+			}
+		} else {
+			ownLeftover = true
+		}
 		if attempt < attempts {
 			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 		}
