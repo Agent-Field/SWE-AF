@@ -46,6 +46,46 @@ type server struct {
 	cfg config
 	sem chan struct{}
 	wg  sync.WaitGroup
+
+	// Live connections, so shutdown can close them. Closing only the listener
+	// leaves handlers blocked in io.Copy on a client that sends nothing and
+	// never hangs up, and the wg.Wait below then never returns — SIGTERM would
+	// hang the daemon indefinitely. Reproduced as a test failure ("server did
+	// not shut down") under parallel load.
+	mu       sync.Mutex
+	conns    map[net.Conn]struct{}
+	shutdown bool
+}
+
+// track registers a live connection, reporting false once shutdown has begun so
+// a connection accepted in the race window is closed rather than served.
+func (s *server) track(conn net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.shutdown {
+		return false
+	}
+	if s.conns == nil {
+		s.conns = make(map[net.Conn]struct{})
+	}
+	s.conns[conn] = struct{}{}
+	return true
+}
+
+func (s *server) untrack(conn net.Conn) {
+	s.mu.Lock()
+	delete(s.conns, conn)
+	s.mu.Unlock()
+}
+
+// closeConns unblocks every in-flight handler so the daemon can actually exit.
+func (s *server) closeConns() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shutdown = true
+	for conn := range s.conns {
+		_ = conn.Close()
+	}
 }
 
 func main() {
@@ -125,6 +165,7 @@ func run(ctx context.Context, cfg config, ready chan<- net.Addr) error {
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
+		s.closeConns()
 	}()
 	for {
 		conn, err := listener.Accept()
@@ -150,6 +191,10 @@ func (s *server) serveSafely(conn net.Conn) {
 	defer s.wg.Done()
 	defer func() { <-s.sem }()
 	defer conn.Close()
+	if !s.track(conn) {
+		return
+	}
+	defer s.untrack(conn)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			log.Printf("furrowd: warning: recovered serving connection")

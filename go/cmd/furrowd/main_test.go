@@ -222,6 +222,30 @@ func TestChildKilledWhenClientDisconnects(t *testing.T) {
 	}
 }
 
+// A client that authenticates and then goes silent must not be able to hold
+// the daemon open: cancelling has to close live connections, not just the
+// listener, or SIGTERM hangs forever waiting on that handler.
+func TestShutdownClosesIdleAuthenticatedConnection(t *testing.T) {
+	s := startTestServer(t, 32, `cat`)
+	conn := dialTLS(t, s.addr)
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "AUTH correct-token workspace\n"); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 3)
+	if _, err := io.ReadFull(conn, reply); err != nil || string(reply) != "OK\n" {
+		t.Fatalf("auth reply = %q, %v", reply, err)
+	}
+	// Authenticated and now idle: the handler is blocked copying client input.
+	s.cancel()
+	select {
+	case err := <-s.done:
+		s.done <- err // put it back; the harness's cleanup reads this too
+	case <-time.After(10 * time.Second):
+		t.Fatal("server did not shut down while an idle client was connected")
+	}
+}
+
 func TestConcurrencyLimitEnforced(t *testing.T) {
 	s := startTestServer(t, 1, `cat`)
 	first := dialTLS(t, s.addr)
