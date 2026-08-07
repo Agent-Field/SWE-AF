@@ -2,11 +2,9 @@ package issue
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Issue branches with commits are deliverables that outlive their build. A
@@ -34,29 +32,33 @@ func TestAddWorktreeRefusesPreexistingBranch(t *testing.T) {
 
 // A worktree add can lose the repo-lock race after creating its branch. Once
 // an attempt has failed transiently, the retry must reclaim that leftover
-// branch instead of tripping over it.
+// branch instead of tripping over it. The transient failure is scripted
+// through the worktreeGit seam; the recovery itself runs real git against the
+// leftover state such a failure produces.
 func TestAddWorktreeRecoversBranchLeftByFailedAttempt(t *testing.T) {
 	repo := initRepo(t)
 	baseSHA := gitT(t, repo, "rev-parse", "HEAD")
 	branch := "issue/test-recovery"
 	worktreePath := filepath.Join(repo, ".worktrees", "test-recovery")
 
-	// Obstruct the worktree path so the first attempt fails for a non-branch
-	// reason, then clear it and plant the branch a dying attempt would have
-	// left behind. The retry backoff (500ms) gives the repair room; if a slow
-	// machine ever lets an attempt beat the repair, the call still succeeds —
-	// it just exercises the plain -b path instead.
-	if err := os.MkdirAll(filepath.Join(worktreePath, "occupied"), 0o755); err != nil {
-		t.Fatal(err)
+	var flags []string
+	orig := worktreeGit
+	t.Cleanup(func() { worktreeGit = orig })
+	worktreeGit = func(repoPath string, args ...string) (string, string, int) {
+		flags = append(flags, args[2])
+		if len(flags) == 1 {
+			// The lost race: git dies after creating the branch.
+			gitT(t, repo, "branch", branch, baseSHA)
+			return "", "fatal: Unable to create '.git/worktrees': File exists.", 128
+		}
+		return orig(repoPath, args...)
 	}
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		_ = os.RemoveAll(worktreePath)
-		_ = exec.Command("git", "-C", repo, "branch", branch, baseSHA).Run()
-	}()
 
 	if err := addWorktree(repo, worktreePath, branch, baseSHA); err != nil {
 		t.Fatalf("addWorktree: %v", err)
+	}
+	if want := []string{"-b", "-B"}; len(flags) != 2 || flags[0] != want[0] || flags[1] != want[1] {
+		t.Fatalf("flags = %v, want %v", flags, want)
 	}
 	if got := gitT(t, worktreePath, "rev-parse", "HEAD"); got != baseSHA {
 		t.Errorf("worktree HEAD = %s, want %s", got, baseSHA)

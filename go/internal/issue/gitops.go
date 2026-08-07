@@ -78,6 +78,10 @@ func isDirty(repoPath string) bool {
 // before anything went transiently wrong predates this call — issue branches
 // with commits are deliverables that outlive their build, and build IDs are
 // only 32 random bits — so that stays a hard failure, never a reset.
+// worktreeGit is runGit behind a seam so tests can script the transient
+// failures whose real-world trigger is a lost repo-lock race.
+var worktreeGit = runGit
+
 func addWorktree(repoPath, worktreePath, branch, baseSHA string) error {
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return gitOpsErrf("mkdir for worktree failed: %v", err)
@@ -90,7 +94,7 @@ func addWorktree(repoPath, worktreePath, branch, baseSHA string) error {
 		if ownLeftover {
 			flag = "-B"
 		}
-		_, detail, code := runGit(repoPath, "worktree", "add", flag, branch, worktreePath, baseSHA)
+		_, detail, code := worktreeGit(repoPath, "worktree", "add", flag, branch, worktreePath, baseSHA)
 		if code == 0 {
 			return nil
 		}
