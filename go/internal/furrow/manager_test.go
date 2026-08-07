@@ -127,9 +127,12 @@ func TestManagerDisabled(t *testing.T) {
 func TestAttachMissingGit(t *testing.T) {
 	fake := &fakeExec{}
 	m, _, _ := testManager(t, fake, time.Now)
+	// Construction sets the store budget; what matters here is that ATTACH
+	// itself runs nothing when the path is not a git repository.
+	before := len(fake.snapshot())
 	handle, err := m.Attach("run", "build", t.TempDir())
-	if err != nil || handle != nil || len(fake.snapshot()) != 0 {
-		t.Fatalf("Attach() = (%v, %v), commands=%v", handle, err, fake.snapshot())
+	if err != nil || handle != nil || len(fake.snapshot()) != before {
+		t.Fatalf("Attach() = (%v, %v), commands=%v", handle, err, fake.snapshot()[before:])
 	}
 }
 
@@ -210,7 +213,12 @@ func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := m.bin
+	store := filepath.Join(filepath.Dir(remotes), "store")
 	want := [][]string{
+		// Capping furrow's own store at half the allowance is what keeps the
+		// sweeper — which can only reclaim remotes — from ever being left with
+		// nothing to free while the budget stays exceeded.
+		{bin, "--repo", store, "--json", "budget", "--max", "10737418240"},
 		{bin, "--repo", repo, "--json", "watch", "--no-daemon"},
 		{bin, "--repo", repo, "--json", "remote", "add", filepath.Join(remotes, "run-one"), "--name", "run-one"},
 		{bin, "--repo", repo, "--json", "snap", "-m", "attached"},

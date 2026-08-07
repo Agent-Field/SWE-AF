@@ -139,7 +139,34 @@ func New(opts Options) *Manager {
 	}
 	m.enabled = true
 	m.loadRegistry()
+	m.alignStoreBudget()
 	return m
+}
+
+// alignStoreBudget caps the furrow client's own content store at half the
+// node's allowance.
+//
+// Two directories grow: the client store (furrow's, written through
+// FURROW_DATA_DIR) and the per-run remotes (ours). Only the remotes can be
+// reclaimed here — retire() deletes a run's remote directory, and nothing in
+// this package can free store packs. So if the store were allowed to consume
+// the whole allowance, aggregateSize would stay over budget with no remote
+// entries left to retire, and every later Attach would refuse forever: the
+// mirror would switch itself off permanently with one log line. Halving keeps
+// the total inside SWE_FURROW_MAX_GB while guaranteeing the sweeper always has
+// something it can actually free. furrow enforces its half itself; verified
+// with `furrow budget`, whose default happened to equal our own cap exactly.
+func (m *Manager) alignStoreBudget() {
+	if m.maxBytes <= 0 {
+		return
+	}
+	if err := os.MkdirAll(m.storeRoot, 0o700); err != nil {
+		m.logf("furrow: could not create store root %q: %v", m.storeRoot, err)
+		return
+	}
+	if _, err := m.command(m.storeRoot, "budget", "--max", strconv.FormatInt(m.maxBytes/2, 10)); err != nil {
+		m.logf("furrow: could not set client store budget: %v", err)
+	}
 }
 
 func (m *Manager) logf(format string, args ...any) {
