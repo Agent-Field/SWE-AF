@@ -503,9 +503,9 @@ func RunQASynthesizer(ctx context.Context, deps *Deps, input map[string]any) (an
 //     alias.
 //   - A leading "openrouter/" is stripped. Model ids are LiteLLM-style
 //     throughout this repo's config — config.openRouterAutoDefaultModel is
-//     "openrouter/deepseek/deepseek-v4-flash", which is exactly right for the
+//     "openrouter/deepseek/deepseek-v4-flash-0731", which is exactly right for the
 //     open_code harness runtime — but OpenRouter's own API names that model
-//     "deepseek/deepseek-v4-flash" and rejects the routing prefix with a 400.
+//     "deepseek/deepseek-v4-flash-0731" and rejects the routing prefix with a 400.
 //     The harness path keeps the prefix; only this direct boundary drops it.
 //
 // Other ids carrying a "/" are already in OpenRouter's namespace and pass

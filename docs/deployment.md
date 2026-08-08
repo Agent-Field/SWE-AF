@@ -27,7 +27,7 @@ it commented out unless you mean to use it.
 
 | Variable | Purpose |
 |---|---|
-| `OPENROUTER_API_KEY` | **Recommended** — OpenRouter key (200+ models). The only secret needed to get started: on its own it auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash` |
+| `OPENROUTER_API_KEY` | **Recommended** — OpenRouter key (200+ models). The only secret needed to get started: on its own it auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash-0731` |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude models (`claude_code` runtime) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code subscription token (uses Pro/Max credits) |
 | `OPENAI_API_KEY` | OpenAI API key |

@@ -153,7 +153,7 @@ class TestConfigToCallArgThreading:
             "fast_execute_tasks must accept 'coder_model' param — "
             "schemas→executor cross-feature contract broken"
         )
-        assert resolved["coder_model"] == "openrouter/deepseek/deepseek-v4-flash", (
+        assert resolved["coder_model"] == "openrouter/deepseek/deepseek-v4-flash-0731", (
             f"open_code runtime default must be the shared default, got {resolved['coder_model']!r}"
         )
 

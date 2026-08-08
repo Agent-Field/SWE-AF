@@ -609,7 +609,7 @@ _CODEX_CHATGPT_MODEL = "gpt-5.5"         # ChatGPT-account auth (-codex blocked)
 # Default model for the open_code runtime — both the auto-selected OpenRouter
 # path (see _openrouter_only_env) and an explicit SWE_DEFAULT_RUNTIME=open_code
 # resolve here, so opting in explicitly never silently swaps the model.
-_OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash"
+_OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "claude_code": {

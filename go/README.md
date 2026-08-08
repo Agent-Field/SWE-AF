@@ -165,7 +165,7 @@ set; the load-bearing ones:
 | `AGENT_CALLBACK_URL`                                      | Public URL the control plane calls the node back on. **Required for any containerized/remote deploy that isn't this compose file** (compose sets it per service) — without it the CP gets `504 agent_unreachable` |
 | `NODE_ID`                                                 | Node ID (`swe-planner` / `swe-fast`)           |
 | `PORT`                                                    | Listen port (`8005` / `8006`)                        |
-| `SWE_PRO_ENGINE`                                          | Opt-in preview: route per-issue coding through the bundled high-performance coding engine. **Default unset (off)**; `1`/`true`/`yes`/`on` enables it |
+| `SWE_PRO_ENGINE`                                          | Route per-issue coding through the bundled high-performance coding engine (beta). **Set to `1` for you by `af install` / Desktop; unset (off) everywhere else** — clone, fork, compose, bare binary. `1`/`true`/`yes`/`on` enables, `0`/`false` disables |
 | `SWE_PRO_VARIANT`                                         | Engine reasoning-effort variant (e.g. `low` for fastest turnaround, `high` for depth). Unset keeps the engine's own default |
 | `SWE_PRO_MAX_COST`                                        | Per-run cost ceiling in USD forwarded to the engine on every dispatch. Unset: no SWE-AF-side ceiling |
 | `SWE_PRO_PUBLIC_URL`                                      | Callback base URL for the engine, mirroring `AGENT_CALLBACK_URL` on the nodes. **In Docker this must be set to a container-reachable URL**, otherwise the control plane can't call the engine back |
@@ -178,15 +178,23 @@ authoritative set. The per-request build config JSON (`runtime`, `models`,
 budget/iteration knobs) is byte-identical to the Python node's — see the root
 [README](../README.md) and `.env.example` for the schema and examples.
 
-## Coding engine
+## Coding engine (beta)
 
 The Go node bundles a prebuilt high-performance coding engine alongside the
-classic coding loop, and runs it **by default**: `agentfield-package.yaml`
-declares `SWE_PRO_ENGINE` with `default: "1"`, so an `af install` node
-supervises the engine as a sidecar and routes per-issue coding through it. Set
-`SWE_PRO_ENGINE=0` and builds use the classic coder → reviewer/QA loop
-instead. A missing binary is not fatal — the node logs a warning and keeps
-using the classic loop.
+classic coding loop. Whether it runs is decided entirely by `SWE_PRO_ENGINE`,
+and the two ways of running the node differ only in who sets that variable:
+
+- **`af install` / AgentField Desktop — on by default.**
+  `agentfield-package.yaml` declares `SWE_PRO_ENGINE` with `default: "1"` and
+  the installer's env resolver injects it, so the node supervises the engine as
+  a sidecar and routes per-issue coding through it without being asked. Set
+  `SWE_PRO_ENGINE=0` to get the classic coder → reviewer/QA loop.
+- **Anything else — off.** A clone, a fork, `docker-compose.go.yml` (which
+  passes `SWE_PRO_ENGINE` through but leaves it empty), or a bare `swe-planner`
+  binary starts on the classic loop. Set `SWE_PRO_ENGINE=1` to opt in.
+
+A missing or non-runnable binary is not fatal — the node logs a warning and
+keeps using the classic loop.
 
 Full env surface (including the `SWE_PRO_*` knobs above, model pools, and the
 sidecar's restart behaviour): [`docs/pro-engine.md`](docs/pro-engine.md).

@@ -121,7 +121,7 @@ func TestResolveRuntimeModels_OpenCodeDefaults(t *testing.T) {
 	clearProviderEnv(t) // no provider env -> the shared open_code base applies
 	got := mustResolve(t, "open_code", nil)
 	for _, field := range AllModelFields {
-		if got[field] != "openrouter/deepseek/deepseek-v4-flash" {
+		if got[field] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 			t.Errorf("field %s = %q, want deepseek base", field, got[field])
 		}
 	}
@@ -132,7 +132,7 @@ func TestResolveRuntimeModels_OpenRouterAutoDefaults(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "sk-or")
 	got := mustResolve(t, "open_code", nil)
 	for _, field := range AllModelFields {
-		if got[field] != "openrouter/deepseek/deepseek-v4-flash" {
+		if got[field] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 			t.Errorf("field %s = %q, want deepseek auto", field, got[field])
 		}
 	}
@@ -148,7 +148,7 @@ func TestResolveRuntimeModels_ExplicitOpenCodeSameDefault(t *testing.T) {
 	t.Setenv("SWE_DEFAULT_RUNTIME", "open_code")
 	got := mustResolve(t, "open_code", nil)
 	for _, field := range AllModelFields {
-		if got[field] != "openrouter/deepseek/deepseek-v4-flash" {
+		if got[field] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 			t.Errorf("field %s = %q, want deepseek (explicit)", field, got[field])
 		}
 	}
@@ -223,7 +223,7 @@ func TestResolveRuntimeModels_EmptyEnvTreatedAsUnset(t *testing.T) {
 	t.Setenv("HARNESS_MODEL", "   ")
 	got := mustResolve(t, "open_code", nil)
 	for _, field := range AllModelFields {
-		if got[field] != "openrouter/deepseek/deepseek-v4-flash" {
+		if got[field] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 			t.Errorf("empty env -> base: field %s = %q", field, got[field])
 		}
 	}
@@ -361,7 +361,7 @@ func TestBuildConfig_OpenCodeProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved["coder_model"] != "openrouter/deepseek/deepseek-v4-flash" {
+	if resolved["coder_model"] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Errorf("coder_model = %q", resolved["coder_model"])
 	}
 }
@@ -377,7 +377,7 @@ func TestBuildConfig_AutoOpenRouterEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved["coder_model"] != "openrouter/deepseek/deepseek-v4-flash" {
+	if resolved["coder_model"] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Errorf("coder_model = %q", resolved["coder_model"])
 	}
 }
@@ -576,7 +576,7 @@ func TestBuildConfig_ToExecutionConfigDictRoundtrip(t *testing.T) {
 	if execCfg.CoderModel() != "deepseek/deepseek-chat" {
 		t.Errorf("exec coder_model = %q", execCfg.CoderModel())
 	}
-	if execCfg.QAModel() != "openrouter/deepseek/deepseek-v4-flash" {
+	if execCfg.QAModel() != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Errorf("exec qa_model = %q", execCfg.QAModel())
 	}
 	if execCfg.MaxRetriesPerIssue != 2 {
@@ -648,7 +648,7 @@ func TestExecutionConfig_CIFixerRole(t *testing.T) {
 	if mustLoadExec(t, map[string]any{"runtime": "claude_code"}).CIFixerModel() != "sonnet" {
 		t.Error("ci_fixer default claude")
 	}
-	if mustLoadExec(t, map[string]any{"runtime": "open_code"}).CIFixerModel() != "openrouter/deepseek/deepseek-v4-flash" {
+	if mustLoadExec(t, map[string]any{"runtime": "open_code"}).CIFixerModel() != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Error("ci_fixer default opencode")
 	}
 	cfg := mustLoadExec(t, map[string]any{"runtime": "claude_code", "models": map[string]any{"ci_fixer": "opus"}})
@@ -767,7 +767,7 @@ func TestFastResolveModels(t *testing.T) {
 		cfg, _ := LoadFastBuildConfig(map[string]any{"runtime": "open_code"})
 		got, _ := FastResolveModels(cfg)
 		for _, role := range fastRoles {
-			if got[role] != "openrouter/deepseek/deepseek-v4-flash" {
+			if got[role] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 				t.Errorf("%s = %q, want the shared open_code default", role, got[role])
 			}
 		}

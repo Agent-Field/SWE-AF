@@ -29,8 +29,8 @@ func TestMapSynthModelOpenRouter(t *testing.T) {
 		// OpenRouter's own API rejects with a 400. This is the id
 		// config.openRouterAutoDefaultModel hands every role on an
 		// OpenRouter-only install, so the direct client must drop the prefix.
-		"openrouter/deepseek/deepseek-v4-flash": "deepseek/deepseek-v4-flash",
-		"openrouter/z-ai/glm-5":                 "z-ai/glm-5",
+		"openrouter/deepseek/deepseek-v4-flash-0731": "deepseek/deepseek-v4-flash-0731",
+		"openrouter/z-ai/glm-5":                      "z-ai/glm-5",
 	}
 	for in, want := range cases {
 		if got := mapSynthModel(in); got != want {
@@ -58,7 +58,7 @@ func TestMapSynthModelNonOpenRouter(t *testing.T) {
 	// anything else — a LiteLLM-style proxy behind AI_BASE_URL, say — the
 	// prefix is the routing instruction, so removing it would send the request
 	// to the wrong provider.
-	const prefixed = "openrouter/deepseek/deepseek-v4-flash"
+	const prefixed = "openrouter/deepseek/deepseek-v4-flash-0731"
 	if got := mapSynthModel(prefixed); got != prefixed {
 		t.Errorf("mapSynthModel(%q) = %q, want passthrough — the prefix is only stripped for OpenRouter", prefixed, got)
 	}

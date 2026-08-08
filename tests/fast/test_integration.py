@@ -144,7 +144,7 @@ from swe_af.fast.schemas import fast_resolve_models, FastBuildConfig
 cfg = FastBuildConfig(runtime='open_code')
 resolved = fast_resolve_models(cfg)
 for role, model in resolved.items():
-    assert model == 'openrouter/deepseek/deepseek-v4-flash', f'{role}={model!r}'
+    assert model == 'openrouter/deepseek/deepseek-v4-flash-0731', f'{role}={model!r}'
 print('OK')
 """
     result = _run(code)

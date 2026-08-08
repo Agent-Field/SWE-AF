@@ -246,7 +246,7 @@ New to AgentField? Install the control plane first with `curl -fsSL https://agen
 
 One click deploys SWE-AF + AgentField control plane + PostgreSQL. Exactly **one** environment variable is required in Railway — an LLM provider key:
 
-- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. With only this set (no `ANTHROPIC_API_KEY`, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash` — no further configuration needed.
+- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. With only this set (no `ANTHROPIC_API_KEY`, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash-0731` — no further configuration needed.
 - *Alternative:* `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits), to run the `claude_code` runtime instead.
 
 Optional:
@@ -967,14 +967,26 @@ the same node ids, running both against one control plane needs an explicit
 `NODE_ID` on one of them — `docker-compose.go.yml` does that. See
 [`go/README.md`](go/README.md) for build, run, and Docker instructions.
 
-### Coding engine (opt-in preview)
+### Coding engine (beta)
 
-The Go node ships a prebuilt high-performance coding engine next to the
-classic coding loop. It is **inert by default** — nothing changes unless you
-set `SWE_PRO_ENGINE=1`. With the flag set, builds route per-issue coding
-through the engine; unset it and the node returns to the classic
-coder → reviewer/QA loop. If the binary isn't present, the node logs a
-warning and keeps using the classic loop, so the flag is safe to leave on.
+The Go node ships a prebuilt high-performance coding engine next to the classic
+coding loop. Whether it runs depends on how you got the node:
+
+| How you run SWE-AF | Engine | To change it |
+| --- | --- | --- |
+| `af install` / AgentField Desktop | **On by default** — `go/agentfield-package.yaml` declares `SWE_PRO_ENGINE` with `default: "1"`, and the installer injects it | `SWE_PRO_ENGINE=0` for the classic loop |
+| Clone, fork, `docker-compose.go.yml`, or a bare binary | **Off** — nothing changes unless you ask for it | `SWE_PRO_ENGINE=1` to opt in |
+
+The gate is purely the environment variable; the manifest is simply what sets
+it for you on an `af install`. With the engine on, builds route per-issue
+coding through it — everything else, including branch/push/PR, stays with the
+standard pipeline. Turn it off and the node returns to the classic
+coder → reviewer/QA loop. Reasoner names and input/output shapes are identical
+either way, so switching costs nothing but a restart.
+
+If the binary isn't present or isn't runnable, the node logs a warning and
+keeps using the classic loop, so the flag is safe to leave on.
+
 Tuning knobs (`SWE_PRO_VARIANT`, `SWE_PRO_MAX_COST`, `SWE_PRO_PUBLIC_URL`)
 and the full env surface are documented in
 [`go/docs/pro-engine.md`](go/docs/pro-engine.md).
