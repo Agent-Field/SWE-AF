@@ -3,7 +3,6 @@ package issue
 import (
 	"bytes"
 	"errors"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -13,9 +12,6 @@ import (
 // mirroring git_ops._git's error-detail selection.
 func runGit(repoPath string, args ...string) (string, string, int) {
 	cmd := exec.Command("git", append([]string{"-C", repoPath}, args...)...)
-	// Callers classify failures by matching git's stderr phrasing; pin the
-	// locale so a translated message can never change what they decide.
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
