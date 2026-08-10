@@ -31,7 +31,15 @@ type Options struct {
 	Exec        func(*exec.Cmd) ([]byte, error)
 	CmdTimeout  time.Duration
 	MaxBytes    int64
+	// BudgetGrace is how long a mirror must have gone without publishing before
+	// budget eviction may delete it. Zero uses defaultBudgetGrace.
+	BudgetGrace time.Duration
 }
+
+// defaultBudgetGrace matches the node's sweep cadence (node.sweepFurrow ticks
+// hourly): a mirror that published since the previous tick is presumed to
+// belong to a build that is still running.
+const defaultBudgetGrace = time.Hour
 
 // Manager owns the node's persistent run registry and furrow content store.
 //
@@ -53,6 +61,7 @@ type Manager struct {
 	exec             func(*exec.Cmd) ([]byte, error)
 	cmdTimeout       time.Duration
 	maxBytes         int64
+	budgetGrace      time.Duration
 	enabled          bool
 	entries          map[string]Entry
 	runLocks         map[string]*sync.Mutex
@@ -97,7 +106,11 @@ func New(opts Options) *Manager {
 		exec:        opts.Exec,
 		cmdTimeout:  opts.CmdTimeout,
 		maxBytes:    opts.MaxBytes,
+		budgetGrace: opts.BudgetGrace,
 		entries:     make(map[string]Entry),
+	}
+	if m.budgetGrace <= 0 {
+		m.budgetGrace = defaultBudgetGrace
 	}
 	if m.logger == nil {
 		m.logger = log.Default()
@@ -414,7 +427,7 @@ func (m *Manager) Sweep(maxAge time.Duration, maxBytes int64) (int, error) {
 	}
 	m.mu.RUnlock()
 	for _, runID := range stale {
-		dropped, err := m.retire(runID, maxAge)
+		dropped, err := m.retire(runID, m.olderThan(maxAge))
 		if err != nil {
 			return removed, err
 		}
@@ -452,13 +465,21 @@ func (m *Manager) Sweep(maxAge time.Duration, maxBytes int64) (int, error) {
 				m.logf("WARN furrow sweep: aggregate store size %d exceeds disk budget %d with no remote entries; new mirrors are disabled until space is freed", total, maxBytes)
 				break
 			}
-			dropped, err := m.retire(oldestID, 0)
+			// Only mirrors that have gone quiet for a full grace window are
+			// eligible. A build publishes on attach, at every completed DAG
+			// level and at completion, so anything more recent belongs to a run
+			// that is still going.
+			dropped, err := m.retire(oldestID, m.abandonedSince(oldest.UpdatedAt))
 			if err != nil {
 				return removed, err
 			}
 			if !dropped {
-				// Something republished it while we were measuring; measuring
-				// again would pick the same victim forever.
+				// Either something republished it while we were measuring, or
+				// it is too recently active to treat as abandoned. Every other
+				// entry is newer than this one, so there is nothing reclaimable
+				// left this pass; measuring again would pick the same victim
+				// forever.
+				m.logf("WARN furrow sweep: aggregate store size %d exceeds disk budget %d but the oldest mirror (%s) is still active; new mirrors are disabled until it goes quiet or space is freed", total, maxBytes, oldestID)
 				break
 			}
 			removed++
@@ -467,11 +488,40 @@ func (m *Manager) Sweep(maxAge time.Duration, maxBytes int64) (int, error) {
 	return removed, nil
 }
 
+// olderThan is the age-expiry eligibility rule: a run may be retired once its
+// last publish is further back than maxAge. A non-positive maxAge disables age
+// expiry, so nothing is eligible under it.
+func (m *Manager) olderThan(maxAge time.Duration) func(Entry) bool {
+	return func(entry Entry) bool {
+		return maxAge > 0 && m.now().Sub(entry.UpdatedAt) > maxAge
+	}
+}
+
+// abandonedSince is the budget-eviction eligibility rule. Reclaiming disk is
+// worth less than a running build's mirror, so a candidate must satisfy BOTH:
+//
+//   - its last publish is still the one the sweeper measured (observed) —
+//     anything newer means the run republished while we were choosing; and
+//   - that publish is at least budgetGrace old. A build publishes on attach, at
+//     every completed DAG level and at completion, so a mirror that moved
+//     inside the grace window belongs to a run that is still going.
+//
+// When nothing is eligible the store stays over budget and Attach refuses NEW
+// mirrors, which is a degradation an operator can undo by raising
+// SWE_FURROW_MAX_GB. Deleting a live run's mirror is not undoable.
+func (m *Manager) abandonedSince(observed time.Time) func(Entry) bool {
+	return func(entry Entry) bool {
+		return entry.UpdatedAt.Equal(observed) && m.now().Sub(entry.UpdatedAt) >= m.budgetGrace
+	}
+}
+
 // retire deletes one run's remote store and its registry row. It takes that
 // run's lock so a publish in flight finishes first rather than pushing into a
-// directory being deleted, and re-checks staleness under the lock so a run that
-// became active in the meantime is left alone.
-func (m *Manager) retire(runID string, maxAge time.Duration) (bool, error) {
+// directory being deleted, and re-checks eligible under that lock so a run that
+// became active in the meantime is left alone. Passing an eligible that ignores
+// the entry is how the promise in that last clause gets quietly dropped, so
+// both call sites pass a real rule.
+func (m *Manager) retire(runID string, eligible func(Entry) bool) (bool, error) {
 	unlock := m.lockRun(runID)
 	defer unlock()
 
@@ -481,7 +531,7 @@ func (m *Manager) retire(runID string, maxAge time.Duration) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	if maxAge > 0 && m.now().Sub(entry.UpdatedAt) <= maxAge {
+	if !eligible(entry) {
 		return false, nil
 	}
 	// Remove the files first: a failure here leaves the row in place so the next

@@ -325,6 +325,79 @@ func TestSweepTreatsNonPositiveBudgetAsUnlimited(t *testing.T) {
 	}
 }
 
+// retire promises that "a run that became active in the meantime is left
+// alone". Budget eviction called it with maxAge 0, which turned that re-check
+// off, so being over budget deleted the workspace of whichever run happened to
+// have published least recently — including one that was mid-build. Reclaiming
+// disk is worth less than a live mirror: refusing NEW mirrors is recoverable,
+// deleting a running build's is not.
+func TestSweepBudgetSparesRunsThatAreStillPublishing(t *testing.T) {
+	fake := &fakeExec{}
+	clock := time.Now()
+	m, abandonedRepo, _ := testManager(t, fake, func() time.Time { return clock })
+	liveRepo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(liveRepo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Attach("run/abandoned", "build", abandonedRepo); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	// Well past the grace window for the first run; the second attaches (and so
+	// publishes) right now, which is exactly what a mid-build run looks like.
+	clock = clock.Add(3 * time.Hour)
+	if _, err := m.Attach("run/live", "build", liveRepo); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	liveStore := m.entries["run/live"].StoreDir
+
+	// A one-byte budget: the store is over it no matter what, so eviction runs
+	// until it either frees enough or runs out of candidates it may touch.
+	removed, err := m.Sweep(0, 1)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("Sweep removed %d entries, want 1 (the abandoned run only)", removed)
+	}
+	if _, ok := m.entries["run/abandoned"]; ok {
+		t.Error("abandoned run survived budget eviction")
+	}
+	if _, ok := m.entries["run/live"]; !ok {
+		t.Error("budget eviction retired a run that published moments ago")
+	}
+	if _, err := os.Stat(liveStore); err != nil {
+		t.Errorf("live run's remote store was deleted: %v", err)
+	}
+}
+
+// The other half of the same promise: a run that republishes between being
+// chosen as the victim and the retirement taking its lock must survive.
+func TestRetireSkipsAnEntryThatMovedSinceItWasChosen(t *testing.T) {
+	fake := &fakeExec{}
+	clock := time.Now()
+	m, repo, _ := testManager(t, fake, func() time.Time { return clock })
+	if _, err := m.Attach("run/one", "build", repo); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	observed := m.entries["run/one"].UpdatedAt
+	clock = clock.Add(3 * time.Hour)
+
+	// The run publishes after the sweeper measured it: same run, newer stamp.
+	if err := m.Publish("run/one", "checkpoint"); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	dropped, err := m.retire("run/one", m.abandonedSince(observed))
+	if err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if dropped {
+		t.Fatal("retire deleted a run that republished after it was chosen")
+	}
+	if _, ok := m.entries["run/one"]; !ok {
+		t.Fatal("registry row removed")
+	}
+}
+
 func TestAttachSanitizesRemoteStorePath(t *testing.T) {
 	for _, runID := range []string{"../escape", "/absolute", "..", "."} {
 		t.Run(runID, func(t *testing.T) {
