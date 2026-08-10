@@ -94,8 +94,10 @@ func (m *Manager) lockRun(runID string) func() {
 	return lock.Unlock
 }
 
-// New constructs a manager and loads its persisted registry. Missing helpers
-// and corrupt registries deliberately degrade to an inert or empty manager.
+// New constructs a manager and loads its persisted registry. Mirroring is
+// opt-in: without a truthy SWE_FURROW_ENABLED the manager is inert, whatever
+// binaries are installed. Missing helpers and corrupt registries deliberately
+// degrade to an inert or empty manager too.
 func New(opts Options) *Manager {
 	m := &Manager{
 		storeRoot:   opts.StoreRoot,
@@ -133,7 +135,7 @@ func New(opts Options) *Manager {
 	if m.remotesRoot == "" {
 		m.remotesRoot = filepath.Join(m.storeRoot, "remotes")
 	}
-	if os.Getenv(EnvEnabled) == "0" {
+	if !EnvTruthy(EnvEnabled) {
 		return m
 	}
 	if opts.Bin != "" {

@@ -54,7 +54,9 @@ const (
 func (n *Node) RegisterPlanner() {
 	n.registerRoles()
 	n.registerOrchestrators()
-	n.registerWorkspaceHandleReasoner()
+	if n.furrowEnabled() {
+		n.registerWorkspaceHandleReasoner()
+	}
 	n.registerIssueReasoner()
 	if pro.Available() {
 		n.registerProReasoners()
@@ -172,6 +174,15 @@ func (n *Node) registerOrchestrators() {
 		}
 		regHandler(n, name, deps, h, opts...)
 	}
+}
+
+// furrowEnabled reports whether this node actually mirrors workspaces. It is
+// the same shape as the pro.Available() gate next to it: a surface that exists
+// only to reach a live mirror has no business being advertised on a node that
+// never makes one. Mirroring is opt-in (SWE_FURROW_ENABLED), so on a default
+// install this is false and get_workspace_handle is simply not registered.
+func (n *Node) furrowEnabled() bool {
+	return n != nil && n.Furrow != nil && n.Furrow.Enabled()
 }
 
 // registerWorkspaceHandleReasoner exposes connection details for a workspace

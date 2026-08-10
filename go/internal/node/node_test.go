@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fast"
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
 	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
 
@@ -76,7 +78,9 @@ var pythonRoleSurface = []string{
 
 // pythonOrchestrators is the 5 orchestrator reasoners defined on swe_af.app
 // (app.py @app.reasoner()): build, plan, execute, resolve, resume_build.
-var pythonOrchestrators = []string{"build", "plan", "execute", "resolve", "resume_build", "get_workspace_handle"}
+// get_workspace_handle is deliberately NOT here: it is gated on furrow being
+// switched on, and TestWorkspaceHandleReasonerIsGatedOnFurrow owns it.
+var pythonOrchestrators = []string{"build", "plan", "execute", "resolve", "resume_build"}
 
 // pythonFastReasoners is the 4 first-class fast reasoners: fast/app.py's build
 // plus fast_plan_tasks / fast_execute_tasks / fast_verify.
@@ -87,20 +91,64 @@ var pythonFastReasoners = []string{"build", "fast_plan_tasks", "fast_execute_tas
 var pythonIssueReasoners = []string{"implement_issue"}
 
 func TestRegisterPlannerExactSurface(t *testing.T) {
-	// Pin the pro engine off so an inherited SWE_PRO_ENGINE cannot
-	// widen the surface under test (the gated surface has its own test).
+	// Pin the pro engine and furrow off so an inherited SWE_PRO_ENGINE or
+	// SWE_FURROW_ENABLED cannot widen the surface under test (each gated
+	// surface has its own test).
 	t.Setenv("SWE_PRO_ENGINE", "")
+	t.Setenv(furrow.EnvEnabled, "")
 	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
 	}
 	n.RegisterPlanner()
 
-	// swe-planner surface = 25 roles + 6 orchestrators + implement_issue
-	// = 32 unique names.
+	// swe-planner surface = 25 roles + 5 orchestrators + implement_issue
+	// = 31 unique names.
 	want := append(append([]string(nil), pythonRoleSurface...), pythonOrchestrators...)
 	want = append(want, pythonIssueReasoners...)
 	assertSurface(t, "swe-planner", n.RegisteredNames(), want)
+}
+
+// stubAttacher is an enabled furrow that never mirrors anything: enough to
+// open the registration gate, nothing more.
+type stubAttacher struct{ enabled bool }
+
+func (s stubAttacher) Enabled() bool                                         { return s.enabled }
+func (s stubAttacher) Attach(string, string, string) (*furrow.Handle, error) { return nil, nil }
+func (s stubAttacher) Publish(string, string) error                          { return nil }
+func (s stubAttacher) Handle(string) *furrow.Handle                          { return nil }
+func (s stubAttacher) Detach(string) error                                   { return nil }
+func (s stubAttacher) Sweep(time.Duration, int64) (int, error)               { return 0, nil }
+
+// get_workspace_handle hands out the connection details for a live workspace
+// mirror. Mirroring is opt-in, so on a node that never makes a mirror the
+// reasoner must not be advertised at all — an entrypoint-tagged surface that
+// can only ever answer {"available": false} is an invitation to route to it.
+func TestWorkspaceHandleReasonerIsGatedOnFurrow(t *testing.T) {
+	const name = "get_workspace_handle"
+	for _, tc := range []struct {
+		label    string
+		attacher furrow.Attacher
+		want     bool
+	}{
+		{label: "furrow absent", attacher: nil, want: false},
+		{label: "furrow present but disabled", attacher: stubAttacher{}, want: false},
+		{label: "furrow mirroring", attacher: stubAttacher{enabled: true}, want: true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Setenv("SWE_PRO_ENGINE", "")
+			t.Setenv(furrow.EnvEnabled, "")
+			n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
+			if err != nil {
+				t.Fatalf("BuildAgent: %v", err)
+			}
+			n.Furrow = tc.attacher
+			n.RegisterPlanner()
+			if got := toSet(n.RegisteredNames())[name]; got != tc.want {
+				t.Fatalf("%s registered = %v, want %v", name, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestRegisterFastExactSurface(t *testing.T) {

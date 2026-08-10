@@ -5,15 +5,34 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 const (
-	EnvBin           = "SWE_FURROW_BIN"
-	EnvDaemonBin     = "SWE_FURROWD_BIN"
+	EnvBin       = "SWE_FURROW_BIN"
+	EnvDaemonBin = "SWE_FURROWD_BIN"
+	// EnvEnabled gates the whole feature. Mirroring is OPT-IN: it copies every
+	// byte of a build's workspace — including the untracked files and secrets
+	// git never sees — into a second on-disk store, so an operator has to ask
+	// for it. Unset means off.
 	EnvEnabled       = "SWE_FURROW_ENABLED"
 	DefaultBin       = "/usr/local/bin/furrow"
 	DefaultDaemonBin = "/usr/local/bin/furrowd"
 )
+
+// EnvTruthy reports whether an environment variable opts a feature in.
+// "1", "true", "yes" and "on" (any case, surrounding space ignored) enable it;
+// "0", "false", "no", "off", empty, unset and anything unrecognised disable it.
+// Deliberately the same rule as pro.Enabled — one spelling for every SWE-AF
+// feature gate — and deliberately closed by default, so a typo in a flag can
+// never be what switches a feature ON.
+func EnvTruthy(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
 
 // runnable rejects copies that exist but lost their execute bit during install.
 // It is a pure probe: an operator-supplied path (SWE_FURROW_BIN, /usr/local/bin)

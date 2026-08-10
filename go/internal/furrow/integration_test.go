@@ -20,6 +20,8 @@ func TestRealBinaryAttachPublishAndClone(t *testing.T) {
 	if err != nil {
 		t.Skipf("no furrow binary: %v", err)
 	}
+	// Mirroring is opt-in; this test is the opt-in.
+	t.Setenv(furrow.EnvEnabled, "1")
 
 	root := t.TempDir()
 	repo := filepath.Join(root, "myrepo-b33f")

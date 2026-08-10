@@ -2,6 +2,10 @@
 // main harness (Claude Code, another coding agent) can clone and follow while
 // the run is still going.
 //
+// Mirroring is OPT-IN: without a truthy SWE_FURROW_ENABLED nothing here runs.
+// A mirror is a byte-exact second copy of the build workspace, untracked files
+// and all, so an operator has to ask for it and accept the disk it costs.
+//
 // The contract with the rest of SWE-AF is deliberately one-way: orchestration
 // calls Attach when a workspace exists and Publish when something worth seeing
 // has landed, and never has to care whether furrow is installed. Every entry

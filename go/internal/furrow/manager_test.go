@@ -112,6 +112,7 @@ func TestManagerDisabled(t *testing.T) {
 		bin  string
 	}{
 		{"environment opt-out", "0", "unused"},
+		{"unset is opt-out", "", "unused"},
 		{"missing binary", "1", filepath.Join(t.TempDir(), "missing")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,6 +120,37 @@ func TestManagerDisabled(t *testing.T) {
 			m := New(Options{Bin: tc.bin, Logger: log.New(&bytes.Buffer{}, "", 0)})
 			if m.Enabled() {
 				t.Fatal("manager is enabled")
+			}
+		})
+	}
+}
+
+// Mirroring is opt-in and the flag is written by hand into a manifest, a
+// compose file or a shell, so it has to survive the spellings people actually
+// use — and, more importantly, an unrecognised value must never be what turns
+// a workspace-copying feature ON.
+func TestManagerEnableFlagSpellings(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "furrow")
+	if err := os.WriteFile(bin, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"1", true}, {"true", true}, {"TRUE", true}, {"yes", true}, {"On", true}, {" 1 ", true},
+		{"0", false}, {"false", false}, {"NO", false}, {"off", false}, {"", false},
+		{"maybe", false}, {"2", false}, {"disabled", false},
+	} {
+		t.Run(fmt.Sprintf("%s=%q", EnvEnabled, tc.value), func(t *testing.T) {
+			t.Setenv(EnvEnabled, tc.value)
+			m := New(Options{Bin: bin, StoreRoot: filepath.Join(t.TempDir(), "store"),
+				RemotesRoot: filepath.Join(t.TempDir(), "remotes"),
+				Exec:        func(*exec.Cmd) ([]byte, error) { return []byte(`{}`), nil },
+				Logger:      log.New(&bytes.Buffer{}, "", 0)})
+			if got := m.Enabled(); got != tc.want {
+				t.Fatalf("Enabled() with %s=%q = %v, want %v", EnvEnabled, tc.value, got, tc.want)
 			}
 		})
 	}

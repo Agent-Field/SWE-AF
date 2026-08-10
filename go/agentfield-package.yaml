@@ -64,8 +64,11 @@ user_environment:
     - name: SWE_PRO_MAX_COST
       description: Per-run USD ceiling for the engine — unset means no per-run cap
     - name: SWE_FURROW_ENABLED
-      description: Enable furrow workspace mirroring (set to 0 to disable)
-      default: "1"
+      description: >-
+        Opt in to furrow workspace mirroring (1/true/yes/on; unset or 0 keeps it off).
+        Mirroring copies the whole build workspace — including untracked files and any
+        secrets the coder wrote there — into a second encrypted store on this node.
+      default: "0"
     - name: SWE_FURROW_BIN
       description: Path to the furrow client binary — unset auto-resolves (/usr/local/bin/furrow, then vendored bin/furrow-<os>-<arch>)
       default: ""
