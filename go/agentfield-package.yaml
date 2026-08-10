@@ -69,6 +69,13 @@ user_environment:
         Mirroring copies the whole build workspace — including untracked files and any
         secrets the coder wrote there — into a second encrypted store on this node.
       default: "0"
+    - name: SWE_FURROW_EXPOSE_SECRETS
+      description: >-
+        Return the recovery key and transport token from get_workspace_handle instead of
+        redacting them. That reasoner authorizes no one — any caller with a run ID is
+        answered — and the key decrypts the workspace while the token grants read-write
+        access to its remote. Enable only on a single-tenant, trusted cluster.
+      default: "0"
     - name: SWE_FURROW_BIN
       description: Path to the furrow client binary — unset auto-resolves (/usr/local/bin/furrow, then vendored bin/furrow-<os>-<arch>)
       default: ""

@@ -31,6 +31,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/orch"
 	"github.com/Agent-Field/SWE-AF/go/internal/roles/advisor"
@@ -185,6 +186,32 @@ func (n *Node) furrowEnabled() bool {
 	return n != nil && n.Furrow != nil && n.Furrow.Enabled()
 }
 
+// workspaceHandleResult renders a handle for the wire.
+//
+// The trust boundary matters here. This reasoner has NO per-caller
+// authorization: anything that can reach the node and guess or observe a run ID
+// gets an answer. A furrow handle's Key is the run's recovery key — it decrypts
+// that workspace, secrets and untracked files included — and Token authenticates
+// to furrowd, which serves the run's remote read-write, so a leaked token buys
+// push and delete as well as pull.
+//
+// So both are withheld by default and the result says so, leaving Remote,
+// Namespace and RepoPath: enough for a caller that already shares the
+// filesystem, and enough for a human to see a mirror exists. An operator on a
+// single-tenant, trusted cluster opts back in with SWE_FURROW_EXPOSE_SECRETS.
+func workspaceHandleResult(handle *furrow.Handle) map[string]any {
+	data, _ := json.Marshal(handle)
+	result := map[string]any{}
+	_ = json.Unmarshal(data, &result)
+	expose := furrow.EnvTruthy(furrow.EnvExposeSecrets)
+	if !expose {
+		delete(result, "key")
+		delete(result, "token")
+	}
+	result["secrets_redacted"] = !expose
+	return result
+}
+
 // registerWorkspaceHandleReasoner exposes connection details for a workspace
 // only when furrow discovered and attached one for the requested run.
 func (n *Node) registerWorkspaceHandleReasoner() {
@@ -199,12 +226,12 @@ func (n *Node) registerWorkspaceHandleReasoner() {
 		if handle == nil {
 			return map[string]any{"available": false}, nil
 		}
-		data, _ := json.Marshal(handle)
-		result := map[string]any{}
-		_ = json.Unmarshal(data, &result)
-		return result, nil
+		return workspaceHandleResult(handle), nil
 	}, agent.WithReasonerTags("entrypoint"), agent.WithDescription(
-		"Returns connection details for cloning a run's live workspace. Route here when a caller needs to clone or follow an active build workspace."),
+		"Returns connection details for cloning a run's live workspace. Route here when a caller needs to clone or follow an active build workspace. "+
+			"The reasoner performs NO authorization: any caller holding a run ID gets an answer, so the recovery key and transport token are redacted "+
+			"(secrets_redacted=true) and the response carries only the remote, namespace and on-node path. Set SWE_FURROW_EXPOSE_SECRETS=1 to return them "+
+			"in full — appropriate only on a single-tenant cluster where every caller is already trusted with the workspace contents."),
 		agent.WithInputSchema(schema(`{"type":"object","additionalProperties":true,"required":["run_id"],"properties":{"run_id":{"type":"string"}}}`)))
 }
 

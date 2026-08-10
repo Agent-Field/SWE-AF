@@ -2,8 +2,10 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +148,56 @@ func TestWorkspaceHandleReasonerIsGatedOnFurrow(t *testing.T) {
 			n.RegisterPlanner()
 			if got := toSet(n.RegisteredNames())[name]; got != tc.want {
 				t.Fatalf("%s registered = %v, want %v", name, got, tc.want)
+			}
+		})
+	}
+}
+
+// get_workspace_handle answers anyone who can reach the node and name a run —
+// there is no per-caller authorization anywhere on that path. The handle's Key
+// decrypts the workspace and its Token authenticates to furrowd read-write, so
+// neither may be the default answer to an unauthenticated question.
+func TestWorkspaceHandleRedactsSecretsUnlessOperatorOptsIn(t *testing.T) {
+	handle := &furrow.Handle{
+		Version: furrow.HandleVersion, Remote: "ssh://node.internal:8802", Namespace: "run-1",
+		Key: "0123456789abcdef", Token: "transport-token", RepoPath: "/work/repo",
+	}
+	for _, tc := range []struct {
+		env  string
+		want bool // secrets present
+	}{
+		{env: "", want: false},
+		{env: "0", want: false},
+		{env: "no", want: false},
+		{env: "1", want: true},
+		{env: "true", want: true},
+	} {
+		t.Run("SWE_FURROW_EXPOSE_SECRETS="+tc.env, func(t *testing.T) {
+			t.Setenv(furrow.EnvExposeSecrets, tc.env)
+			result := workspaceHandleResult(handle)
+
+			_, gotKey := result["key"]
+			_, gotToken := result["token"]
+			if gotKey != tc.want || gotToken != tc.want {
+				t.Fatalf("key present = %v, token present = %v, want both %v", gotKey, gotToken, tc.want)
+			}
+			if result["secrets_redacted"] != !tc.want {
+				t.Errorf("secrets_redacted = %v, want %v", result["secrets_redacted"], !tc.want)
+			}
+			// Redacting must not blind the caller: what a mirror IS stays.
+			for _, key := range []string{"v", "remote", "namespace", "repo_path"} {
+				if _, ok := result[key]; !ok {
+					t.Errorf("result dropped %q, which carries no secret", key)
+				}
+			}
+			// Nothing may smuggle the secrets back through another field.
+			rendered, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if leaked := strings.Contains(string(rendered), handle.Key) ||
+				strings.Contains(string(rendered), handle.Token); leaked != tc.want {
+				t.Fatalf("secret material in payload = %v, want %v: %s", leaked, tc.want, rendered)
 			}
 		})
 	}

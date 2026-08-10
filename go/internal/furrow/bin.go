@@ -15,7 +15,12 @@ const (
 	// byte of a build's workspace — including the untracked files and secrets
 	// git never sees — into a second on-disk store, so an operator has to ask
 	// for it. Unset means off.
-	EnvEnabled       = "SWE_FURROW_ENABLED"
+	EnvEnabled = "SWE_FURROW_ENABLED"
+	// EnvExposeSecrets opts a node into returning a handle's recovery key and
+	// transport token from get_workspace_handle. That reasoner authorizes
+	// nobody, so the secrets are withheld unless an operator states that every
+	// caller which can reach this node is already trusted with the workspace.
+	EnvExposeSecrets = "SWE_FURROW_EXPOSE_SECRETS"
 	DefaultBin       = "/usr/local/bin/furrow"
 	DefaultDaemonBin = "/usr/local/bin/furrowd"
 )
