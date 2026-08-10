@@ -729,8 +729,23 @@ def _default_planning_model(runtime: str | None = None) -> str:
 
     ``runtime`` is normalized (aliases like ``claude`` / ``opencode`` accepted).
     When omitted, the runtime is resolved from the environment via
-    ``_default_runtime`` so callers that don't yet know the runtime keep the
-    historical env-only behavior.
+    ``_default_runtime`` — and the auto default then follows *that* runtime.
+    Omitting the argument therefore does **not** reproduce the old env-only
+    cascade in every configuration. The old cascade returned ``sonnet`` whenever
+    ``SWE_DEFAULT_RUNTIME`` was set to anything at all (setting it opts out of
+    ``_openrouter_only_env``), so these deployments change behavior:
+
+        SWE_DEFAULT_RUNTIME=open_code, no model env  → was ``sonnet``,
+            now the ``open_code`` base default
+        SWE_DEFAULT_RUNTIME=codex, no model env      → was ``sonnet``,
+            now the codex base default for the active auth mode
+
+    That is the intended fix, not a regression: a deployer who pinned a runtime
+    was silently getting a *Claude* planning model for it. Everything else is
+    unchanged — no ``SWE_DEFAULT_RUNTIME`` (auto-selection, both the
+    OpenRouter-only and the Claude branch), ``SWE_DEFAULT_RUNTIME=claude_code``,
+    and an invalid ``SWE_DEFAULT_RUNTIME`` all resolve exactly as before, as does
+    any configuration that sets a model env var (layers 1–2 below).
 
     Precedence is inherited from ``resolve_runtime_models`` (highest first):
 
