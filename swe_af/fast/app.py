@@ -58,6 +58,8 @@ def _runtime_to_provider(runtime: str) -> str:
         return "claude"
     if runtime == "codex":
         return "codex"
+    if runtime == "aforge":
+        return "aforge"
     return "opencode"
 
 

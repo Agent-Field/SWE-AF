@@ -89,6 +89,11 @@ class TestResolveRuntimeModels(unittest.TestCase):
         for field in ALL_MODEL_FIELDS:
             self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731")
 
+    def test_aforge_defaults(self) -> None:
+        resolved = resolve_runtime_models(runtime="aforge", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731")
+
     def test_models_default_applies_to_all(self) -> None:
         resolved = resolve_runtime_models(
             runtime="claude_code",
@@ -126,6 +131,14 @@ class TestBuildConfig(unittest.TestCase):
             self.assertEqual(cfg.ai_provider, "opencode")
             resolved = cfg.resolved_models()
         self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash-0731")
+
+    def test_aforge_runtime_provider(self) -> None:
+        cfg = BuildConfig(runtime="aforge")
+        self.assertEqual(cfg.ai_provider, "aforge")
+        self.assertEqual(
+            cfg.resolved_models()["coder_model"],
+            "openrouter/deepseek/deepseek-v4-flash-0731",
+        )
 
 
 class TestOpenRouterAutoSelection(unittest.TestCase):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-RUNTIME_VALUES = ("claude_code", "open_code", "codex")
+RUNTIME_VALUES = ("aforge", "claude_code", "open_code", "codex")
 
 
 def normalize_runtime_provider(runtime: str) -> str:
@@ -12,6 +12,8 @@ def normalize_runtime_provider(runtime: str) -> str:
         return "claude_code"
     if value in {"open_code", "opencode"}:
         return "open_code"
+    if value in {"aforge", "aforge_v2", "aforge-v2"}:
+        return "aforge"
     if value == "codex":
         return "codex"
     raise ValueError(f"Unsupported runtime provider: {runtime}")
@@ -24,6 +26,8 @@ def runtime_to_harness_provider(runtime: str) -> str:
         return "claude"
     if normalized == "open_code":
         return "opencode"
+    if normalized == "aforge":
+        return "aforge"
     return "codex"
 
 
@@ -34,4 +38,6 @@ def runtime_to_harness_adapter(runtime: str) -> str:
         return "claude-code"
     if normalized == "open_code":
         return "opencode"
+    if normalized == "aforge":
+        return "aforge"
     return "codex"

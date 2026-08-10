@@ -20,6 +20,7 @@ _CLAUDE_CODE_DEFAULT = "haiku"
 _OPEN_CODE_DEFAULT = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 _RUNTIME_DEFAULTS: dict[str, str] = {
+    "aforge": _OPEN_CODE_DEFAULT,
     "claude_code": _CLAUDE_CODE_DEFAULT,
     "open_code": _OPEN_CODE_DEFAULT,
     # codex is resolved dynamically (auth-mode dependent); see _runtime_default().
@@ -126,7 +127,7 @@ class FastBuildConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code", "codex"] = Field(default_factory=_default_fast_runtime)
+    runtime: Literal["aforge", "claude_code", "open_code", "codex"] = Field(default_factory=_default_fast_runtime)
     models: dict[str, str] | None = None
     max_tasks: int = 10
     task_timeout_seconds: int = 300

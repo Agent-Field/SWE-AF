@@ -279,6 +279,28 @@ python -m pip install -e ".[dev]"
 
 ### 3. Run
 
+#### Benchmark with unreleased aforge-v2
+
+Build aforge-v2 once, point AgentField at it, and select the runtime. No SWE-AF
+code or prompt changes are required:
+
+```bash
+cd /path/to/aforge-v2
+go build -o /absolute/path/to/bin/aforge ./cmd/aforge
+
+export OPENROUTER_API_KEY=sk-or-v1-...
+export AFORGE_BIN=/absolute/path/to/bin/aforge
+export SWE_DEFAULT_RUNTIME=aforge
+export SWE_DEFAULT_MODEL=openrouter/deepseek/deepseek-v4-flash-0731
+python -m swe_af
+```
+
+The draft pins the exact AgentField harness commit used for these benchmarks.
+Replace that source pin with the released SDK version before merging. The
+existing Docker image does not bundle the unreleased aforge-v2 binary; add it
+to the container or run the node on the host until Aforge publishes an
+installable artifact.
+
 ```bash
 af                 # starts AgentField control plane on :8080
 python -m swe_af   # registers node id "swe-planner"
@@ -820,7 +842,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
-| `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"`, `"open_code"`, or `"codex"`. The default also honors the `SWE_DEFAULT_RUNTIME` env var when no `runtime` is passed in `config` — set it on the deployment so callers don't need to plumb a config through. |
+| `runtime`                 | `"claude_code"` | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, or `"codex"`. The default also honors the `SWE_DEFAULT_RUNTIME` env var when no `runtime` is passed in `config` — set it on the deployment so callers don't need to plumb a config through. |
 | `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |

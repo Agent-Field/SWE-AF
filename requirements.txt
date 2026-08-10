@@ -2,7 +2,7 @@
 #
 # Install: python -m pip install -r requirements.txt
 
-agentfield>=0.1.113
+agentfield @ git+https://github.com/Agent-Field/agentfield.git@72f3d00baf58efc4fec3f7ee16e69c7cb8f99ff9#subdirectory=sdk/python
 pydantic>=2.0
 claude-agent-sdk==0.1.20
 hax-sdk>=0.2.4
