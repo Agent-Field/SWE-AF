@@ -13,6 +13,11 @@ runtime-aware; surface empty harness completions distinctly"):
 - ``SWE_DEFAULT_MODEL`` (deployer env) wins in every runtime cell.
 - An empty harness completion raises a distinct error that names the provider
   and the model, separate from the generic schema-invalid message.
+- A *schema* failure does NOT raise that error, even though it shares the
+  empty-completion shape (no parsed object, no text): the SDK marks it
+  ``failure_type=schema``, meaning output existed but failed validation, so
+  blaming provider auth would point at the wrong root cause.
+- A parsed object that is valid but falsy counts as a completion.
 """
 
 from __future__ import annotations
@@ -40,6 +45,18 @@ from swe_af.execution.schemas import (
 # behavior under test is "an explicit open_code runtime resolves open_code's own
 # base default" — not "…resolves <some specific model id>".
 _OPEN_CODE_BASE = _RUNTIME_BASE_MODELS["open_code"]["pm_model"]
+
+# The SDK's own SCHEMA failure classification, so the test exercises the real
+# object the harness hands back rather than a look-alike. The enum lives in a
+# private module (it is not re-exported from ``agentfield.harness``), so fall
+# back to the wire value if that ever moves — the production code compares on
+# the token for exactly the same reason.
+try:  # pragma: no cover - import shape depends on the installed SDK
+    from agentfield.harness._result import FailureType as _SdkFailureType
+
+    _SDK_SCHEMA_FAILURE = _SdkFailureType.SCHEMA
+except ImportError:  # pragma: no cover
+    _SDK_SCHEMA_FAILURE = "schema"
 
 # Every env var that steers runtime/model selection — cleared before each test
 # so results never depend on the developer's ambient shell.
@@ -172,12 +189,13 @@ def test_omitted_runtime_falls_back_to_env_resolution(
 # ---------------------------------------------------------------------------
 
 
-def _fake_result(*, parsed=None, result="", error_message=None):
+def _fake_result(*, parsed=None, result="", error_message=None, failure_type=None):
     """A HarnessResult-like stand-in (parsed/result/error_message + is_error)."""
     return SimpleNamespace(
         parsed=parsed,
         result=result,
         error_message=error_message,
+        failure_type=failure_type,
         is_error=False,
     )
 
@@ -226,6 +244,63 @@ class TestCheckEmptyHarnessCompletion:
         check_empty_harness_completion(
             result, role="PM", provider="codex", model="m"
         )  # must not raise
+
+    @pytest.mark.parametrize(
+        "falsy_parsed",
+        [[], {}, "", 0, False],
+        ids=["empty-list", "empty-dict", "empty-str", "zero", "false"],
+    )
+    def test_falsy_but_present_parsed_output_is_noop(self, falsy_parsed) -> None:
+        """A parsed object that is *valid but falsy* (an empty issue list, a
+        model that compares false) is still a completion — it must not be
+        reported as an empty one."""
+        result = _fake_result(parsed=falsy_parsed, result="")
+        check_empty_harness_completion(
+            result, role="Sprint planner", provider="opencode", model="m"
+        )  # must not raise
+
+    @pytest.mark.parametrize(
+        "failure_type",
+        [
+            _SDK_SCHEMA_FAILURE,  # the SDK's own enum member
+            "schema",  # a plain string, for SDKs/mocks that don't use the enum
+            "SCHEMA",
+            "FailureType.SCHEMA",  # str() of the enum member
+        ],
+        ids=["enum", "str", "upper", "enum-repr"],
+    )
+    def test_schema_failure_is_noop(self, failure_type) -> None:
+        """A terminal *schema* failure has the empty-completion shape (no parsed
+        object, no text) but is NOT a provider/auth problem — the agent produced
+        output that simply failed validation, e.g. a malformed prd.json written
+        via the Write tool with no closing prose. Mislabeling it "check provider
+        auth/model compatibility" points at the wrong root cause, so the
+        caller's schema-invalid message must take over instead."""
+        result = _fake_result(parsed=None, result=None, failure_type=failure_type)
+        check_empty_harness_completion(
+            result, role="PM", provider="opencode", model="m"
+        )  # must not raise
+
+    @pytest.mark.parametrize(
+        "failure_type", ["none", "crash", "timeout", "api_error", "no_output"]
+    )
+    def test_non_schema_failure_types_still_raise(self, failure_type: str) -> None:
+        """Only ``schema`` is exempt; every other terminal classification with
+        no parsed object and no text is still an empty completion."""
+        result = _fake_result(parsed=None, result=None, failure_type=failure_type)
+        with pytest.raises(EmptyHarnessCompletionError):
+            check_empty_harness_completion(
+                result, role="PM", provider="codex", model="m"
+            )
+
+    def test_result_without_failure_type_keeps_previous_behavior(self) -> None:
+        """Older SDK results (and hand-rolled stubs) expose no ``failure_type``
+        at all — those must still raise, unchanged."""
+        legacy = SimpleNamespace(parsed=None, result="", is_error=False)
+        with pytest.raises(EmptyHarnessCompletionError):
+            check_empty_harness_completion(
+                legacy, role="PM", provider="codex", model="m"
+            )
 
     def test_reads_text_property_when_result_absent(self) -> None:
         # Object exposing only `.text` (HarnessResult's convenience property).
