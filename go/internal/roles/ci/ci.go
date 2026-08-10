@@ -275,6 +275,15 @@ func (p *prResolverInput) UnmarshalJSON(b []byte) error {
 	return jsonUnmarshal(b, (*alias)(p))
 }
 
+// InvalidResolverReport is the Summary/ErrorMessage carried by the deterministic
+// PRResolveResult fallback RunPRResolver returns when the harness produced no
+// parseable result. It is a load-bearing sentinel, not just a log line: the
+// orchestrator (internal/orch.ResolveHandler) matches on it to decide that the
+// agent's own report cannot be trusted and that the remote branch has to be
+// inspected instead. Both sides reference this const so the two copies cannot
+// drift apart silently.
+const InvalidResolverReport = "PR resolver agent failed to produce a valid result."
+
 // RunPRResolver ports run_pr_resolver (execution_agents.py:1680). It resolves an
 // open PR — completing an in-progress merge, fixing CI, and addressing review
 // comments — and returns a PRResolveResult-shaped result. The orchestrator
@@ -343,8 +352,8 @@ func RunPRResolver(ctx context.Context, deps *Deps, input map[string]any) (any, 
 		FilesChanged:        []string{},
 		CommitSHAs:          []string{},
 		AddressedComments:   []schemas.AddressedComment{},
-		Summary:             "PR resolver agent failed to produce a valid result.",
+		Summary:             InvalidResolverReport,
 		RejectedWorkarounds: []string{},
-		ErrorMessage:        "PR resolver agent failed to produce a valid result.",
+		ErrorMessage:        InvalidResolverReport,
 	}, nil
 }
