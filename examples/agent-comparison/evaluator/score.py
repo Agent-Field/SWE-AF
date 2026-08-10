@@ -83,16 +83,27 @@ class Report:
 def _list_files(root: Path) -> list[Path]:
     out: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules")]
+        # Prune everything JUNK_DIRS names, not a hand-picked subset: a
+        # checked-in coverage/ must not be counted as project modules by
+        # Structure while Hygiene docks it as junk — one directory, one verdict.
+        dirnames[:] = [d for d in dirnames if d != ".git" and d not in JUNK_DIRS]
         for f in filenames:
             out.append(Path(dirpath, f).relative_to(root))
     return out
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=60
-    )
+    # core.fsmonitor is cleared so scoring a repo can never execute a
+    # repo-configured monitor daemon; a scorer must read the project, not
+    # run it (running is what --run-tests opts into).
+    cmd = ["git", "-c", "core.fsmonitor=", "-C", str(root), *args]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        # No git binary / a hung git is "couldn't look", not a property of
+        # the project. Surface it as a failed CompletedProcess so every
+        # caller's returncode check routes to UNSCORABLE with evidence.
+        return subprocess.CompletedProcess(cmd, returncode=127, stdout="", stderr=str(e))
 
 
 # ---------------------------------------------------------------- structure
@@ -127,12 +138,29 @@ def score_structure(root: Path, report: Report) -> None:
 
 # ------------------------------------------------------------------ hygiene
 
+def _gitignore_covers(gitignore: Path, target: str) -> bool:
+    """True when a non-comment line actually ignores `target`. A substring
+    scan would award the points to a commented-out line."""
+    for raw in gitignore.read_text(errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Normalize the common spellings: node_modules, /node_modules,
+        # node_modules/, **/node_modules — all ignore the directory.
+        normalized = line.strip("/")
+        if normalized.startswith("**/"):
+            normalized = normalized[3:]
+        if normalized == target:
+            return True
+    return False
+
+
 def score_hygiene(root: Path, report: Report) -> None:
     gitignore = root / ".gitignore"
     report.add("hygiene", ".gitignore exists", 5, gitignore.is_file(),
                "present" if gitignore.is_file() else "absent")
 
-    covers = gitignore.is_file() and "node_modules" in gitignore.read_text(errors="replace")
+    covers = gitignore.is_file() and _gitignore_covers(gitignore, "node_modules")
     report.add(
         "hygiene", ".gitignore covers node_modules", 5,
         covers if gitignore.is_file() else False,
@@ -154,11 +182,16 @@ def score_hygiene(root: Path, report: Report) -> None:
 
     if (root / ".git").exists():
         status = _git(root, "status", "--porcelain")
-        dirty = status.stdout.strip()
-        report.add(
-            "hygiene", "clean git status", 5, not dirty,
-            f"{len(dirty.splitlines())} dirty paths" if dirty else "clean",
-        )
+        if status.returncode != 0:
+            # git missing/failed: empty stdout must not read as "clean".
+            report.add("hygiene", "clean git status", 5, None,
+                       f"UNSCORABLE: git status failed: {status.stderr.strip()[:200]}")
+        else:
+            dirty = status.stdout.strip()
+            report.add(
+                "hygiene", "clean git status", 5, not dirty,
+                f"{len(dirty.splitlines())} dirty paths" if dirty else "clean",
+            )
     else:
         report.add("hygiene", "clean git status", 5, None, "UNSCORABLE: no .git in this copy")
 
@@ -209,14 +242,31 @@ def score_functional(root: Path, report: Report, run_tests: bool) -> None:
         report.add("functional", "npm test passes", 30, False, "no package.json")
         return
     env = {**os.environ, "CI": "1"}
-    install = subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--silent"],
-                             cwd=root, capture_output=True, text=True, timeout=600, env=env)
+    try:
+        # --ignore-scripts: running the project's suite is the explicit
+        # opt-in here; package lifecycle scripts are not part of that deal.
+        install = subprocess.run(
+            ["npm", "install", "--no-audit", "--no-fund", "--silent", "--ignore-scripts"],
+            cwd=root, capture_output=True, text=True, timeout=600, env=env)
+    except FileNotFoundError:
+        # "unscorable is never zero" applies to the scorer's own toolchain
+        # too: a machine without npm couldn't look, the project didn't fail.
+        report.add("functional", "npm test passes", 30, None, "UNSCORABLE: npm is not installed")
+        return
+    except subprocess.TimeoutExpired:
+        report.add("functional", "npm test passes", 30, False, "npm install timed out after 600s")
+        return
     if install.returncode != 0:
         report.add("functional", "npm test passes", 30, False,
                    f"npm install failed: {install.stderr.strip()[:200]}")
         return
-    test = subprocess.run(["npm", "test", "--silent"],
-                          cwd=root, capture_output=True, text=True, timeout=600, env=env)
+    try:
+        test = subprocess.run(["npm", "test", "--silent"],
+                              cwd=root, capture_output=True, text=True, timeout=600, env=env)
+    except subprocess.TimeoutExpired:
+        # A suite that never finishes IS a property of the project.
+        report.add("functional", "npm test passes", 30, False, "npm test timed out after 600s")
+        return
     lines = [ln for ln in (test.stdout + test.stderr).splitlines() if ln.strip()]
     tail = lines[-1] if lines else "(no output)"
     report.add("functional", "npm test passes", 30, test.returncode == 0,

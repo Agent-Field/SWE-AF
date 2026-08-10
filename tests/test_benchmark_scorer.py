@@ -166,6 +166,87 @@ def test_quality_is_observed_never_scored(well_formed: Path):
     assert any("package.json metadata" in o for o in report.observations)
 
 
+def test_coverage_dir_is_pruned_from_structure_not_double_counted(well_formed: Path):
+    """A checked-in coverage/ is junk (Hygiene docks it) — it must not ALSO
+    inflate Structure's module count as if it were project source."""
+    (well_formed / "coverage").mkdir()
+    (well_formed / "coverage" / "bundle.js").write_text("x\n")
+    (well_formed / "coverage" / "report.js").write_text("x\n")
+
+    report = scorer.score(well_formed)
+    modules = _check(report, "structure", "more than one source module")
+    # 4 real modules (cli + 3 in src/); the two coverage files are pruned.
+    assert "4 source modules" in modules.evidence
+    assert _check(report, "hygiene", "no junk artifacts in tree").passed is False
+
+
+def test_commented_out_gitignore_line_earns_nothing(well_formed: Path):
+    (well_formed / ".gitignore").write_text("# node_modules\n")
+    report = scorer.score(well_formed)
+    assert _check(report, "hygiene", ".gitignore covers node_modules").passed is False
+
+
+def test_gitignore_spelling_variants_all_cover(well_formed: Path):
+    for spelling in ("node_modules", "node_modules/", "/node_modules", "**/node_modules"):
+        (well_formed / ".gitignore").write_text(f"{spelling}\n")
+        report = scorer.score(well_formed)
+        check = _check(report, "hygiene", ".gitignore covers node_modules")
+        assert check.passed is True, f"spelling {spelling!r} should cover"
+
+
+def test_missing_npm_is_unscorable_not_a_crash(well_formed: Path, monkeypatch):
+    """FileNotFoundError from a machine without npm is 'couldn't look',
+    never a traceback and never a zero."""
+    real_run = scorer.subprocess.run
+
+    def no_npm(cmd, *a, **kw):
+        if cmd[0] == "npm":
+            raise FileNotFoundError("npm")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(scorer.subprocess, "run", no_npm)
+    report = scorer.score(well_formed, run_tests=True)
+    fn = _check(report, "functional", "npm test passes")
+    assert fn.passed is None
+    assert "npm is not installed" in fn.evidence
+
+
+def test_hung_npm_test_is_a_failure_with_evidence(well_formed: Path, monkeypatch):
+    (well_formed / "package.json").write_text('{"name": "p"}\n')
+    real_run = scorer.subprocess.run
+
+    def hang_on_test(cmd, *a, **kw):
+        if cmd[0] == "npm" and "test" in cmd:
+            raise scorer.subprocess.TimeoutExpired(cmd, 600)
+        if cmd[0] == "npm":  # install: pretend success
+            return scorer.subprocess.CompletedProcess(cmd, 0, "", "")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(scorer.subprocess, "run", hang_on_test)
+    report = scorer.score(well_formed, run_tests=True)
+    fn = _check(report, "functional", "npm test passes")
+    assert fn.passed is False
+    assert "timed out" in fn.evidence
+
+
+def test_missing_git_binary_is_unscorable_not_a_crash(well_formed: Path, monkeypatch):
+    real_run = scorer.subprocess.run
+
+    def no_git(cmd, *a, **kw):
+        if cmd[0] == "git":
+            raise FileNotFoundError("git")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(scorer.subprocess, "run", no_git)
+    report = scorer.score(well_formed)
+    # .git exists but git can't run: every git-backed check is unscorable.
+    assert _check(report, "hygiene", "clean git status").passed is None
+    for name in ("history has >= 3 commits",
+                 "commit subjects are descriptive",
+                 "no duplicated subjects"):
+        assert _check(report, "git", name).passed is None
+
+
 def test_scores_the_checked_in_sonnet_artifact():
     """Smoke against a real vendored artifact: claude-code-sonnet is flat
     (cli.js / todo.js / todo.test.js at the root), which is exactly what the
