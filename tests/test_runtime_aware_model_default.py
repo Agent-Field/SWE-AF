@@ -29,12 +29,17 @@ from swe_af.execution.fatal_error import (
 from swe_af.execution.schemas import (
     _CODEX_CHATGPT_MODEL,
     _OPENROUTER_AUTO_DEFAULT_MODEL,
+    _RUNTIME_BASE_MODELS,
     _default_planning_model,
 )
 
-# open_code's non-auto base default (an explicit open_code runtime, i.e. not
-# the OpenRouter-only auto-selection path). Mirrors _RUNTIME_BASE_MODELS.
-_OPEN_CODE_BASE = "openrouter/minimax/minimax-m2.5"
+# open_code's base default for an *explicit* open_code runtime (i.e. not the
+# OpenRouter-only auto-selection path). Read straight off the runtime table
+# instead of being duplicated as a literal here: a hardcoded copy silently goes
+# stale every time the default model is rolled (it already did once), and the
+# behavior under test is "an explicit open_code runtime resolves open_code's own
+# base default" — not "…resolves <some specific model id>".
+_OPEN_CODE_BASE = _RUNTIME_BASE_MODELS["open_code"]["pm_model"]
 
 # Every env var that steers runtime/model selection — cleared before each test
 # so results never depend on the developer's ambient shell.
@@ -82,6 +87,10 @@ _ENV_PRESETS: dict[str, dict[str, str]] = {
 # Under "swe_default_model" the deployer env wins verbatim for every runtime.
 # Under "openrouter_only"/"anthropic" the runtime's own auto/base default is
 # used — critically never an openrouter/ id for codex.
+# Note the two open_code rows may resolve to the same id: since the open_code
+# base default and the OpenRouter auto default were unified, the auto-selection
+# path and an explicit open_code runtime land on the same model. They stay
+# separate rows because they exercise different branches of the cascade.
 _MATRIX: list[tuple[str, str, str]] = [
     ("openrouter_only", "open_code", _OPENROUTER_AUTO_DEFAULT_MODEL),
     ("openrouter_only", "codex", _CODEX_CHATGPT_MODEL),
@@ -126,6 +135,18 @@ def test_codex_default_is_never_openrouter_prefixed(
     assert not resolved.startswith("openrouter/"), (
         f"codex runtime leaked a cross-runtime model id: {resolved!r}"
     )
+
+
+@pytest.mark.parametrize("runtime", ["open_code", "codex"])
+def test_non_claude_runtime_default_is_not_the_claude_alias(
+    monkeypatch: pytest.MonkeyPatch, runtime: str
+) -> None:
+    """Contract core (other direction): pinning a non-Claude runtime never falls
+    back to the ``sonnet`` Claude alias, which is what the old env-only cascade
+    returned whenever ``SWE_DEFAULT_RUNTIME`` was set to anything at all."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    assert _default_planning_model(runtime) != "sonnet"
 
 
 def test_runtime_aliases_are_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
