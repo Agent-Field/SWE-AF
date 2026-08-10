@@ -148,7 +148,7 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 		"goal":               in.Goal,
 		"additional_context": in.AdditionalContext,
 		"model":              resolverModel,
-		"permission_mode":    cfg.PermissionMode,
+		"permission_mode":    resolverPermissionMode(cfg.PermissionMode, cfg.AIProvider()),
 		"ai_provider":        cfg.AIProvider(),
 	}, "run_pr_resolver")
 	if err != nil {
@@ -262,6 +262,35 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 		"summary":        summary,
 		"success":        success,
 	}, nil
+}
+
+// resolverPermissionMode picks the permission mode handed to run_pr_resolver.
+//
+// An explicitly configured mode always wins. When none is configured the
+// default is provider-dependent, because the SDK harnesses disagree on what an
+// empty permission mode means (sdk/go/harness):
+//
+//   - claude: an empty mode omits --permission-mode entirely, so the CLI falls
+//     back to its "prompting" default. Under `claude --print` there is nobody to
+//     answer the prompt, so every write is denied and the resolver silently
+//     produces no commits. "auto" maps to bypassPermissions, which is what the
+//     resolver actually needs — it owns a throwaway clone.
+//   - codex: an empty mode already yields `--sandbox workspace-write`, i.e. the
+//     workspace is writable. "auto" would escalate to
+//     --dangerously-bypass-approvals-and-sandbox, dropping the sandbox around
+//     the *whole machine* for no benefit. Leave it empty.
+//   - opencode: the provider never reads PermissionMode, so the value is inert.
+//     Leave it empty rather than implying a guarantee we do not make.
+//
+// Hence the "auto" default is gated to the claude provider only.
+func resolverPermissionMode(configured, provider string) string {
+	if configured != "" {
+		return configured
+	}
+	if provider == "claude" {
+		return "auto"
+	}
+	return ""
 }
 
 // attemptBaseMerge fetches base_branch and merges it into the current branch.

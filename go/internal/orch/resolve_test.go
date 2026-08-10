@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/config"
 )
 
 // --- seam helpers ---------------------------------------------------------
@@ -635,5 +637,99 @@ func TestResolveFailureSuccessFalse(t *testing.T) {
 	}
 	if mapStr(res, "summary", "") == "" {
 		t.Fatal("summary must be present even on failure")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolverPermissionMode — the writability default is gated to claude.
+//
+// Validation contract:
+//   - When no permission mode is configured and the runtime resolves to the
+//     claude provider, the resolver runs with "auto" (bypassPermissions) so it
+//     can actually write to its throwaway clone.
+//   - Under codex the default stays empty: the codex harness already grants
+//     workspace-write, and "auto" would escalate to a full sandbox bypass.
+//   - Under opencode the default stays empty: the provider ignores the value.
+//   - An explicitly configured mode is never overridden, for any provider.
+// ---------------------------------------------------------------------------
+
+func TestResolverPermissionModeGatedToClaude(t *testing.T) {
+	cases := []struct {
+		runtime string
+		want    string
+	}{
+		{"claude_code", "auto"},
+		{"codex", ""},
+		{"open_code", ""},
+	}
+	for _, tc := range cases {
+		cfg, err := config.LoadBuildConfig(map[string]any{"runtime": tc.runtime})
+		if err != nil {
+			t.Fatalf("runtime %q: LoadBuildConfig: %v", tc.runtime, err)
+		}
+		if cfg.PermissionMode != "" {
+			t.Fatalf("runtime %q: expected an unset default permission mode, got %q",
+				tc.runtime, cfg.PermissionMode)
+		}
+		got := resolverPermissionMode(cfg.PermissionMode, cfg.AIProvider())
+		if got != tc.want {
+			t.Errorf("runtime %q (provider %q): permission mode = %q, want %q",
+				tc.runtime, cfg.AIProvider(), got, tc.want)
+		}
+	}
+}
+
+func TestResolverPermissionModeRespectsExplicitConfig(t *testing.T) {
+	for _, provider := range []string{"claude", "codex", "opencode", ""} {
+		if got := resolverPermissionMode("plan", provider); got != "plan" {
+			t.Errorf("provider %q: explicit mode = %q, want plan", provider, got)
+		}
+	}
+}
+
+// The gate must hold end-to-end: the kwarg the resolver reasoner actually
+// receives is the gated value, not cfg.PermissionMode verbatim.
+func TestResolveSendsGatedPermissionMode(t *testing.T) {
+	for _, tc := range []struct {
+		runtime string
+		want    string
+	}{
+		{"claude_code", "auto"},
+		{"codex", ""},
+		{"open_code", ""},
+	} {
+		func() {
+			defer withExecCtx("run-pm", "exec-pm")()
+			_, _, restore := installGitGH(
+				func(_ string, _ []string) cmdResult { return cmdResult{ExitCode: 0} },
+				func(_ string, _ []string) cmdResult { return cmdResult{ExitCode: 0} },
+			)
+			defer restore()
+			_, restoreSleep := installSleep()
+			defer restoreSleep()
+
+			seen := map[string]any{}
+			app := &mockApp{handler: func(_ context.Context, target string, in map[string]any) (map[string]any, error) {
+				if strings.Contains(target, "run_pr_resolver") {
+					seen = in
+					return map[string]any{"fixed": false, "pushed": false}, nil
+				}
+				return map[string]any{}, nil
+			}}
+			deps := &Deps{App: app, NodeID: "swe-planner"}
+
+			if _, err := ResolveHandler(context.Background(), deps, map[string]any{
+				"pr_url":      "https://github.com/o/r/pull/3",
+				"pr_number":   3,
+				"repo_url":    "https://github.com/o/r.git",
+				"head_branch": "feature/pm",
+				"config":      map[string]any{"runtime": tc.runtime},
+			}); err != nil {
+				t.Fatalf("runtime %q: resolve errored: %v", tc.runtime, err)
+			}
+			if got := mapStr(seen, "permission_mode", ""); got != tc.want {
+				t.Errorf("runtime %q: permission_mode kwarg = %q, want %q", tc.runtime, got, tc.want)
+			}
+		}()
 	}
 }
