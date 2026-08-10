@@ -27,8 +27,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
 )
 
 const (
@@ -261,20 +259,36 @@ func validNamespace(namespace string) bool {
 	return true
 }
 
-func lookupEntry(path, token string) (furrow.Entry, bool) {
+// registryRow is deliberately NARROWER than furrow.Entry, and that is its whole
+// reason for existing. furrowd is the only network-facing process in this
+// feature, and Entry carries the run's furrow recovery key — the secret that
+// decrypts the mirror. Decoding the registry into Entry pulled EVERY run's
+// recovery key into this process's address space on every authentication
+// attempt, including attempts from an unauthenticated stranger. The daemon
+// needs a token to compare and a directory to serve; the key is not a field
+// here, so it is never parsed, never held, and never available to dump.
+//
+// The json tags must stay in step with furrow.Entry's (types.go) — the manager
+// writes that struct and this reads its file.
+type registryRow struct {
+	Namespace string `json:"namespace"`
+	Token     string `json:"token,omitempty"`
+	StoreDir  string `json:"store_dir"`
+}
+
+func lookupEntry(path, token string) (registryRow, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return furrow.Entry{}, false
+		return registryRow{}, false
 	}
-	entries := make(map[string]furrow.Entry)
+	entries := make(map[string]registryRow)
 	if json.Unmarshal(data, &entries) != nil {
-		return furrow.Entry{}, false
+		return registryRow{}, false
 	}
-	var match furrow.Entry
+	var match registryRow
 	found := 0
-	for runID, entry := range entries {
+	for _, entry := range entries {
 		if subtle.ConstantTimeCompare([]byte(token), []byte(entry.Token)) == 1 {
-			entry.RunID = runID
 			match = entry
 			found = 1
 		}
@@ -282,7 +296,7 @@ func lookupEntry(path, token string) (furrow.Entry, bool) {
 	return match, found == 1
 }
 
-func (s *server) runChild(conn net.Conn, input io.Reader, entry furrow.Entry, namespace string) error {
+func (s *server) runChild(conn net.Conn, input io.Reader, entry registryRow, namespace string) error {
 	// The manager records the run's store under a SANITIZED directory name;
 	// rebuilding the path from the raw run ID here would serve the wrong
 	// directory for any ID sanitization alters — and hand a traversal-shaped

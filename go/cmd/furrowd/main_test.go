@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
@@ -269,5 +270,59 @@ func TestConcurrencyLimitEnforced(t *testing.T) {
 	}
 	if writeErr == nil {
 		t.Fatal("second connection was not rejected at the concurrency limit")
+	}
+}
+
+// furrowd is the only process in this feature listening on a network socket,
+// and lookupEntry runs on every AUTH line an unauthenticated stranger sends.
+// It used to decode the registry into furrow.Entry, whose Key field IS the
+// run's recovery key, so every key on the node was resident in the daemon's
+// memory during that read. The daemon needs a token to compare and a directory
+// to serve; nothing here may parse the key.
+func TestRegistryReadNeverDecodesRecoveryKeys(t *testing.T) {
+	rowType := reflect.TypeOf(registryRow{})
+	for i := 0; i < rowType.NumField(); i++ {
+		field := rowType.Field(i)
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "key" {
+			t.Fatalf("furrowd decodes the recovery key through field %s", field.Name)
+		}
+	}
+	// And the field really is present in the file being read, so the check
+	// above is about what we DECODE, not about what happens to be on disk.
+	entryType := reflect.TypeOf(furrow.Entry{})
+	keyField, ok := entryType.FieldByName("Key")
+	if !ok || strings.Split(keyField.Tag.Get("json"), ",")[0] != "key" {
+		t.Fatal("furrow.Entry no longer writes a \"key\" field; revisit this test")
+	}
+
+	root := t.TempDir()
+	storeDir := filepath.Join(root, "remotes", "run-1")
+	const recoveryKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	entries := map[string]furrow.Entry{"run-1": {
+		RunID: "run-1", RepoPath: "/work/repo", Namespace: "workspace",
+		Key: recoveryKey, Token: "correct-token", StoreDir: storeDir,
+	}}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "registry.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), recoveryKey) {
+		t.Fatal("registry fixture does not actually contain a recovery key")
+	}
+
+	entry, ok := lookupEntry(path, "correct-token")
+	if !ok {
+		t.Fatal("narrowing the registry read broke authentication")
+	}
+	if entry.StoreDir != storeDir || entry.Namespace != "workspace" {
+		t.Fatalf("entry = %+v, want the recorded store dir and namespace", entry)
+	}
+	if rendered := fmt.Sprintf("%+v", entry); strings.Contains(rendered, recoveryKey) {
+		t.Fatalf("recovery key reached furrowd: %s", rendered)
 	}
 }
