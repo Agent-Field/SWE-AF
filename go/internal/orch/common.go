@@ -100,7 +100,25 @@ var sleepFn = func(ctx context.Context, d time.Duration) {
 	}
 }
 
-func runIDFromCtx(ctx context.Context) string       { return executionContextFrom(ctx).RunID }
+// scopeIDFromCtx is the key every per-run store in a build files its state
+// under: the control-plane run ID when there is one, and the root workflow ID
+// when the run ID is absent. planning.Scout already stashes scoped credentials
+// behind exactly this fallback, so anything keyed differently would look at a
+// row Scout never wrote.
+//
+// The fallback is not cosmetic. An empty key is a SHARED key: the furrow
+// registry would file two unrelated builds under the same row, and the second
+// build's Attach would hand back the first build's workspace path, recovery key
+// and transport token. Whatever this returns must either identify one build or
+// be empty, and callers must treat empty as "no scoped state at all".
+func scopeIDFromCtx(ctx context.Context) string {
+	ec := executionContextFrom(ctx)
+	if ec.RunID != "" {
+		return ec.RunID
+	}
+	return ec.RootWorkflowID
+}
+
 func executionIDFromCtx(ctx context.Context) string { return executionContextFrom(ctx).ExecutionID }
 
 // ---------------------------------------------------------------------------

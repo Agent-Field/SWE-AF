@@ -68,9 +68,10 @@ type Attacher interface {
 	// Enabled reports whether this manager will do anything at all.
 	Enabled() bool
 	// Attach begins mirroring repoPath for runID and returns the handle a caller
-	// needs to reach it. It is idempotent per runID. A nil handle with a nil
-	// error means furrow is simply unavailable — never an error worth failing a
-	// build over.
+	// needs to reach it. It is idempotent per runID, and an empty runID is
+	// refused outright — it would be a key two builds share, not a missing
+	// label. A nil handle with a nil error means furrow is simply unavailable —
+	// never an error worth failing a build over.
 	Attach(runID, buildID, repoPath string) (*Handle, error)
 	// Publish seals current state and pushes it to the run's remote. Safe to
 	// call often; cheap when nothing changed.

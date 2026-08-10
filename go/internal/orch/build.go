@@ -93,9 +93,10 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 
 	deps.Note(ctx, fmt.Sprintf("Build starting (build_id=%s)", buildID), "build", "start")
 
-	// Scope key for the credentials store; cleared in the deferred finally so
-	// even an error leaves no secrets in process memory.
-	scopeID := runIDFromCtx(ctx)
+	// Scope key for the credentials store AND for this build's workspace mirror;
+	// cleared in the deferred finally so even an error leaves no secrets in
+	// process memory. Both consumers below guard against an empty scope.
+	scopeID := scopeIDFromCtx(ctx)
 	defer func() {
 		if scopeID != "" {
 			hitl.ClearScopedCredentials(scopeID)

@@ -124,6 +124,39 @@ func TestManagerDisabled(t *testing.T) {
 	}
 }
 
+// An empty run ID is a key two builds SHARE, not a label one build is missing.
+// Sanitization used to turn it into the namespace "run", so a second build
+// attaching without an ID got the first build's registry row back — its
+// workspace path, its recovery key and its transport token. Refusing is the
+// only outcome that cannot leak one build's mirror to another.
+func TestAttachRefusesEmptyRunID(t *testing.T) {
+	fake := &fakeExec{}
+	m, repoA, _ := testManager(t, fake, time.Now)
+	repoB := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoB, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := len(fake.snapshot())
+
+	first, err := m.Attach("", "build-a", repoA)
+	if first != nil || err != nil {
+		t.Fatalf("Attach(\"\") = (%v, %v), want (nil, nil)", first, err)
+	}
+	second, err := m.Attach("", "build-b", repoB)
+	if second != nil || err != nil {
+		t.Fatalf("second Attach(\"\") = (%v, %v), want (nil, nil)", second, err)
+	}
+	if len(m.entries) != 0 {
+		t.Fatalf("registry entries = %v, want none", m.entries)
+	}
+	if got := fake.snapshot()[before:]; len(got) != 0 {
+		t.Fatalf("furrow was invoked for a run with no ID: %v", got)
+	}
+	if handle := m.Handle(""); handle != nil {
+		t.Fatalf("Handle(\"\") = %v, want nil", handle)
+	}
+}
+
 func TestAttachMissingGit(t *testing.T) {
 	fake := &fakeExec{}
 	m, _, _ := testManager(t, fake, time.Now)

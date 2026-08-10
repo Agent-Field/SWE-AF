@@ -202,6 +202,17 @@ func (m *Manager) Attach(runID, buildID, repoPath string) (*Handle, error) {
 	if m == nil || !m.Enabled() {
 		return nil, nil
 	}
+	// The run ID is BOTH the registry key and (after sanitization) the remote
+	// directory name, so an empty one is not a missing label — it is a shared
+	// one. Two builds attaching without an ID would land on the same row under
+	// the same namespace, and the second Attach would return the first build's
+	// RepoPath, recovery key and transport token. Refuse instead: a caller with
+	// no run ID gets no mirror, which is the same nil handle it already handles
+	// for a node where furrow is not installed.
+	if runID == "" {
+		m.logf("WARN furrow attach: refusing to mirror %q with no run ID; a shared key would hand one build another's recovery key", repoPath)
+		return nil, nil
+	}
 	if info, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil || !info.IsDir() {
 		return nil, nil
 	}
