@@ -465,6 +465,64 @@ func TestAttachSanitizesRemoteStorePath(t *testing.T) {
 	}
 }
 
+// StoreDir is read back out of a JSON file on disk and handed straight to
+// os.RemoveAll. Attach only ever writes remotesRoot/<sanitized namespace>, so
+// anything else is a corrupted or hand-edited row — and honouring it would let
+// that file choose what the node deletes.
+func TestRetireNeverDeletesOutsideTheRemotesRoot(t *testing.T) {
+	for _, tc := range []struct{ name, storeDir string }{
+		{name: "sibling directory", storeDir: "sibling"},
+		{name: "the remotes root itself", storeDir: "root"},
+		{name: "empty", storeDir: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeExec{}
+			clock := time.Now()
+			m, repo, remotes := testManager(t, fake, func() time.Time { return clock })
+			if _, err := m.Attach("run/one", "build", repo); err != nil {
+				t.Fatalf("Attach: %v", err)
+			}
+			sibling := filepath.Join(filepath.Dir(remotes), "not-ours")
+			if err := os.MkdirAll(sibling, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			sentinel := filepath.Join(sibling, "keep")
+			if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			rootSentinel := filepath.Join(remotes, "keep")
+			if err := os.WriteFile(rootSentinel, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			// Corrupt the row the way an edited registry.json would.
+			entry := m.entries["run/one"]
+			switch tc.storeDir {
+			case "sibling":
+				entry.StoreDir = sibling
+			case "root":
+				entry.StoreDir = remotes
+			default:
+				entry.StoreDir = ""
+			}
+			m.entries["run/one"] = entry
+
+			clock = clock.Add(2 * time.Hour)
+			if _, err := m.Sweep(time.Hour, -1); err != nil {
+				t.Fatalf("Sweep: %v", err)
+			}
+			if _, ok := m.entries["run/one"]; ok {
+				t.Error("bogus row survived the sweep and will be retried forever")
+			}
+			for _, path := range []string{sentinel, rootSentinel} {
+				if got, err := os.ReadFile(path); err != nil || string(got) != "keep" {
+					t.Errorf("sweep deleted %q: %q, %v", path, got, err)
+				}
+			}
+		})
+	}
+}
+
 // A node serves several builds at once and an initial capture of a large
 // repository is slow, so work on one run must not block another. This fails if
 // the manager ever goes back to holding one lock across furrow invocations:

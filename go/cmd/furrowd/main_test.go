@@ -326,3 +326,33 @@ func TestRegistryReadNeverDecodesRecoveryKeys(t *testing.T) {
 		t.Fatalf("recovery key reached furrowd: %s", rendered)
 	}
 }
+
+// The namespace is attacker-supplied text that becomes an argv element of
+// `furrow __remote <namespace>`. The permitted charset includes '-', so a
+// leading one would arrive at furrow looking like a flag; nothing here knows
+// how furrow's parser treats that, and no namespace the manager produces ever
+// starts with '-'.
+func TestValidNamespaceRejectsFlagShapedInput(t *testing.T) {
+	for _, tc := range []struct {
+		namespace string
+		want      bool
+	}{
+		{"workspace", true},
+		{"run_2026-08-10.a", true},
+		{"a-b", true},
+		{"-workspace", false},
+		{"--force", false},
+		{"-", false},
+		{"", false},
+		{".", false},
+		{"..", false},
+		{"../escape", false},
+		{"has space", false},
+		{strings.Repeat("a", 96), true},
+		{strings.Repeat("a", 97), false},
+	} {
+		if got := validNamespace(tc.namespace); got != tc.want {
+			t.Errorf("validNamespace(%q) = %v, want %v", tc.namespace, got, tc.want)
+		}
+	}
+}

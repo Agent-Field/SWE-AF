@@ -1,6 +1,7 @@
 package furrow
 
 import (
+	"bytes"
 	"context"
 	"log"
 	"net"
@@ -180,6 +181,20 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		"FURROWD_REMOTES_ROOT="+remotesRoot,
 		"SWE_FURROW_BIN="+furrowBin,
 	)
+	// Without this the child's output went nowhere: a furrowd that could not
+	// bind its port, or could not read its TLS key, restarted every backoff
+	// interval and said nothing, until the supervisor gave up after five
+	// failures with a single line naming only the exit status. The reason was
+	// always on the child's stderr. Assigning an io.Writer (rather than a
+	// *os.File) makes exec run its own copier and wait for it in cmd.Wait, so
+	// there is no read racing the process teardown.
+	stdout := &prefixWriter{logger: s.logger, prefix: "furrowd: "}
+	stderr := &prefixWriter{logger: s.logger, prefix: "furrowd: "}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	defer func() {
+		stdout.flush()
+		stderr.flush()
+	}()
 	setDaemonProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
@@ -204,6 +219,60 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		<-wait
 		return ctx.Err()
 	}
+}
+
+// maxPrefixLine bounds a single buffered line so a child that writes megabytes
+// without a newline cannot grow the supervisor's memory without limit.
+const maxPrefixLine = 64 << 10
+
+// prefixWriter forwards a child process's output into the node's log one line
+// at a time, tagged so it is attributable. exec.Cmd writes to it from its own
+// copier goroutine — one per stream — and log.Logger is already safe for
+// concurrent use; the mutex guards this writer's own partial-line buffer.
+type prefixWriter struct {
+	logger *log.Logger
+	prefix string
+
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (w *prefixWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, p...)
+	for {
+		index := bytes.IndexByte(w.buf, '\n')
+		if index < 0 {
+			break
+		}
+		w.emitLocked(w.buf[:index])
+		w.buf = w.buf[index+1:]
+	}
+	if len(w.buf) >= maxPrefixLine {
+		w.emitLocked(w.buf)
+		w.buf = w.buf[:0]
+	}
+	return len(p), nil
+}
+
+// flush emits whatever the child left without a trailing newline. Safe to call
+// once exec.Cmd's copiers have finished, which cmd.Wait guarantees.
+func (w *prefixWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buf) > 0 {
+		w.emitLocked(w.buf)
+		w.buf = w.buf[:0]
+	}
+}
+
+func (w *prefixWriter) emitLocked(line []byte) {
+	text := strings.TrimRight(string(line), "\r")
+	if text == "" || w.logger == nil {
+		return
+	}
+	w.logger.Printf("%s%s", w.prefix, text)
 }
 
 func envOrDefault(key, fallback string) string {

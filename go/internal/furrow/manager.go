@@ -536,10 +536,24 @@ func (m *Manager) retire(runID string, eligible func(Entry) bool) (bool, error) 
 	if !eligible(entry) {
 		return false, nil
 	}
-	// Remove the files first: a failure here leaves the row in place so the next
-	// sweep retries, rather than orphaning a store nothing points at any more.
-	if err := os.RemoveAll(entry.StoreDir); err != nil {
-		return false, fmt.Errorf("furrow sweep %q: %w", runID, err)
+	// The path about to be handed to RemoveAll comes off disk, from a JSON file
+	// this process rewrites but does not own exclusively. Attach only ever
+	// builds StoreDir as remotesRoot/<sanitized namespace>, so anything else —
+	// an absolute path elsewhere, an empty string (which would delete the
+	// process's working directory), the remotes root itself — is a corrupted or
+	// edited row, not something we created. Drop the row so it stops being
+	// counted, and delete nothing.
+	switch {
+	case !within(m.remotesRoot, entry.StoreDir) || filepath.Clean(entry.StoreDir) == filepath.Clean(m.remotesRoot):
+		m.logf("WARN furrow sweep %q: registry store dir %q is not inside %q; dropping the row without deleting anything",
+			runID, entry.StoreDir, m.remotesRoot)
+	default:
+		// Remove the files first: a failure here leaves the row in place so the
+		// next sweep retries, rather than orphaning a store nothing points at
+		// any more.
+		if err := os.RemoveAll(entry.StoreDir); err != nil {
+			return false, fmt.Errorf("furrow sweep %q: %w", runID, err)
+		}
 	}
 	m.mu.Lock()
 	delete(m.entries, runID)

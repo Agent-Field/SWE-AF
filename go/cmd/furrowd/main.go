@@ -247,6 +247,15 @@ func validNamespace(namespace string) bool {
 	if namespace == "" || len(namespace) > 96 || namespace == "." || namespace == ".." {
 		return false
 	}
+	// The namespace is attacker-supplied text that becomes an argv element of
+	// `furrow __remote <namespace>`. '-' is in the permitted charset, so a
+	// LEADING one would reach furrow looking like a flag. How furrow's parser
+	// treats that is not ours to assume — and a "--" separator only helps if it
+	// honours one — so the shape is refused here instead. No legitimate
+	// namespace starts with '-': the manager derives them from run IDs.
+	if namespace[0] == '-' {
+		return false
+	}
 	for i := 0; i < len(namespace); i++ {
 		c := namespace[i]
 		switch {

@@ -66,8 +66,14 @@ type Entry struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Attacher is the surface orchestration code depends on. A nil *Manager
-// satisfies every method as a no-op, so callers never need a nil check.
+// Attacher is the surface orchestration code depends on.
+//
+// Every method on *Manager tolerates a nil RECEIVER, but that is not the same
+// as callers never needing a nil check: they hold this interface, and a nil
+// Attacher interface value has no method set to dispatch to — calling through
+// it panics. node.buildFurrowManager returns a nil interface when furrow is off
+// or unavailable, so orch.Deps.furrowAttach and furrowPublish nil-check the
+// field before every call. Anything else holding an Attacher must do the same.
 type Attacher interface {
 	// Enabled reports whether this manager will do anything at all.
 	Enabled() bool
@@ -82,7 +88,11 @@ type Attacher interface {
 	Publish(runID, label string) error
 	// Handle returns a previously attached run's handle, or nil if unknown.
 	Handle(runID string) *Handle
-	// Detach stops mirroring a run. Retained state is left for the sweeper.
+	// Detach reports whether the run is still known, returning an error when it
+	// is not. It does NOT stop mirroring: `furrow watch --no-daemon` leaves
+	// nothing running to stop, and the mirror's remote and registry row are
+	// reclaimed by Sweep on age or budget instead. The name is kept because
+	// callers use it as an "is this run still attached" probe.
 	Detach(runID string) error
 	// Sweep removes registry entries and remote stores older than maxAge, and
 	// trims the store root to maxBytes (oldest first). Returns entries removed.

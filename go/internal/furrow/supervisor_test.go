@@ -220,3 +220,41 @@ func waitForPID(t *testing.T, path string) int {
 	t.Fatal(fmt.Sprintf("timed out waiting for %s", path))
 	return 0
 }
+
+// A furrowd that cannot bind its port or read its TLS key dies immediately and
+// is restarted every backoff interval. Its stdout and stderr used to go
+// nowhere, so the only trace of a restart loop was one line after five
+// failures naming an exit status — the actual reason was on the child's
+// stderr and was discarded. Both streams now reach the node's log, tagged.
+func TestSupervisorForwardsDaemonOutputToTheNodeLog(t *testing.T) {
+	m := supervisorManager(t)
+	var logs bytes.Buffer
+	logger := log.New(&logs, "", 0)
+	t.Setenv("FURROW_PUBLIC_ADDR", "mirror.example:8802")
+	t.Setenv(EnvDaemonBin, daemonScript(t,
+		"echo 'listening on :8802'\n"+
+			"echo 'furrowd: listen on :8802: address already in use' >&2\n"+
+			"printf 'no trailing newline' >&2\n"+
+			"exit 1\n"))
+	s := NewSupervisor(m)
+	s.logger = logger
+	s.maxFailures = 1
+	s.after = immediateTimer
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.Start(ctx)
+	s.Wait(5 * time.Second)
+
+	got := logs.String()
+	for _, want := range []string{
+		"furrowd: listening on :8802",
+		"furrowd: furrowd: listen on :8802: address already in use",
+		// A final partial line must be flushed, not swallowed.
+		"furrowd: no trailing newline",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("supervisor log missing %q; got:\n%s", want, got)
+		}
+	}
+}
