@@ -82,5 +82,8 @@ type Attacher interface {
 	Detach(runID string) error
 	// Sweep removes registry entries and remote stores older than maxAge, and
 	// trims the store root to maxBytes (oldest first). Returns entries removed.
+	// Each limit is independently opt-out: a maxAge of zero or less disables
+	// age expiry, and a maxBytes of zero or less means UNLIMITED disk and skips
+	// budget eviction entirely — it never means "evict everything".
 	Sweep(maxAge time.Duration, maxBytes int64) (int, error)
 }

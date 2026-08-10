@@ -294,11 +294,43 @@ func TestPublicHandleRequiresHealthyTransport(t *testing.T) {
 	}
 }
 
+// SWE_FURROW_MAX_GB=0 is the operator saying "do not cap my disk". Every other
+// consumer of the budget already read it that way; the sweeper read `>= 0` and
+// so treated the no-cap setting as a zero-byte cap, retiring every mirror on
+// the node — live builds included — on every hourly tick.
+func TestSweepTreatsNonPositiveBudgetAsUnlimited(t *testing.T) {
+	for _, maxBytes := range []int64{0, -1} {
+		t.Run(fmt.Sprintf("maxBytes=%d", maxBytes), func(t *testing.T) {
+			fake := &fakeExec{}
+			m, repo, _ := testManager(t, fake, time.Now)
+			if _, err := m.Attach("run/live", "build", repo); err != nil {
+				t.Fatalf("Attach: %v", err)
+			}
+			entry := m.entries["run/live"]
+
+			removed, err := m.Sweep(0, maxBytes)
+			if err != nil {
+				t.Fatalf("Sweep: %v", err)
+			}
+			if removed != 0 {
+				t.Fatalf("Sweep removed %d entries under an unlimited budget, want 0", removed)
+			}
+			if _, ok := m.entries["run/live"]; !ok {
+				t.Fatal("unlimited budget retired the run's registry row")
+			}
+			if _, err := os.Stat(entry.StoreDir); err != nil {
+				t.Fatalf("unlimited budget deleted the run's remote store: %v", err)
+			}
+		})
+	}
+}
+
 func TestAttachSanitizesRemoteStorePath(t *testing.T) {
 	for _, runID := range []string{"../escape", "/absolute", "..", "."} {
 		t.Run(runID, func(t *testing.T) {
 			fake := &fakeExec{}
-			m, repo, remotes := testManager(t, fake, time.Now)
+			clock := time.Now()
+			m, repo, remotes := testManager(t, fake, func() time.Time { return clock })
 			outside := filepath.Join(filepath.Dir(remotes), "escape")
 			if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
 				t.Fatal(err)
@@ -311,8 +343,15 @@ func TestAttachSanitizesRemoteStorePath(t *testing.T) {
 			if filepath.Dir(entry.StoreDir) != remotes || filepath.Base(entry.StoreDir) != sanitizeNamespace(runID) {
 				t.Fatalf("StoreDir %q escaped remotes root %q", entry.StoreDir, remotes)
 			}
-			if _, err := m.Sweep(0, 0); err != nil {
+			// Age the entry past the TTL and sweep by age alone: a zero budget
+			// means unlimited disk, so it would no longer retire anything and
+			// the deletion this test is about would never run.
+			clock = clock.Add(2 * time.Hour)
+			if _, err := m.Sweep(time.Hour, 0); err != nil {
 				t.Fatal(err)
+			}
+			if _, ok := m.entries[runID]; ok {
+				t.Fatalf("entry %q survived the age sweep, so nothing was deleted", runID)
 			}
 			if got, err := os.ReadFile(outside); err != nil || string(got) != "keep" {
 				t.Fatalf("outside sentinel = %q, %v", got, err)

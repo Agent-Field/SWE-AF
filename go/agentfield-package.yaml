@@ -82,7 +82,7 @@ user_environment:
       description: Retention time for mirrored workspaces in hours
       default: "72"
     - name: SWE_FURROW_MAX_GB
-      description: Maximum aggregate furrow store size in GB
+      description: Maximum aggregate furrow store size in GB; 0 means unlimited disk (no budget eviction)
       default: "20"
     - name: FURROWD_ADDR
       description: Address on which furrowd listens

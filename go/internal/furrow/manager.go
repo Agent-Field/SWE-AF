@@ -423,7 +423,12 @@ func (m *Manager) Sweep(maxAge time.Duration, maxBytes int64) (int, error) {
 		}
 	}
 
-	if maxBytes >= 0 {
+	// A budget of zero or less is NO budget. Everywhere else in the manager
+	// already reads it that way — alignStoreBudget returns early and Attach
+	// skips its check — but this pass used `>= 0`, so the one configuration
+	// that says "do not cap me", SWE_FURROW_MAX_GB=0, made every sweep tick
+	// retire every mirror on the node, live ones included, once an hour.
+	if maxBytes > 0 {
 		for {
 			// Walking the store is I/O, so it happens with no lock held.
 			total, err := m.aggregateSize()
@@ -535,6 +540,10 @@ func within(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// configuredMaxBytes reads the node's disk allowance. An explicit 0 means
+// UNLIMITED and is returned as 0 — every consumer of maxBytes treats a
+// non-positive budget as "no cap". Unset or unparseable falls back to the
+// documented default; a negative value is nonsense and does the same.
 func configuredMaxBytes() int64 {
 	const defaultMaxGB = 20
 	maxGB, err := strconv.ParseInt(os.Getenv("SWE_FURROW_MAX_GB"), 10, 64)
