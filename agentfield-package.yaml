@@ -43,14 +43,6 @@ user_environment:
           description: OpenRouter API key (DeepSeek/Qwen/Llama/… — 200+ models)
           type: secret
           scope: global
-        - name: MINIMAX_API_KEY
-          description: MiniMax API key for direct OpenCode providers
-          type: secret
-          scope: global
-        - name: ANTHROPIC_AUTH_TOKEN
-          description: Anthropic-compatible auth token for the Claude runtime
-          type: secret
-          scope: global
   optional:
     # `gh`/`git` read this token for authentication (see prompts/github_pr.py).
     # Optional so an LLM key is the only secret needed to get started: builds
@@ -58,6 +50,14 @@ user_environment:
     # repos, push branches, and open pull requests.
     - name: GH_TOKEN
       description: GitHub token (repo scope) — needed to clone private repos, push branches, and open pull requests
+      type: secret
+      scope: global
+    - name: MINIMAX_API_KEY
+      description: MiniMax API key; also set SWE_DEFAULT_RUNTIME and SWE_DEFAULT_MODEL
+      type: secret
+      scope: global
+    - name: ANTHROPIC_AUTH_TOKEN
+      description: Anthropic-compatible token; also set ANTHROPIC_BASE_URL and runtime/model overrides
       type: secret
       scope: global
     - name: SWE_DEFAULT_RUNTIME

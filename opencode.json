@@ -51,7 +51,7 @@
           "reasoning": true,
           "limit": {
             "context": 204800,
-            "output": 204800
+            "output": 196608
           },
           "cost": {
             "input": 0.3,
@@ -113,7 +113,7 @@
           "reasoning": true,
           "limit": {
             "context": 204800,
-            "output": 204800
+            "output": 196608
           },
           "cost": {
             "input": 0.3,
@@ -175,7 +175,7 @@
           "reasoning": true,
           "limit": {
             "context": 204800,
-            "output": 204800
+            "output": 196608
           },
           "cost": {
             "input": 0.3,
