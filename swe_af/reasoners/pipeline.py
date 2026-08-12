@@ -26,6 +26,7 @@ from swe_af.reasoners.schemas import (
     ReviewResult,
 )
 from swe_af.runtime.providers import runtime_to_harness_adapter
+from swe_af.surface import internal_role
 
 from . import router
 
@@ -158,7 +159,7 @@ def _assign_sequence_numbers(issues: list[dict], levels: list[list[str]]) -> lis
 # ---------------------------------------------------------------------------
 
 
-@router.reasoner()
+@internal_role(router, "planning")
 async def run_product_manager(
     goal: str,
     repo_path: str,
@@ -252,7 +253,7 @@ async def run_product_manager(
     return parsed.model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "planning")
 async def run_environment_scout(
     prd: dict,
     repo_path: str,
@@ -369,7 +370,7 @@ async def run_environment_scout(
     return parsed.model_dump(exclude={"scoped_credentials"})
 
 
-@router.reasoner()
+@internal_role(router, "planning")
 async def run_architect(
     prd: dict,
     repo_path: str,
@@ -435,7 +436,7 @@ async def run_architect(
     return result.parsed.model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "planning")
 async def run_tech_lead(
     prd: dict,
     repo_path: str,
@@ -501,7 +502,7 @@ async def run_tech_lead(
     return review
 
 
-@router.reasoner()
+@internal_role(router, "planning")
 async def run_sprint_planner(
     prd: dict,
     architecture: dict,

@@ -21,6 +21,7 @@ from swe_af.issue import issue_router
 from swe_af.reasoners import router
 from swe_af.reasoners.pipeline import _assign_sequence_numbers, _compute_levels, _validate_file_conflicts
 from swe_af.reasoners.schemas import PlanResult, ReviewResult
+from swe_af.surface import TAG_ENTRYPOINT
 
 from agentfield import Agent
 
@@ -494,7 +495,7 @@ def _is_empty_build(success: bool, ever_completed: int, ever_merged: int) -> boo
 
 
 @app.reasoner(
-    tags=["entrypoint"],
+    tags=[TAG_ENTRYPOINT],
     description=(
         "Feature-level build: plans a PRD → architecture → issue DAG, then codes, "
         "reviews, merges and verifies end-to-end. Give it a goal plus repo_path or "
@@ -1431,7 +1432,7 @@ async def build(
             clear_scoped_credentials(_scope_id)
 
 
-@app.reasoner()
+@app.reasoner(tags=[TAG_ENTRYPOINT])
 async def plan(
     goal: str,
     repo_path: str,
@@ -1659,7 +1660,13 @@ async def execute(
     build_id: str = "",
     workspace_manifest: dict | None = None,
 ) -> dict:
-    """Execute a planned DAG with self-healing replanning.
+    """Execute a planned DAG with self-healing replanning. Input plan_result
+    comes from a prior plan call — not a hand-written object; prefer build
+    unless you are resuming a custom pipeline.
+
+    Deliberately not tagged ``entrypoint`` (see ``swe_af.surface``); the first
+    paragraph is published as the reasoner description, so keep the plan_result
+    warning inside it.
 
     Args:
         plan_result: Output from the ``plan`` reasoner.
@@ -1708,7 +1715,7 @@ async def execute(
     return state.model_dump()
 
 
-@app.reasoner()
+@app.reasoner(tags=[TAG_ENTRYPOINT])
 async def resolve(
     pr_url: str,
     pr_number: int,
@@ -2107,7 +2114,7 @@ async def _post_thread_replies_and_resolve(
     return results
 
 
-@app.reasoner()
+@app.reasoner(tags=[TAG_ENTRYPOINT])
 async def resume_build(
     repo_path: str,
     artifacts_dir: str = ".artifacts",
