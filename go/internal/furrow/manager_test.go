@@ -298,6 +298,56 @@ func TestAttachRefusesWhenAggregateStoreExceedsBudget(t *testing.T) {
 	}
 }
 
+// The budget only protects the volume when the volume is bigger than the
+// budget: a cloud deploy's mirrors share one disk with the control plane's
+// database, so Attach also enforces an absolute free-space floor. A probe that
+// cannot answer (ok=false) must NOT refuse — "no answer" is not "no space".
+func TestAttachRefusesWhenDiskNearlyFull(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/false")
+	}
+	t.Setenv(EnvEnabled, "1")
+	for _, tc := range []struct {
+		name    string
+		probe   func(string) (int64, bool)
+		refused bool
+	}{
+		{"below floor refuses", func(string) (int64, bool) { return minFreeBytes - 1, true }, true},
+		{"at floor proceeds", func(string) (int64, bool) { return minFreeBytes, true }, false},
+		{"probe unavailable proceeds", func(string) (int64, bool) { return 0, false }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			repo := filepath.Join(root, "repo")
+			if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			var logs bytes.Buffer
+			m := New(Options{Bin: "/bin/false", StoreRoot: filepath.Join(root, "store"),
+				RemotesRoot: filepath.Join(root, "remotes"), Logger: log.New(&logs, "", 0)})
+			m.freeBytes = tc.probe
+			handle, err := m.Attach("run", "build", repo)
+			if tc.refused {
+				if err == nil || !strings.Contains(err.Error(), "floor") || handle != nil {
+					t.Fatalf("Attach() = (%v, %v), want free-space floor error", handle, err)
+				}
+				if len(m.entries) != 0 {
+					t.Fatalf("registered entries = %v, want none", m.entries)
+				}
+				return
+			}
+			// Past the floor the attach proceeds into the furrow invocations,
+			// where /bin/false fails the watch — proof the gate did not trip.
+			if err != nil || handle != nil {
+				t.Fatalf("Attach() = (%v, %v), want (nil, nil) degradation past the gate", handle, err)
+			}
+			if strings.Contains(logs.String(), "-byte floor") {
+				t.Fatalf("free-space floor tripped unexpectedly: %q", logs.String())
+			}
+		})
+	}
+}
+
 func TestAttachPublishExactArgvAndIdempotence(t *testing.T) {
 	fake := &fakeExec{}
 	m, repo, remotes := testManager(t, fake, time.Now)

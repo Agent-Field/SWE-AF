@@ -41,6 +41,12 @@ type Options struct {
 // belong to a build that is still running.
 const defaultBudgetGrace = time.Hour
 
+// minFreeBytes is the free-space floor under the remotes root below which
+// Attach refuses to start new mirrors. It exists for the volume the budget
+// cannot see: a cloud deploy's mirrors share one disk with the control plane's
+// database, and SWE_FURROW_MAX_GB says nothing about how big that disk is.
+const minFreeBytes = 1 << 30 // 1 GiB
+
 // Manager owns the node's persistent run registry and furrow content store.
 //
 // Locking has two levels on purpose. mu guards the registry and is only ever
@@ -62,6 +68,7 @@ type Manager struct {
 	cmdTimeout       time.Duration
 	maxBytes         int64
 	budgetGrace      time.Duration
+	freeBytes        func(string) (int64, bool)
 	enabled          bool
 	entries          map[string]Entry
 	runLocks         map[string]*sync.Mutex
@@ -94,15 +101,17 @@ func (m *Manager) lockRun(runID string) func() {
 	return lock.Unlock
 }
 
-// New constructs a manager and loads its persisted registry. Mirroring is
-// opt-in: without a truthy SWE_FURROW_ENABLED the manager is inert, whatever
-// binaries are installed. Missing helpers and corrupt registries deliberately
-// degrade to an inert or empty manager too.
+// New constructs a manager and loads its persisted registry. Mirroring has to
+// be asked for: an explicit SWE_FURROW_ENABLED decides in either direction and
+// an unconfigured one follows FURROW_PUBLIC_ADDR (see enabledByEnv); when the
+// answer is off the manager is inert, whatever binaries are installed. Missing
+// helpers and corrupt registries deliberately degrade to an inert or empty
+// manager too.
 func New(opts Options) *Manager {
 	m := &Manager{
 		storeRoot:   opts.StoreRoot,
 		remotesRoot: opts.RemotesRoot,
-		publicAddr:  opts.PublicAddr,
+		publicAddr:  strings.TrimSpace(opts.PublicAddr),
 		logger:      opts.Logger,
 		now:         opts.Now,
 		exec:        opts.Exec,
@@ -125,6 +134,9 @@ func New(opts Options) *Manager {
 	}
 	if m.cmdTimeout == 0 {
 		m.cmdTimeout = 5 * time.Minute
+	}
+	if m.freeBytes == nil {
+		m.freeBytes = statfsFreeBytes
 	}
 	if m.maxBytes == 0 {
 		m.maxBytes = configuredMaxBytes()
@@ -247,6 +259,20 @@ func (m *Manager) Attach(runID, buildID, repoPath string) (*Handle, error) {
 			m.logf("WARN %v; new mirrors are disabled until space is freed", err)
 			return nil, err
 		}
+	}
+	// The budget only protects the volume when the volume is bigger than the
+	// budget. A cloud deploy mirrors onto the same volume that holds the
+	// control plane's database, so filling it takes the whole deployment down,
+	// not just this feature. Refuse new mirrors when the filesystem under the
+	// remotes root is nearly out of space; like every other unavailable path
+	// this degrades to a build without a handle. (MkdirAll first: the root may
+	// not exist before the first mirror, and a probe on a missing path answers
+	// ok=false, which would silently skip the floor.)
+	_ = os.MkdirAll(m.remotesRoot, 0o700)
+	if free, ok := m.freeBytes(m.remotesRoot); ok && free < minFreeBytes {
+		err := fmt.Errorf("furrow attach %q: %d bytes free under %s, below the %d-byte floor", runID, free, m.remotesRoot, int64(minFreeBytes))
+		m.logf("WARN %v; new mirrors are disabled until space is freed", err)
+		return nil, err
 	}
 	// Every line must be `exclude <relative-subtree>`; furrow rejects the whole
 	// file otherwise and `watch` then fails, which would leave the mirror

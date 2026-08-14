@@ -211,8 +211,11 @@ func (n *Node) registerOrchestrators() {
 // furrowEnabled reports whether this node actually mirrors workspaces. It is
 // the same shape as the pro.Available() gate next to it: a surface that exists
 // only to reach a live mirror has no business being advertised on a node that
-// never makes one. Mirroring is opt-in (SWE_FURROW_ENABLED), so on a default
-// install this is false and get_workspace_handle is simply not registered.
+// never makes one. Mirroring must be asked for — explicitly via
+// SWE_FURROW_ENABLED, or by the platform having provisioned a public mirror
+// endpoint (FURROW_PUBLIC_ADDR, set by the desktop app's cloud deploy) — so on
+// a local install that configured neither this is false and
+// get_workspace_handle is simply not registered.
 func (n *Node) furrowEnabled() bool {
 	return n != nil && n.Furrow != nil && n.Furrow.Enabled()
 }

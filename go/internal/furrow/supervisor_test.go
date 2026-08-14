@@ -19,14 +19,21 @@ import (
 )
 
 func TestSupervisorInertWithoutPublicAddr(t *testing.T) {
-	m := supervisorManager(t)
-	t.Setenv("FURROW_PUBLIC_ADDR", "")
-	t.Setenv(EnvDaemonBin, daemonScript(t, "exit 0\n"))
-	s := NewSupervisor(m)
-	if s.Enabled() || s.Available() || s.Addr() != "" {
-		t.Fatalf("supervisor should be inert without FURROW_PUBLIC_ADDR")
+	// A whitespace-only address is "unset" everywhere: the enable decision
+	// trims it, so the supervisor must too — otherwise the one spelling turns
+	// mirroring off while still starting a daemon that mints "ssh://   ".
+	for _, addr := range []string{"", "   "} {
+		t.Run(fmt.Sprintf("addr=%q", addr), func(t *testing.T) {
+			m := supervisorManager(t)
+			t.Setenv("FURROW_PUBLIC_ADDR", addr)
+			t.Setenv(EnvDaemonBin, daemonScript(t, "exit 0\n"))
+			s := NewSupervisor(m)
+			if s.Enabled() || s.Available() || s.Addr() != "" {
+				t.Fatalf("supervisor should be inert with FURROW_PUBLIC_ADDR=%q", addr)
+			}
+			s.Start(context.Background())
+		})
 	}
-	s.Start(context.Background())
 }
 
 func TestSupervisorInertWithoutDaemonBinary(t *testing.T) {
