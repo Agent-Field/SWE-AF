@@ -441,7 +441,7 @@ Runtime defaults:
 | Runtime | Base default | Special default |
 |---|---|---|
 | `claude_code` | `sonnet` | `qa_synthesizer=haiku` |
-| `open_code` | `openrouter/deepseek/deepseek-v4-flash` | none |
+| `open_code` | `openrouter/deepseek/deepseek-v4-flash-0731` | none |
 | `codex` | `gpt-5.3-codex` | none |
 
 The `open_code` default applies both when the runtime is auto-selected (only

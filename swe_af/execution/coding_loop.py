@@ -35,8 +35,8 @@ async def _call_with_timeout(coro, timeout: int = 2700, label: str = ""):
     """Wrap a coroutine with asyncio.wait_for timeout."""
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
-    except asyncio.TimeoutError:
-        raise TimeoutError(f"Agent call '{label}' timed out after {timeout}s")
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(f"Agent call '{label}' timed out after {timeout}s") from exc
 
 
 # ---------------------------------------------------------------------------

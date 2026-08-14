@@ -22,7 +22,7 @@ var highTierFields = map[string]bool{
 }
 
 // openCodeBaseModel ports _OPEN_CODE_BASE.
-const openCodeBaseModel = "openrouter/deepseek/deepseek-v4-flash"
+const openCodeBaseModel = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 // TestModelTiers_NoTierEnvsUnchanged ports TestNoTierEnvsUnchanged: no tier
 // envs set → resolution unchanged for all runtimes.
@@ -83,7 +83,7 @@ func TestModelTiers_TierEnvApplication(t *testing.T) {
 		tierModels := map[string]string{
 			"high": "openrouter/z-ai/glm-5.2",
 			"med":  "openrouter/deepseek/deepseek-v4-pro",
-			"low":  "openrouter/deepseek/deepseek-v4-flash",
+			"low":  "openrouter/deepseek/deepseek-v4-flash-0731",
 		}
 		for tier, model := range tierModels {
 			t.Setenv(tierModelEnvVars[tier], model)

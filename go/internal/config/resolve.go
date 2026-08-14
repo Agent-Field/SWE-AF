@@ -135,13 +135,14 @@ const (
 	// OpenRouter path (see openRouterOnlyEnv) and an explicit
 	// SWE_DEFAULT_RUNTIME=open_code resolve here, so opting in explicitly
 	// never silently swaps the model.
-	openRouterAutoDefaultModel = "openrouter/deepseek/deepseek-v4-flash"
+	openRouterAutoDefaultModel = "openrouter/deepseek/deepseek-v4-flash-0731"
 )
 
 // runtimeBaseModels ports _RUNTIME_BASE_MODELS[runtime] as a fresh copy for the
 // given runtime, or nil if the runtime is unknown. claude_code is all "sonnet"
-// except qa_synthesizer_model="haiku"; open_code is all minimax; codex is all
-// the API-key model (adjusted for auth mode by ResolveRuntimeModels).
+// except qa_synthesizer_model="haiku"; open_code is all
+// openRouterAutoDefaultModel (v4-flash-0731); codex is all the API-key model
+// (adjusted for auth mode by ResolveRuntimeModels).
 func runtimeBaseModels(runtime string) map[string]string {
 	base := make(map[string]string, len(AllModelFields))
 	switch runtime {

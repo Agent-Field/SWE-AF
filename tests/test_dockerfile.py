@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 
 DOCKERFILE = Path(__file__).resolve().parent.parent / "Dockerfile"
+GO_DOCKERFILE = Path(__file__).resolve().parent.parent / "go" / "Dockerfile"
+OPENCODE_CONFIG = Path(__file__).resolve().parent.parent / "opencode.json"
 REQUIREMENTS_DOCKER = Path(__file__).resolve().parent.parent / "requirements-docker.txt"
 
 
@@ -65,7 +67,10 @@ def test_dockerfile_installs_codex_cli(dockerfile_content: str) -> None:
 
 def test_dockerfile_preserves_opencode_install(dockerfile_content: str) -> None:
     assert "https://opencode.ai/install" in dockerfile_content
-    assert "OPENROUTER_API_KEY" in dockerfile_content
+    expected_copy = "COPY opencode.json /root/.config/opencode/opencode.json"
+    assert expected_copy in dockerfile_content
+    assert expected_copy in GO_DOCKERFILE.read_text()
+    assert "OPENROUTER_API_KEY" in OPENCODE_CONFIG.read_text()
 
 
 def test_docker_requirements_pin_cryptography_below_sigill_version() -> None:

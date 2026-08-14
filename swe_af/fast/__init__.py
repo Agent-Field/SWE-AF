@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from agentfield import AgentRouter
 from swe_af.runtime.codex_harness_patch import apply_codex_harness_patch
+from swe_af.surface import internal_role
 
 apply_codex_harness_patch()
 
@@ -30,7 +31,7 @@ fast_router = AgentRouter(tags=["swe-fast"])
 # ---------------------------------------------------------------------------
 
 
-@fast_router.reasoner()
+@internal_role(fast_router, "gitops")
 async def run_git_init(
     repo_path: str,
     goal: str,
@@ -50,7 +51,7 @@ async def run_git_init(
     )
 
 
-@fast_router.reasoner()
+@internal_role(fast_router, "coding")
 async def run_coder(
     issue: dict,
     worktree_path: str,
@@ -73,7 +74,7 @@ async def run_coder(
     )
 
 
-@fast_router.reasoner()
+@internal_role(fast_router, "advisor")
 async def run_verifier(
     prd: dict,
     repo_path: str,
@@ -95,7 +96,7 @@ async def run_verifier(
     )
 
 
-@fast_router.reasoner()
+@internal_role(fast_router, "gitops")
 async def run_repo_finalize(
     repo_path: str,
     artifacts_dir: str = "",
@@ -111,7 +112,7 @@ async def run_repo_finalize(
     )
 
 
-@fast_router.reasoner()
+@internal_role(fast_router, "gitops")
 async def run_github_pr(
     repo_path: str,
     integration_branch: str,
@@ -136,7 +137,7 @@ async def run_github_pr(
     )
 
 
-@fast_router.reasoner()
+@internal_role(fast_router, "ci")
 async def run_ci_watcher(
     repo_path: str,
     pr_number: int,
@@ -151,7 +152,7 @@ async def run_ci_watcher(
     )
 
 
-@fast_router.reasoner()
+@internal_role(fast_router, "ci")
 async def run_ci_fixer(
     repo_path: str,
     pr_number: int,

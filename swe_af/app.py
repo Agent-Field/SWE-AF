@@ -21,6 +21,7 @@ from swe_af.issue import issue_router
 from swe_af.reasoners import router
 from swe_af.reasoners.pipeline import _assign_sequence_numbers, _compute_levels, _validate_file_conflicts
 from swe_af.reasoners.schemas import PlanResult, ReviewResult
+from swe_af.surface import TAG_ENTRYPOINT
 
 from agentfield import Agent
 
@@ -494,7 +495,7 @@ def _is_empty_build(success: bool, ever_completed: int, ever_merged: int) -> boo
 
 
 @app.reasoner(
-    tags=["entrypoint"],
+    tags=[TAG_ENTRYPOINT],
     description=(
         "Feature-level build: plans a PRD → architecture → issue DAG, then codes, "
         "reviews, merges and verifies end-to-end. Give it a goal plus repo_path or "
@@ -1431,7 +1432,7 @@ async def build(
             clear_scoped_credentials(_scope_id)
 
 
-@app.reasoner()
+@app.reasoner(tags=[TAG_ENTRYPOINT])
 async def plan(
     goal: str,
     repo_path: str,
@@ -1459,8 +1460,13 @@ async def plan(
     ``_default_runtime``). Any explicitly passed value always wins.
     """
     # Resolve provider/model defaults from the environment (see docstring).
+    # The model default is resolved *for the chosen runtime* so it can never
+    # hand a provider-prefixed id (e.g. an ``openrouter/…`` model) to a runtime
+    # whose CLI can't consume it — the cross-runtime leak that caused silent
+    # ~1s empty completions when a caller pinned ``codex`` under OpenRouter-only
+    # env. Explicit ``ai_provider`` still wins; only the auto default is gated.
     ai_provider = ai_provider or _default_runtime()
-    default_model = _default_planning_model()
+    default_model = _default_planning_model(ai_provider)
     pm_model = pm_model or default_model
     architect_model = architect_model or default_model
     tech_lead_model = tech_lead_model or default_model
@@ -1654,7 +1660,13 @@ async def execute(
     build_id: str = "",
     workspace_manifest: dict | None = None,
 ) -> dict:
-    """Execute a planned DAG with self-healing replanning.
+    """Execute a planned DAG with self-healing replanning. Input plan_result
+    comes from a prior plan call — not a hand-written object; prefer build
+    unless you are resuming a custom pipeline.
+
+    Deliberately not tagged ``entrypoint`` (see ``swe_af.surface``); the first
+    paragraph is published as the reasoner description, so keep the plan_result
+    warning inside it.
 
     Args:
         plan_result: Output from the ``plan`` reasoner.
@@ -1703,7 +1715,7 @@ async def execute(
     return state.model_dump()
 
 
-@app.reasoner()
+@app.reasoner(tags=[TAG_ENTRYPOINT])
 async def resolve(
     pr_url: str,
     pr_number: int,
@@ -2102,7 +2114,7 @@ async def _post_thread_replies_and_resolve(
     return results
 
 
-@app.reasoner()
+@app.reasoner(tags=[TAG_ENTRYPOINT])
 async def resume_build(
     repo_path: str,
     artifacts_dir: str = ".artifacts",

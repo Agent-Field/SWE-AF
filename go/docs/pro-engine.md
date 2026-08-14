@@ -91,7 +91,7 @@ The engine inherits `OPENROUTER_API_KEY` and the control-plane coordinates
 `SWE_DEFAULT_RUNTIME` unset, so with an OpenRouter key as the only provider
 credential the node auto-selects the `open_code` runtime and defaults every
 role — including the advisory and verification roles that run outside the
-engine — to `openrouter/deepseek/deepseek-v4-flash`. Setting
+engine — to `openrouter/deepseek/deepseek-v4-flash-0731`. Setting
 `SWE_DEFAULT_RUNTIME` explicitly is supported but unnecessary here.
 
 ## Control-plane inactivity sweep
