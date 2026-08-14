@@ -65,10 +65,16 @@ user_environment:
       description: Per-run USD ceiling for the engine — unset means no per-run cap
     - name: SWE_FURROW_ENABLED
       description: >-
-        Opt in to furrow workspace mirroring (1/true/yes/on; unset or 0 keeps it off).
-        Mirroring copies the whole build workspace — including untracked files and any
-        secrets the coder wrote there — into a second encrypted store on this node.
-      default: "0"
+        Furrow workspace mirroring. Set 1/true/yes/on to force it on, 0 to force it
+        off. Unset, it follows FURROW_PUBLIC_ADDR: cloud deploys (where the desktop
+        app provisions a public sync port and sets that variable) mirror out of the
+        box, local installs stay off. Mirroring copies the whole build workspace —
+        including untracked files and any secrets the coder wrote there — into a
+        second encrypted store on this node.
+      # No default on purpose: a non-empty default is injected into the node's
+      # environment as an EXPLICIT value, which would defeat the unset-follows-
+      # FURROW_PUBLIC_ADDR behaviour that turns mirroring on in cloud deploys.
+      default: ""
     - name: SWE_FURROW_EXPOSE_SECRETS
       description: >-
         Return the recovery key and transport token from get_workspace_handle instead of
@@ -98,7 +104,11 @@ user_environment:
       description: Address on which furrowd listens
       default: ":8802"
     - name: FURROW_PUBLIC_ADDR
-      description: Public furrowd host and port advertised in workspace handles
+      description: >-
+        Public furrowd host and port advertised in ssh:// workspace handles. The
+        AgentField desktop app's cloud deploy sets this on the control-plane service
+        (a Railway TCP proxy in front of furrowd's port 8802) and nodes inherit it;
+        its presence also turns mirroring on unless SWE_FURROW_ENABLED says otherwise.
       default: ""
     - name: FURROW_DIAL_TOKEN
       description: Token from an ssh:// workspace handle used by furrow clients

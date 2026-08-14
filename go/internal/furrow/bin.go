@@ -11,11 +11,19 @@ import (
 const (
 	EnvBin       = "SWE_FURROW_BIN"
 	EnvDaemonBin = "SWE_FURROWD_BIN"
-	// EnvEnabled gates the whole feature. Mirroring is OPT-IN: it copies every
-	// byte of a build's workspace — including the untracked files and secrets
-	// git never sees — into a second on-disk store, so an operator has to ask
-	// for it. Unset means off.
+	// EnvEnabled gates the whole feature. Mirroring copies every byte of a
+	// build's workspace — including the untracked files and secrets git never
+	// sees — into a second on-disk store, so someone has to ask for it. A set
+	// value is an explicit answer in either direction; unset (or blank) defers
+	// to EnvPublicAddr — see enabledByEnv.
 	EnvEnabled = "SWE_FURROW_ENABLED"
+	// EnvPublicAddr is the host:port furrowd is reachable at from outside the
+	// box, advertised in ssh:// handles. The AgentField desktop app's cloud
+	// deploy sets it on the control-plane service (with a TCP proxy in front
+	// of furrowd's port), and agent nodes inherit the control plane's
+	// environment — so its presence means the platform provisioned a public
+	// mirror endpoint for this node.
+	EnvPublicAddr = "FURROW_PUBLIC_ADDR"
 	// EnvExposeSecrets opts a node into returning a handle's recovery key and
 	// transport token from get_workspace_handle. That reasoner authorizes
 	// nobody, so the secrets are withheld unless an operator states that every
@@ -37,6 +45,22 @@ func EnvTruthy(key string) bool {
 		return true
 	}
 	return false
+}
+
+// enabledByEnv decides whether mirroring is on. An explicit SWE_FURROW_ENABLED
+// wins in both directions (EnvTruthy's rule: only a recognised truthy spelling
+// turns a workspace-copying feature ON). When it is unset — or blank, which is
+// what "not configured" looks like after an installer pass — the decision
+// follows FURROW_PUBLIC_ADDR: the desktop cloud deploy sets that exactly when
+// it has provisioned a public TCP endpoint for furrowd, so its presence is the
+// platform asking for a reachable mirror, and a local install that never set
+// either variable stays off. That is what makes a cloud control-plane deploy
+// mirror out of the box while a laptop `af run` keeps today's opt-in behaviour.
+func enabledByEnv() bool {
+	if strings.TrimSpace(os.Getenv(EnvEnabled)) != "" {
+		return EnvTruthy(EnvEnabled)
+	}
+	return strings.TrimSpace(os.Getenv(EnvPublicAddr)) != ""
 }
 
 // runnable rejects copies that exist but lost their execute bit during install.

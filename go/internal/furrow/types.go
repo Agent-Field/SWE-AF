@@ -2,9 +2,13 @@
 // main harness (Claude Code, another coding agent) can clone and follow while
 // the run is still going.
 //
-// Mirroring is OPT-IN: without a truthy SWE_FURROW_ENABLED nothing here runs.
-// A mirror is a byte-exact second copy of the build workspace, untracked files
-// and all, so an operator has to ask for it and accept the disk it costs.
+// Mirroring has to be asked for: an explicit SWE_FURROW_ENABLED decides in
+// either direction, and when it is unconfigured the feature follows
+// FURROW_PUBLIC_ADDR — set by the desktop app's cloud deploy exactly when a
+// public sync endpoint was provisioned for this node (see enabledByEnv). A
+// local install that set neither stays off. A mirror is a byte-exact second
+// copy of the build workspace, untracked files and all, so turning it on means
+// accepting the disk it costs.
 //
 // The contract with the rest of SWE-AF is deliberately one-way: orchestration
 // calls Attach when a workspace exists and Publish when something worth seeing

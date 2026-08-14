@@ -135,7 +135,7 @@ func New(opts Options) *Manager {
 	if m.remotesRoot == "" {
 		m.remotesRoot = filepath.Join(m.storeRoot, "remotes")
 	}
-	if !EnvTruthy(EnvEnabled) {
+	if !enabledByEnv() {
 		return m
 	}
 	if opts.Bin != "" {

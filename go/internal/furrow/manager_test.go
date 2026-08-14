@@ -117,6 +117,7 @@ func TestManagerDisabled(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(EnvEnabled, tc.env)
+			t.Setenv(EnvPublicAddr, "")
 			m := New(Options{Bin: tc.bin, Logger: log.New(&bytes.Buffer{}, "", 0)})
 			if m.Enabled() {
 				t.Fatal("manager is enabled")
@@ -145,12 +146,54 @@ func TestManagerEnableFlagSpellings(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("%s=%q", EnvEnabled, tc.value), func(t *testing.T) {
 			t.Setenv(EnvEnabled, tc.value)
+			t.Setenv(EnvPublicAddr, "")
 			m := New(Options{Bin: bin, StoreRoot: filepath.Join(t.TempDir(), "store"),
 				RemotesRoot: filepath.Join(t.TempDir(), "remotes"),
 				Exec:        func(*exec.Cmd) ([]byte, error) { return []byte(`{}`), nil },
 				Logger:      log.New(&bytes.Buffer{}, "", 0)})
 			if got := m.Enabled(); got != tc.want {
 				t.Fatalf("Enabled() with %s=%q = %v, want %v", EnvEnabled, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// With SWE_FURROW_ENABLED unconfigured, mirroring follows FURROW_PUBLIC_ADDR:
+// the desktop cloud deploy sets it exactly when it provisioned a public sync
+// port, so a cloud control plane mirrors out of the box and a local install
+// that set neither variable stays off. An explicit SWE_FURROW_ENABLED beats the
+// address in both directions, and an unrecognised spelling still means OFF even
+// with the address present — a typo must never be what copies a workspace.
+func TestManagerAutoEnableFollowsPublicAddr(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "furrow")
+	if err := os.WriteFile(bin, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		enabled string
+		addr    string
+		want    bool
+	}{
+		{"unset follows present addr", "", "mirror.example:31427", true},
+		{"blank follows present addr", "   ", "mirror.example:31427", true},
+		{"unset with no addr stays off", "", "", false},
+		{"unset with blank addr stays off", "", "  ", false},
+		{"explicit off beats addr", "0", "mirror.example:31427", false},
+		{"explicit on needs no addr", "1", "", true},
+		{"typo means off even with addr", "maybe", "mirror.example:31427", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(EnvEnabled, tc.enabled)
+			t.Setenv(EnvPublicAddr, tc.addr)
+			m := New(Options{Bin: bin, StoreRoot: filepath.Join(t.TempDir(), "store"),
+				RemotesRoot: filepath.Join(t.TempDir(), "remotes"),
+				Exec:        func(*exec.Cmd) ([]byte, error) { return []byte(`{}`), nil },
+				Logger:      log.New(&bytes.Buffer{}, "", 0)})
+			if got := m.Enabled(); got != tc.want {
+				t.Fatalf("Enabled() with %s=%q %s=%q = %v, want %v",
+					EnvEnabled, tc.enabled, EnvPublicAddr, tc.addr, got, tc.want)
 			}
 		})
 	}

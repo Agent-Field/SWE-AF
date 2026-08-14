@@ -57,6 +57,8 @@ var wantEntrypoints = []string{"build", "implement_issue", "plan", "resolve", "r
 // has no orchestrator context.
 func TestRoleReasonersAreMarkedInternal(t *testing.T) {
 	t.Setenv("SWE_PRO_ENGINE", "")
+	t.Setenv("SWE_FURROW_ENABLED", "")
+	t.Setenv("FURROW_PUBLIC_ADDR", "")
 	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
@@ -100,6 +102,8 @@ func TestRoleReasonersAreMarkedInternal(t *testing.T) {
 // leaking in, no real entry point missing.
 func TestEntrypointTagIsExactSet(t *testing.T) {
 	t.Setenv("SWE_PRO_ENGINE", "")
+	t.Setenv("SWE_FURROW_ENABLED", "")
+	t.Setenv("FURROW_PUBLIC_ADDR", "")
 	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
@@ -131,6 +135,8 @@ func TestEntrypointTagIsExactSet(t *testing.T) {
 // internal and must not appear as an entry point.
 func TestProExecuteIsInternal(t *testing.T) {
 	t.Setenv(pro.EnvEnabled, "1")
+	t.Setenv("SWE_FURROW_ENABLED", "")
+	t.Setenv("FURROW_PUBLIC_ADDR", "")
 	fakeEngineBin(t)
 
 	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
@@ -160,6 +166,8 @@ func TestProExecuteIsInternal(t *testing.T) {
 // since execute is (correctly) not tagged as an entry point but is still visible.
 func TestExecuteDescribesItsPlanResultInput(t *testing.T) {
 	t.Setenv("SWE_PRO_ENGINE", "")
+	t.Setenv("SWE_FURROW_ENABLED", "")
+	t.Setenv("FURROW_PUBLIC_ADDR", "")
 	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)

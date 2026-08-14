@@ -93,11 +93,13 @@ var pythonFastReasoners = []string{"build", "fast_plan_tasks", "fast_execute_tas
 var pythonIssueReasoners = []string{"implement_issue"}
 
 func TestRegisterPlannerExactSurface(t *testing.T) {
-	// Pin the pro engine and furrow off so an inherited SWE_PRO_ENGINE or
-	// SWE_FURROW_ENABLED cannot widen the surface under test (each gated
-	// surface has its own test).
+	// Pin the pro engine and furrow off so an inherited SWE_PRO_ENGINE,
+	// SWE_FURROW_ENABLED or FURROW_PUBLIC_ADDR (which auto-enables mirroring
+	// when the enable flag is unconfigured) cannot widen the surface under
+	// test (each gated surface has its own test).
 	t.Setenv("SWE_PRO_ENGINE", "")
 	t.Setenv(furrow.EnvEnabled, "")
+	t.Setenv(furrow.EnvPublicAddr, "")
 	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
@@ -140,6 +142,7 @@ func TestWorkspaceHandleReasonerIsGatedOnFurrow(t *testing.T) {
 		t.Run(tc.label, func(t *testing.T) {
 			t.Setenv("SWE_PRO_ENGINE", "")
 			t.Setenv(furrow.EnvEnabled, "")
+			t.Setenv(furrow.EnvPublicAddr, "")
 			n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 			if err != nil {
 				t.Fatalf("BuildAgent: %v", err)

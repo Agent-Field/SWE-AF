@@ -188,7 +188,7 @@ func buildFurrowManager() furrow.Attacher {
 		Bin:         bin,
 		StoreRoot:   storeRoot,
 		RemotesRoot: remotesRoot,
-		PublicAddr:  os.Getenv("FURROW_PUBLIC_ADDR"),
+		PublicAddr:  os.Getenv(furrow.EnvPublicAddr),
 	})
 	if !m.Enabled() {
 		return nil

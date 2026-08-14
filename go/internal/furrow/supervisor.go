@@ -61,7 +61,7 @@ func NewSupervisor(manager *Manager) *Supervisor {
 
 // Enabled reports whether the manager and advertised-address gates are open.
 func (s *Supervisor) Enabled() bool {
-	return s != nil && s.manager != nil && s.manager.Enabled() && os.Getenv("FURROW_PUBLIC_ADDR") != ""
+	return s != nil && s.manager != nil && s.manager.Enabled() && os.Getenv(EnvPublicAddr) != ""
 }
 
 // Available reports whether all gates, including binary resolution, are open.
