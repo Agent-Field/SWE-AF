@@ -17,7 +17,7 @@ OPENAI_PROVIDERS = {
 ANTHROPIC_PROVIDER = "minimax-anthropic"
 MODEL_LIMITS = {
     "MiniMax-M3": {"context": 1000000, "output": 524288},
-    "MiniMax-M2.7": {"context": 204800, "output": 204800},
+    "MiniMax-M2.7": {"context": 204800, "output": 196608},
 }
 
 
