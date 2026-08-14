@@ -388,8 +388,10 @@ The Docker images include direct MiniMax provider entries for both supported reg
 
 | Model | Context window | Input modalities | Thinking | Input / output / cache read / cache write per million tokens |
 |---|---:|---|---|---|
-| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | $0.60 / $2.40 / $0.12 / not charged |
+| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | $0.30 / $1.20 / $0.06 / not charged |
 | `MiniMax-M2.7` | 204,800 | text | always on | $0.30 / $1.20 / $0.06 / $0.375 |
+
+`MiniMax-M3` pricing is tiered by input length: requests over 512K input tokens are billed at $0.60 / $2.40 / $0.12 instead. The baked provider metadata uses the standard ≤512K tier, which is what normal coding requests hit.
 
 For the direct OpenAI-compatible path, set `MINIMAX_API_KEY`, use `runtime: "open_code"`, and select one of the `minimax-global-openai/*` or `minimax-cn-openai/*` model IDs above. The configured OpenAI-compatible base URLs are `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`.
 

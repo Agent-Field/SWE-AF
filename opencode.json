@@ -26,12 +26,12 @@
           "reasoning": true,
           "limit": {
             "context": 1000000,
-            "output": 524288
+            "output": 512000
           },
           "cost": {
-            "input": 0.6,
-            "output": 2.4,
-            "cache_read": 0.12
+            "input": 0.3,
+            "output": 1.2,
+            "cache_read": 0.06
           },
           "modalities": {
             "input": [
@@ -88,12 +88,12 @@
           "reasoning": true,
           "limit": {
             "context": 1000000,
-            "output": 524288
+            "output": 512000
           },
           "cost": {
-            "input": 0.6,
-            "output": 2.4,
-            "cache_read": 0.12
+            "input": 0.3,
+            "output": 1.2,
+            "cache_read": 0.06
           },
           "modalities": {
             "input": [
@@ -150,12 +150,12 @@
           "reasoning": true,
           "limit": {
             "context": 1000000,
-            "output": 524288
+            "output": 512000
           },
           "cost": {
-            "input": 0.6,
-            "output": 2.4,
-            "cache_read": 0.12
+            "input": 0.3,
+            "output": 1.2,
+            "cache_read": 0.06
           },
           "modalities": {
             "input": [
