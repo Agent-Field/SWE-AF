@@ -31,14 +31,14 @@ class TestFastBuildConfigDefaults:
         cfg = FastBuildConfig()
         assert cfg.runtime == "claude_code"
 
-    def test_runtime_auto_selects_open_code_with_only_openrouter_key(self, monkeypatch) -> None:
+    def test_runtime_auto_selects_aforge_with_openrouter_key(self, monkeypatch) -> None:
         # Same auto-detect as the main path: an OpenRouter key with no
-        # Anthropic key and no explicit runtime selects open_code.
+        # Anthropic key and no explicit runtime selects aforge.
         monkeypatch.delenv("SWE_DEFAULT_RUNTIME", raising=False)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
         cfg = FastBuildConfig()
-        assert cfg.runtime == "open_code"
+        assert cfg.runtime == "aforge"
 
     def test_max_tasks_default(self) -> None:
         cfg = FastBuildConfig()

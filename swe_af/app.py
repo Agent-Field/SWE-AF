@@ -1454,8 +1454,8 @@ async def plan(
 
     ``ai_provider`` and the per-role ``*_model`` arguments default to ``None`` and
     are resolved from the environment so an OpenRouter-only deployment needs zero
-    config: with only an ``OPENROUTER_API_KEY`` present, the pipeline runs on the
-    ``open_code`` runtime with the default OpenRouter model instead of Claude
+    config: with an ``OPENROUTER_API_KEY`` present, the pipeline runs on the
+    ``aforge`` runtime with the default OpenRouter model instead of Claude
     (mirroring ``build``/``execute``, which already auto-select via
     ``_default_runtime``). Any explicitly passed value always wins.
     """

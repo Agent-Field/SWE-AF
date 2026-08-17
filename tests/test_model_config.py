@@ -89,6 +89,11 @@ class TestResolveRuntimeModels(unittest.TestCase):
         for field in ALL_MODEL_FIELDS:
             self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731")
 
+    def test_aforge_defaults(self) -> None:
+        resolved = resolve_runtime_models(runtime="aforge", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731")
+
     def test_models_default_applies_to_all(self) -> None:
         resolved = resolve_runtime_models(
             runtime="claude_code",
@@ -127,21 +132,29 @@ class TestBuildConfig(unittest.TestCase):
             resolved = cfg.resolved_models()
         self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash-0731")
 
+    def test_aforge_runtime_provider(self) -> None:
+        cfg = BuildConfig(runtime="aforge")
+        self.assertEqual(cfg.ai_provider, "aforge")
+        self.assertEqual(
+            cfg.resolved_models()["coder_model"],
+            "openrouter/deepseek/deepseek-v4-flash-0731",
+        )
+
 
 class TestOpenRouterAutoSelection(unittest.TestCase):
     """When only an OpenRouter key is present (no explicit runtime), SWE-AF
-    auto-selects the open_code runtime and defaults to DeepSeek."""
+    auto-selects the aforge runtime and defaults to DeepSeek."""
 
-    def test_openrouter_only_auto_selects_open_code(self) -> None:
+    def test_openrouter_only_auto_selects_aforge(self) -> None:
         with _provider_env(OPENROUTER_API_KEY="sk-or-x"):
-            self.assertEqual(_default_runtime(), "open_code")
+            self.assertEqual(_default_runtime(), "aforge")
 
     def test_anthropic_key_keeps_claude_code(self) -> None:
         with _provider_env(ANTHROPIC_API_KEY="sk-ant"):
             self.assertEqual(_default_runtime(), "claude_code")
 
     def test_both_keys_keep_claude_code(self) -> None:
-        # Anthropic present → claude_code even if OpenRouter is also set.
+        # Anthropic present -> claude_code even if OpenRouter is also set.
         with _provider_env(ANTHROPIC_API_KEY="sk-ant", OPENROUTER_API_KEY="sk-or"):
             self.assertEqual(_default_runtime(), "claude_code")
 
@@ -156,7 +169,7 @@ class TestOpenRouterAutoSelection(unittest.TestCase):
 
     def test_auto_openrouter_defaults_to_deepseek(self) -> None:
         with _provider_env(OPENROUTER_API_KEY="sk-or"):
-            resolved = resolve_runtime_models(runtime="open_code", models=None)
+            resolved = resolve_runtime_models(runtime="aforge", models=None)
         for field in ALL_MODEL_FIELDS:
             self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731")
 
@@ -178,7 +191,7 @@ class TestOpenRouterAutoSelection(unittest.TestCase):
     def test_build_config_auto_openrouter_end_to_end(self) -> None:
         with _provider_env(OPENROUTER_API_KEY="sk-or"):
             cfg = BuildConfig()
-            self.assertEqual(cfg.runtime, "open_code")
+            self.assertEqual(cfg.runtime, "aforge")
             resolved = cfg.resolved_models()
         self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash-0731")
 

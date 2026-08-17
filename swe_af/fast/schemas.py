@@ -20,6 +20,7 @@ _CLAUDE_CODE_DEFAULT = "haiku"
 _OPEN_CODE_DEFAULT = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 _RUNTIME_DEFAULTS: dict[str, str] = {
+    "aforge": _OPEN_CODE_DEFAULT,
     "claude_code": _CLAUDE_CODE_DEFAULT,
     "open_code": _OPEN_CODE_DEFAULT,
     # codex is resolved dynamically (auth-mode dependent); see _runtime_default().
@@ -110,14 +111,14 @@ class FastVerificationResult(BaseModel):
 def _default_fast_runtime() -> str:
     """Default runtime for fast builds, honoring ``SWE_DEFAULT_RUNTIME``.
 
-    When unset (or blank), auto-selects ``open_code`` if only an OpenRouter key
-    is present — the same detection the main path uses — else ``claude_code``.
+    When unset (or blank), auto-selects ``aforge`` if an OpenRouter key is
+    present — the same detection the main path uses — else ``claude_code``.
     """
     value = os.getenv("SWE_DEFAULT_RUNTIME", "").strip()
     if not value:
         from swe_af.execution.schemas import _openrouter_only_env  # noqa: PLC0415
 
-        return "open_code" if _openrouter_only_env() else "claude_code"
+        return "aforge" if _openrouter_only_env() else "claude_code"
     return value if value in RUNTIME_VALUES else "claude_code"
 
 
@@ -126,7 +127,7 @@ class FastBuildConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code", "codex"] = Field(default_factory=_default_fast_runtime)
+    runtime: Literal["aforge", "claude_code", "open_code", "codex"] = Field(default_factory=_default_fast_runtime)
     models: dict[str, str] | None = None
     max_tasks: int = 10
     task_timeout_seconds: int = 300
