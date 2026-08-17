@@ -14,6 +14,45 @@
 # re-clone; an unchanged ref restores the cached layer.
 
 # ---------------------------------------------------------------------------
+# Stage 0 — aforge: fetch the released AForge CLI from the public download host
+# and verify it against the release checksums before it ever enters the image.
+#
+# The release publishes GZIPPED binaries plus a checksums.txt whose hashes are
+# of the DECOMPRESSED binaries, so this stage gunzips first and then rewrites
+# the matching checksum line to the local file name before `sha256sum -c`.
+#
+# Both ARGs are overridable so a mirror / air-gapped registry can be used:
+#   docker build --build-arg AFORGE_BASE_URL=... --build-arg AFORGE_VERSION=...
+# Changing AFORGE_VERSION also busts this layer's cache (per the docker cache
+# rule) — a floating URL alone would keep restoring a stale binary.
+# ---------------------------------------------------------------------------
+ARG AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge
+ARG AFORGE_VERSION=build-9b3ff482de3f
+
+FROM debian:bookworm-slim AS aforge
+ARG AFORGE_BASE_URL
+ARG AFORGE_VERSION
+# TARGETARCH is populated by BuildKit; the fallback keeps the classic builder
+# working on the only architecture this image is published for.
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /out
+RUN set -eu; \
+    arch="${TARGETARCH:-amd64}"; \
+    curl -fsSL "${AFORGE_BASE_URL}/${AFORGE_VERSION}/aforge-linux-${arch}.gz" -o aforge.gz; \
+    gunzip -c aforge.gz > aforge; \
+    curl -fsSL "${AFORGE_BASE_URL}/${AFORGE_VERSION}/checksums.txt" -o checksums.txt; \
+    grep " aforge-linux-${arch}$" checksums.txt | sed 's/  aforge-linux-.*/  aforge/' > aforge.sha256; \
+    test -s aforge.sha256; \
+    sha256sum -c aforge.sha256; \
+    chmod +x aforge; \
+    ./aforge --help > /dev/null; \
+    rm -f aforge.gz checksums.txt aforge.sha256
+
+
+# ---------------------------------------------------------------------------
 # Stage 1 — builder: clone the SDK at a pinned ref, build both static binaries.
 # ---------------------------------------------------------------------------
 # golang 1.23 satisfies go.mod's `go 1.21` directive and matches the AgentField
@@ -67,7 +106,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # ca-certificates (HTTPS for gh/opencode/npm), jq (agent bash), openssh-client
 # (optional SSH git), nodejs+npm (codex + claude-code CLIs), gh CLI (draft PRs),
 # OpenCode CLI (open_code runtime), Codex CLI (codex runtime), Claude Code CLI
-# (claude_code runtime).
+# (claude_code runtime). The AForge CLI (aforge runtime) is copied in from
+# stage 0 rather than installed here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates openssh-client jq nodejs npm \
     # Python test tooling: repos under build are frequently Python, and both
@@ -145,6 +185,9 @@ RUN git config --global user.name "SWE-AF" && \
     git config --global user.email "eng@agentfield.ai" && \
     gh auth setup-git --hostname github.com --force
 
+# AForge CLI (aforge runtime), fetched + checksum-verified in stage 0.
+COPY --from=aforge /out/aforge /usr/local/bin/aforge
+
 # Application binaries (static, from the builder stage).
 COPY --from=builder /out/swe-planner /usr/local/bin/swe-planner
 COPY --from=builder /out/swe-fast /usr/local/bin/swe-fast
@@ -168,7 +211,8 @@ EXPOSE 8005
 # need distinct identities, and the swe-fast service overrides NODE_ID/PORT.
 ENV PORT=8005 \
     AGENTFIELD_SERVER=http://control-plane:8080 \
-    NODE_ID=swe-planner
+    NODE_ID=swe-planner \
+    AGENTFIELD_AFORGE_COMMAND=exec
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
