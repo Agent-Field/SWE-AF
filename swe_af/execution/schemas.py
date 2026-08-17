@@ -666,16 +666,12 @@ def _runtime_to_provider(runtime: str) -> Literal["aforge", "claude", "opencode"
 def _openrouter_only_env() -> bool:
     """Whether the deployer implicitly chose the OpenRouter runtime.
 
-    True when no explicit ``SWE_DEFAULT_RUNTIME`` is set, no Anthropic key is
-    present, but an ``OPENROUTER_API_KEY`` is — i.e. the user "went with
-    OpenRouter" without spelling out a runtime. In that case SWE-AF defaults to
-    AForge and to ``_OPENROUTER_AUTO_DEFAULT_MODEL``. Setting
-    ``SWE_DEFAULT_RUNTIME`` (to anything) opts out and preserves the explicit
+    True when no explicit ``SWE_DEFAULT_RUNTIME`` is set and an
+    ``OPENROUTER_API_KEY`` is present. In that case SWE-AF defaults to AForge;
+    setting ``SWE_DEFAULT_RUNTIME`` opts out and preserves the explicit
     runtime's own defaults.
     """
     if os.getenv("SWE_DEFAULT_RUNTIME", "").strip():
-        return False
-    if os.getenv("ANTHROPIC_API_KEY", "").strip():
         return False
     return bool(os.getenv("OPENROUTER_API_KEY", "").strip())
 

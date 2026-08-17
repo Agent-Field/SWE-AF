@@ -41,7 +41,7 @@ func TestDefaultRuntime(t *testing.T) {
 		{"no keys -> claude_code", nil, "claude_code"},
 		{"anthropic -> claude_code", map[string]string{"ANTHROPIC_API_KEY": "sk-ant"}, "claude_code"},
 		{"openrouter only -> aforge", map[string]string{"OPENROUTER_API_KEY": "sk-or"}, "aforge"},
-		{"both keys -> claude_code", map[string]string{"ANTHROPIC_API_KEY": "sk-ant", "OPENROUTER_API_KEY": "sk-or"}, "claude_code"},
+		{"both keys -> aforge (OpenRouter wins)", map[string]string{"ANTHROPIC_API_KEY": "sk-ant", "OPENROUTER_API_KEY": "sk-or"}, "aforge"},
 		{"explicit runtime beats autoselect", map[string]string{"OPENROUTER_API_KEY": "sk-or", "SWE_DEFAULT_RUNTIME": "claude_code"}, "claude_code"},
 		{"env open_code", map[string]string{"SWE_DEFAULT_RUNTIME": "open_code"}, "open_code"},
 		{"env aforge", map[string]string{"SWE_DEFAULT_RUNTIME": "aforge"}, "aforge"},
@@ -713,8 +713,8 @@ func TestDefaultFastRuntime(t *testing.T) {
 		{"invalid -> claude_code", map[string]string{"SWE_DEFAULT_RUNTIME": "bogus"}, true, "claude_code"},
 		// The main path's OpenRouter auto-detect applies to fast builds too.
 		{"openrouter only -> aforge", map[string]string{"OPENROUTER_API_KEY": "sk-or"}, true, "aforge"},
-		{"openrouter + anthropic -> claude_code", map[string]string{
-			"OPENROUTER_API_KEY": "sk-or", "ANTHROPIC_API_KEY": "sk-ant"}, true, "claude_code"},
+		{"openrouter + anthropic -> aforge", map[string]string{
+			"OPENROUTER_API_KEY": "sk-or", "ANTHROPIC_API_KEY": "sk-ant"}, true, "aforge"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

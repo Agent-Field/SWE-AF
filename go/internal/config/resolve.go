@@ -178,13 +178,11 @@ func envStripped(key string) string {
 }
 
 // openRouterOnlyEnv ports _openrouter_only_env: whether the deployer implicitly
-// chose the OpenRouter runtime (no explicit SWE_DEFAULT_RUNTIME, no Anthropic
-// key, but an OpenRouter key present).
+// chose the OpenRouter runtime (no explicit SWE_DEFAULT_RUNTIME, but an
+// OpenRouter key present). An Anthropic key alongside it no longer vetoes the
+// choice — OpenRouter wins, and SWE_DEFAULT_RUNTIME=claude_code is the opt-out.
 func openRouterOnlyEnv() bool {
 	if envStripped("SWE_DEFAULT_RUNTIME") != "" {
-		return false
-	}
-	if envStripped("ANTHROPIC_API_KEY") != "" {
 		return false
 	}
 	return envStripped("OPENROUTER_API_KEY") != ""

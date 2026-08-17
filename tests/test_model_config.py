@@ -142,10 +142,11 @@ class TestBuildConfig(unittest.TestCase):
 
 
 class TestOpenRouterAutoSelection(unittest.TestCase):
-    """When only an OpenRouter key is present (no explicit runtime), SWE-AF
-    auto-selects the aforge runtime and defaults to DeepSeek."""
+    """When an OpenRouter key is present (no explicit runtime), SWE-AF
+    auto-selects the aforge runtime and defaults to DeepSeek — including when
+    an Anthropic key is also set."""
 
-    def test_openrouter_only_auto_selects_aforge(self) -> None:
+    def test_openrouter_auto_selects_aforge(self) -> None:
         with _provider_env(OPENROUTER_API_KEY="sk-or-x"):
             self.assertEqual(_default_runtime(), "aforge")
 
@@ -153,10 +154,9 @@ class TestOpenRouterAutoSelection(unittest.TestCase):
         with _provider_env(ANTHROPIC_API_KEY="sk-ant"):
             self.assertEqual(_default_runtime(), "claude_code")
 
-    def test_both_keys_keep_claude_code(self) -> None:
-        # Anthropic present -> claude_code even if OpenRouter is also set.
+    def test_openrouter_wins_when_both_keys_are_present(self) -> None:
         with _provider_env(ANTHROPIC_API_KEY="sk-ant", OPENROUTER_API_KEY="sk-or"):
-            self.assertEqual(_default_runtime(), "claude_code")
+            self.assertEqual(_default_runtime(), "aforge")
 
     def test_no_keys_default_claude_code(self) -> None:
         with _provider_env():
