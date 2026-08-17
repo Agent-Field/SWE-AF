@@ -116,7 +116,7 @@ The AForge download is pinned the same way:
 ```bash
 docker build -f go/Dockerfile \
      --build-arg AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge \
-     --build-arg AFORGE_VERSION=build-9b3ff482de3f \
+     --build-arg AFORGE_VERSION=v0.1.0 \
      -t swe-af-go:latest .
 ```
 

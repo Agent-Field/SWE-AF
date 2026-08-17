@@ -27,7 +27,7 @@
 # rule) — a floating URL alone would keep restoring a stale binary.
 # ---------------------------------------------------------------------------
 ARG AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge
-ARG AFORGE_VERSION=build-9b3ff482de3f
+ARG AFORGE_VERSION=v0.1.0
 
 FROM debian:bookworm-slim AS aforge
 ARG AFORGE_BASE_URL
