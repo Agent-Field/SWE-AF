@@ -83,11 +83,12 @@ GOWORK=off go build ./...
 
 ## Docker
 
-The image is a multi-stage build. The builder clones the AgentField Go SDK at a
-**pinned ref** and lays it out so the `replace` path resolves, then builds both
-static binaries; the runtime stage is a slim Debian with the same external CLI
-surface the agents shell out to (`git`, `gh`, `jq`, OpenCode, Codex, Claude
-Code).
+The image is a multi-stage build. A fetch stage downloads the released AForge
+CLI and verifies it against the release `checksums.txt` before it enters the
+image; the builder clones the AgentField Go SDK at a **pinned ref** and lays it
+out so the `replace` path resolves, then builds both static binaries; the
+runtime stage is a slim Debian with the same external CLI surface the agents
+shell out to (`git`, `gh`, `jq`, AForge, OpenCode, Codex, Claude Code).
 
 Build the image (context is the **repo root**, so the whole `go/` module is
 available and the SDK clone can be laid out as a sibling):
@@ -109,6 +110,27 @@ The SDK clone layer is cache-keyed on this arg — **bump the ref to pull a newe
 SDK**; an unchanged ref restores the cached clone (same rationale as the
 docker-pip cache-busting rule: the constraint string itself must change to
 invalidate the layer).
+
+The AForge download is pinned the same way:
+
+```bash
+docker build -f go/Dockerfile \
+     --build-arg AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge \
+     --build-arg AFORGE_VERSION=build-9b3ff482de3f \
+     -t swe-af-go:latest .
+```
+
+`AFORGE_VERSION` is part of the fetch layer's cache key, so bumping it is what
+pulls a newer AForge — a floating URL alone would keep restoring the cached
+binary. `AFORGE_BASE_URL` exists so a mirror can be substituted.
+
+> **The `aforge` runtime needs a Go SDK that has the aforge harness provider.**
+> `harness.BuildProvider` at the currently pinned `AGENTFIELD_SDK_REF` knows
+> only `claude-code`, `codex`, `gemini` and `opencode`, and returns
+> `unknown harness provider: "aforge"` for anything else. Bump
+> `AGENTFIELD_SDK_REF` (here and in `go/go.mod` / `.github/workflows/ci.yml`)
+> to a release carrying agentfield#905 before relying on the aforge default on
+> this node; until then set `SWE_DEFAULT_RUNTIME=open_code` (or `claude_code`).
 
 ### Compose: opt-in add-on to the Python stack
 
@@ -155,9 +177,10 @@ set; the load-bearing ones:
 | Variable                                                  | Purpose                                              |
 |-----------------------------------------------------------|------------------------------------------------------|
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`           | Claude runtime (`claude_code`)                       |
-| `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`| Open runtimes (`open_code` / `codex`)                |
+| `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`| Open runtimes (`aforge` / `open_code` / `codex`)     |
 | `GH_TOKEN`                                                | Optional: GitHub PAT (`repo` scope) — needed for private repos and PRs |
-| `SWE_DEFAULT_RUNTIME`                                     | `claude_code` \| `open_code` \| `codex` (unset: auto — `open_code` when only an OpenRouter key is present, else `claude_code`) |
+| `SWE_DEFAULT_RUNTIME`                                     | `aforge` \| `claude_code` \| `open_code` \| `codex` (unset: auto — `aforge` when an OpenRouter key is available, else `claude_code`) |
+| `AGENTFIELD_AFORGE_COMMAND`                               | AForge headless command (`exec`). Baked into the image; a no-op until the AgentField Go SDK carries the aforge provider |
 | `SWE_DEFAULT_MODEL`                                       | Default model when the request config omits `models` |
 | `SWE_CODEX_AUTH_MODE`                                     | `auto` \| `chatgpt` \| `api_key` (codex CLI auth)     |
 | `OPENCODE_ENABLE_EXA` + `EXA_API_KEY`                     | Optional web search for the open runtime             |

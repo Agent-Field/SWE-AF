@@ -52,6 +52,7 @@ services:
       # else claude_code. A baked claude_code fallback here would break
       # OpenRouter-only deployments.
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
+      - AGENTFIELD_AFORGE_COMMAND=${AGENTFIELD_AFORGE_COMMAND:-exec}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -111,6 +112,7 @@ services:
       - OPENCODE_MODEL=${OPENCODE_MODEL:-}
       # Empty = auto (see swe-agent-go note).
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
+      - AGENTFIELD_AFORGE_COMMAND=${AGENTFIELD_AFORGE_COMMAND:-exec}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       # build-db lives in the Python stack; reachable over the shared network.

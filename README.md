@@ -246,7 +246,7 @@ New to AgentField? Install the control plane first with `curl -fsSL https://agen
 
 One click deploys SWE-AF + AgentField control plane + PostgreSQL. Exactly **one** environment variable is required in Railway — an LLM provider key:
 
-- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. With only this set (no `ANTHROPIC_API_KEY`, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash-0731` — no further configuration needed.
+- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. When present and no runtime is explicitly selected, SWE-AF uses AForge `exec` and defaults every role to `openrouter/deepseek/deepseek-v4-flash-0731`.
 - *Alternative:* `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits), to run the `claude_code` runtime instead.
 
 Optional:
@@ -278,6 +278,43 @@ python -m pip install -e ".[dev]"
 ```
 
 ### 3. Run
+
+#### Harness selection
+
+The Docker image ships AForge: a dedicated build stage downloads the released
+binary from `https://agentfield.ai/downloads/aforge/<version>/` and verifies it
+against the release `checksums.txt` before it enters the image. Both
+coordinates are build args, so a mirror or a different release can be
+substituted without editing the Dockerfile:
+
+```bash
+docker build \
+  --build-arg AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge \
+  --build-arg AFORGE_VERSION=build-9b3ff482de3f \
+  -t swe-af .
+```
+
+`AFORGE_VERSION` is part of that layer's cache key — bumping it is what pulls a
+newer AForge; a floating URL alone would keep restoring the cached binary.
+
+A host installation needs `aforge` on `PATH` instead:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-...
+export SWE_DEFAULT_RUNTIME=aforge
+export SWE_DEFAULT_MODEL=openrouter/deepseek/deepseek-v4-flash-0731
+python -m swe_af
+```
+
+Set `SWE_DEFAULT_RUNTIME=open_code` for an OpenCode rollback (OpenCode stays
+installed in the image), or `claude_code` for Claude.
+
+> `AFORGE_BIN` and `AGENTFIELD_AFORGE_COMMAND` are accepted by the deployment
+> surface but are **no-ops on the pinned `agentfield>=0.1.129` SDK**: its aforge
+> provider always runs `aforge exec --json -w <root>` and always resolves the
+> binary as `aforge` from `PATH`. They start working once the SDK release
+> carrying [agentfield#905](https://github.com/Agent-Field/agentfield/pull/905)
+> is pinned.
 
 ```bash
 af                 # starts AgentField control plane on :8080
@@ -844,7 +881,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
-| `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"`, `"open_code"`, or `"codex"`. The default also honors the `SWE_DEFAULT_RUNTIME` env var when no `runtime` is passed in `config` — set it on the deployment so callers don't need to plumb a config through. |
+| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, or `"codex"`. With OpenRouter available the default is `"aforge"`; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide. |
 | `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |
