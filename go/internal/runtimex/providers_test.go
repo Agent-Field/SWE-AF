@@ -4,7 +4,7 @@ import "testing"
 
 // Contract: RuntimeValues is exactly the Python RUNTIME_VALUES tuple, in order.
 func TestRuntimeValues(t *testing.T) {
-	want := [...]string{"claude_code", "open_code", "codex"}
+	want := [...]string{"aforge", "claude_code", "open_code", "codex"}
 	if RuntimeValues != want {
 		t.Fatalf("RuntimeValues = %v, want %v", RuntimeValues, want)
 	}
@@ -13,6 +13,7 @@ func TestRuntimeValues(t *testing.T) {
 // Contract: aliases fold to canonical runtimes.
 //   - "claude"/"claude-code"/"claude_code" -> "claude_code"
 //   - "opencode"/"open_code" -> "open_code"
+//   - "aforge"/"aforge_v2"/"aforge-v2" -> "aforge"
 //   - "codex" -> "codex"
 //   - case/whitespace insensitive (trim + lower)
 func TestNormalizeRuntimeProvider(t *testing.T) {
@@ -25,11 +26,15 @@ func TestNormalizeRuntimeProvider(t *testing.T) {
 		{"claude_code", "claude_code"},
 		{"opencode", "open_code"},
 		{"open_code", "open_code"},
+		{"aforge", "aforge"},
+		{"aforge_v2", "aforge"},
+		{"aforge-v2", "aforge"},
 		{"codex", "codex"},
 		// trim + lowercase normalization
 		{"  Claude  ", "claude_code"},
 		{"CLAUDE-CODE", "claude_code"},
 		{"OpenCode", "open_code"},
+		{"  AForge  ", "aforge"},
 		{"\tCODEX\n", "codex"},
 	}
 	for _, c := range cases {
@@ -70,7 +75,8 @@ func TestNormalizeRuntimeProviderUnsupported(t *testing.T) {
 }
 
 // Contract: canonical runtime -> harness provider string.
-// claude_code -> "claude", open_code -> "opencode", codex -> "codex".
+// claude_code -> "claude", open_code -> "opencode", aforge -> "aforge",
+// codex -> "codex".
 func TestRuntimeToHarnessProvider(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -81,6 +87,8 @@ func TestRuntimeToHarnessProvider(t *testing.T) {
 		{"claude-code", "claude"},
 		{"open_code", "opencode"},
 		{"opencode", "opencode"},
+		{"aforge", "aforge"},
+		{"aforge-v2", "aforge"},
 		{"codex", "codex"},
 	}
 	for _, c := range cases {
@@ -96,7 +104,8 @@ func TestRuntimeToHarnessProvider(t *testing.T) {
 }
 
 // Contract: canonical runtime -> harness adapter string.
-// claude_code -> "claude-code", open_code -> "opencode", codex -> "codex".
+// claude_code -> "claude-code", open_code -> "opencode", aforge -> "aforge",
+// codex -> "codex".
 func TestRuntimeToHarnessAdapter(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -107,6 +116,8 @@ func TestRuntimeToHarnessAdapter(t *testing.T) {
 		{"claude-code", "claude-code"},
 		{"open_code", "opencode"},
 		{"opencode", "opencode"},
+		{"aforge", "aforge"},
+		{"aforge-v2", "aforge"},
 		{"codex", "codex"},
 	}
 	for _, c := range cases {
@@ -123,7 +134,7 @@ func TestRuntimeToHarnessAdapter(t *testing.T) {
 
 // Contract (the asymmetry): provider vs adapter strings differ ONLY for claude.
 // For every canonical runtime, compare the two mappings; they must match for
-// open_code and codex and differ for claude_code.
+// aforge, open_code and codex and differ for claude_code.
 func TestProviderAdapterAsymmetry(t *testing.T) {
 	for _, rt := range RuntimeValues {
 		provider, err := RuntimeToHarnessProvider(rt)
