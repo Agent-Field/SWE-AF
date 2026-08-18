@@ -309,12 +309,12 @@ python -m swe_af
 Set `SWE_DEFAULT_RUNTIME=open_code` for an OpenCode rollback (OpenCode stays
 installed in the image), or `claude_code` for Claude.
 
-> `AFORGE_BIN` and `AGENTFIELD_AFORGE_COMMAND` are accepted by the deployment
-> surface but are **no-ops on the pinned `agentfield>=0.1.129` SDK**: its aforge
-> provider always runs `aforge exec --json -w <root>` and always resolves the
-> binary as `aforge` from `PATH`. They start working once the SDK release
-> carrying [agentfield#905](https://github.com/Agent-Field/agentfield/pull/905)
-> is pinned.
+> `AFORGE_BIN` and `AGENTFIELD_AFORGE_COMMAND` are honored on the pinned
+> `agentfield>=0.1.130` SDK, which carries
+> [agentfield#905](https://github.com/Agent-Field/agentfield/pull/905):
+> `AFORGE_BIN` overrides the binary otherwise resolved as `aforge` from `PATH`,
+> and `AGENTFIELD_AFORGE_COMMAND` picks the headless command (`exec`, the
+> default, or `do`) — `aforge exec --json -w <root> --timeout <seconds>`.
 
 ```bash
 af                 # starts AgentField control plane on :8080
