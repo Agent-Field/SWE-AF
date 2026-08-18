@@ -3,15 +3,17 @@
 # Build from the SWE-AF repo root so the whole go/ module is in context:
 #     docker build -f go/Dockerfile .
 #
-# The Go module depends on the AgentField Go SDK via a `replace` directive
-# (go/go.mod: replace github.com/Agent-Field/agentfield/sdk/go => ../../agentfield/sdk/go).
-# The SDK lives in a *sibling* repo that is NOT in this build context, so the
-# builder stage clones it at a pinned ref and lays it out so the replace path
-# (../../agentfield/sdk/go, relative to /src/SWE-AF/go) resolves to /src/agentfield/sdk/go.
+# The Go module requires the AgentField Go SDK by version (go/go.mod:
+# github.com/Agent-Field/agentfield/sdk/go v0.1.130) and the builder resolves it
+# through the module proxy — there is no `replace` directive, so nothing here
+# depends on a sibling checkout. The builder still sparse-clones the SDK at
+# AGENTFIELD_SDK_REF: it records the exact commit behind that version in the
+# image and fails the build early if the ref ever disappears.
 #
 # Cache-busting (per the docker cache rule): the SDK checkout is keyed on the
 # AGENTFIELD_SDK_REF build arg. Bump the ref (or pass --build-arg) to force a
-# re-clone; an unchanged ref restores the cached layer.
+# re-clone; an unchanged ref restores the cached layer. Keep it on the same
+# release as go/go.mod's require.
 
 # ---------------------------------------------------------------------------
 # Stage 0 — aforge: fetch the released AForge CLI from the public download host
@@ -59,9 +61,10 @@ RUN set -eu; \
 # control-plane Go prerequisite (Go 1.23+).
 FROM golang:1.23-bookworm AS builder
 
-# Pinned AgentField SDK ref. Default = agentfield origin/main HEAD at port time
-# (v0.1.107-rc.1). Changing this string invalidates the clone layer below.
-ARG AGENTFIELD_SDK_REF=20955b2637b4708758c328a4f64fe460c7d4b772
+# Pinned AgentField SDK ref. Default = the sdk/go/v0.1.130 tag commit, the same
+# release go/go.mod requires. Changing this string invalidates the clone layer
+# below.
+ARG AGENTFIELD_SDK_REF=aba20a9b248d9ee6c74f4e7e688ef0740c542dc9
 ARG AGENTFIELD_REPO=https://github.com/Agent-Field/agentfield.git
 
 WORKDIR /src
@@ -81,7 +84,7 @@ RUN git init -q /src/agentfield && \
 
 # Prime the module cache from go.mod/go.sum before copying sources so dependency
 # downloads cache independently of source edits. GOWORK=off: no workspace in the
-# image, resolution goes through the replace directive.
+# image, resolution goes through go.mod's versioned require.
 ENV GOWORK=off CGO_ENABLED=0 GOOS=linux
 COPY go/go.mod go/go.sum /src/SWE-AF/go/
 WORKDIR /src/SWE-AF/go

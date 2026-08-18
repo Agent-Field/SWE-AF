@@ -193,9 +193,8 @@ func openRouterOnlyEnv() bool {
 // otherwise claude_code. An invalid env value falls back to claude_code.
 //
 // The aforge default requires an AgentField Go SDK whose harness.BuildProvider
-// knows the "aforge" provider (agentfield#905). Until AGENTFIELD_SDK_REF is
-// bumped to a release carrying it, this node must be pointed at another
-// runtime with SWE_DEFAULT_RUNTIME — see go/README.md § Docker.
+// knows the "aforge" provider (agentfield#905). go.mod pins sdk/go v0.1.130,
+// which carries it — see go/README.md § Docker.
 func DefaultRuntime() string {
 	value := envStripped("SWE_DEFAULT_RUNTIME")
 	if value == "" {
