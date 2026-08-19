@@ -2,9 +2,11 @@
 
 The Go node runs a high-performance coding engine, shipped as prebuilt
 binaries — one per supported platform, vendored at `go/bin` as
-`swe-pro-darwin-arm64` and `swe-pro-linux-amd64`, because one checkout is
-installed on macOS and Linux alike and the node picks the matching build at
-startup.
+`swe-pro-darwin-arm64`, `swe-pro-darwin-amd64`, `swe-pro-linux-amd64`, and
+`swe-pro-linux-arm64`, because one checkout is installed on macOS and Linux
+alike and the node picks the matching build at startup. The engine does not yet
+support Windows; there the node logs a warning and falls back to the classic
+coding loop.
 
 It is **on by default for nodes installed with `af install` or AgentField
 Desktop**: `agentfield-package.yaml` declares `SWE_PRO_ENGINE` with
@@ -59,8 +61,8 @@ to switch back. Two things differ from the classic loop, both additive:
 The engine never pushes or opens PRs — branch, push and PR creation stay with
 the standard pipeline, so the deliverables are unchanged.
 
-If the flag is set but no *runnable* engine binary is found — missing, or
-present without its execute bit — the node logs a warning naming the path and
+If the flag is set but no *runnable* engine binary is found — missing, or on
+Unix present without its execute bit — the node logs a warning naming the path and
 comes up on the classic coding loop: `pro_execute` is not registered and
 nothing is routed to an engine node that never joined. The binary is searched
 for at `SWE_PRO_BIN` when set (authoritative — no fallback), else
@@ -75,7 +77,7 @@ what keeps a macOS install from exec'ing the Linux build.
 | Variable | Default | Purpose |
 |---|---|---|
 | `SWE_PRO_ENGINE` | `1` via the manifest on `af install` / Desktop; unset (off) for a clone, fork, compose stack or bare binary | Truthy (`1`/`true`/`yes`/`on`) enables; `0`/`false` opts out |
-| `SWE_PRO_BIN` | `/usr/local/bin/swe-pro`, else a `swe-pro-<GOOS>-<GOARCH>` / `swe-pro` sibling | Engine binary path (authoritative when set) |
+| `SWE_PRO_BIN` | `/usr/local/bin/swe-pro`, else a `swe-pro-<GOOS>-<GOARCH>` / `swe-pro` sibling (`.exe` names first on Windows) | Engine binary path (authoritative when set); must have an execute bit on Unix |
 | `SWE_PRO_NODE_ID` | `swe-pro` | Engine's control-plane node id |
 | `SWE_PRO_PORT` | `8801` | Engine's listen port |
 | `SWE_PRO_PUBLIC_URL` | `http://localhost:8801` (engine default) | Callback base URL — **must** be set to a container-reachable address in Docker, otherwise the control plane cannot reach the engine |

@@ -80,6 +80,49 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestSiblingNamesFor(t *testing.T) {
+	tests := []struct {
+		goos, goarch string
+		want         []string
+	}{
+		{"linux", "amd64", []string{"swe-pro-linux-amd64", "swe-pro"}},
+		{"darwin", "arm64", []string{"swe-pro-darwin-arm64", "swe-pro"}},
+		{"windows", "amd64", []string{"swe-pro-windows-amd64.exe", "swe-pro.exe", "swe-pro-windows-amd64", "swe-pro"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.goos+"/"+tt.goarch, func(t *testing.T) {
+			got := siblingNamesFor(tt.goos, tt.goarch)
+			if strings.Join(got, "\x00") != strings.Join(tt.want, "\x00") {
+				t.Errorf("siblingNamesFor(%q, %q) = %q, want %q", tt.goos, tt.goarch, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunnableMode(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		mode os.FileMode
+		want bool
+	}{
+		{"linux regular 0644", "linux", 0o644, false},
+		{"linux regular 0755", "linux", 0o755, true},
+		{"darwin regular 0644", "darwin", 0o644, false},
+		{"darwin regular 0755", "darwin", 0o755, true},
+		{"windows regular 0666", "windows", 0o666, true},
+		{"linux directory", "linux", os.ModeDir | 0o755, false},
+		{"windows directory", "windows", os.ModeDir | 0o777, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := runnableMode(tt.goos, tt.mode); got != tt.want {
+				t.Errorf("runnableMode(%q, %v) = %v, want %v", tt.goos, tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestResolveBin covers the three-step search: explicit SWE_PRO_BIN is
 // authoritative (found or not — no fall-through), and Available() is the
 // flag AND binary-presence conjunction.
@@ -110,12 +153,18 @@ func TestResolveBin(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvBin, nonExec)
-	if _, ok := ResolveBin(); ok {
-		t.Error("ResolveBin() reported a non-executable file as usable")
-	}
 	t.Setenv(EnvEnabled, "1")
-	if Available() {
-		t.Error("Available() = true for a non-executable binary — must degrade to the classic loop")
+	if runtime.GOOS == "windows" {
+		if _, ok := ResolveBin(); !ok || !Available() {
+			t.Error("regular Windows binary reported unusable because os.Stat exposes no execute bits")
+		}
+	} else {
+		if _, ok := ResolveBin(); ok {
+			t.Error("ResolveBin() reported a non-executable file as usable")
+		}
+		if Available() {
+			t.Error("Available() = true for a non-executable binary — must degrade to the classic loop")
+		}
 	}
 
 	// A directory at the binary path is likewise not runnable (os.Stat alone
@@ -152,24 +201,28 @@ func TestResolveBinSiblings(t *testing.T) {
 	if runnable(DefaultBin) {
 		t.Skipf("%s exists on this host and short-circuits the sibling search", DefaultBin)
 	}
-	suffixed := "swe-pro-" + runtime.GOOS + "-" + runtime.GOARCH
+	names := siblingNames()
+	suffixed, plain := names[0], names[1]
 
-	cases := []struct {
+	type testCase struct {
 		name string
 		// present maps sibling file name to its mode; 0o644 is the
 		// present-but-unusable case the availability gate must reject.
 		present map[string]os.FileMode
 		want    string // sibling name, or "" for "no usable engine"
 		wantOK  bool
-	}{
-		{"suffixed preferred over plain", map[string]os.FileMode{suffixed: 0o755, "swe-pro": 0o755}, suffixed, true},
+	}
+	cases := []testCase{
+		{"suffixed preferred over plain", map[string]os.FileMode{suffixed: 0o755, plain: 0o755}, suffixed, true},
 		{"suffixed alone", map[string]os.FileMode{suffixed: 0o755}, suffixed, true},
-		{"plain alone is the fallback", map[string]os.FileMode{"swe-pro": 0o755}, "swe-pro", true},
+		{"plain alone is the fallback", map[string]os.FileMode{plain: 0o755}, plain, true},
 		{"neither present", nil, "", false},
-		{"plain usable, suffixed not", map[string]os.FileMode{suffixed: 0o644, "swe-pro": 0o755}, "swe-pro", true},
-		// Both unusable: the warning must name the suffixed candidate, the one
-		// this platform was meant to run.
-		{"both unusable names the best candidate", map[string]os.FileMode{suffixed: 0o644, "swe-pro": 0o644}, suffixed, false},
+	}
+	if runtime.GOOS != "windows" {
+		cases = append(cases,
+			testCase{"plain usable, suffixed not", map[string]os.FileMode{suffixed: 0o644, plain: 0o755}, plain, true},
+			testCase{"both unusable names the best candidate", map[string]os.FileMode{suffixed: 0o644, plain: 0o644}, suffixed, false},
+		)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
