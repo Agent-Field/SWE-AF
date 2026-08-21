@@ -63,15 +63,28 @@ const (
 	tagInternal   = "internal"
 )
 
-// RegisterPlanner registers the full swe-planner surface: 25 role reasoners +
-// 5 orchestrators + the issue-level entry point (31 total). Ports swe_af/app.py.
+// RegisterPlanner registers the swe-planner surface. With the pro engine off it
+// is the full classic surface: 25 role reasoners + 5 orchestrators + the
+// issue-level entry point (31 total), porting swe_af/app.py. With the pro engine
+// on (pro.Available()), the classic entry points are withheld and only the pro
+// executor is added — see the body for why.
 func (n *Node) RegisterPlanner() {
 	n.registerRoles()
-	n.registerOrchestrators()
-	n.registerIssueReasoner()
+	// Pro engine on (the af-install / desktop default): the bundled swe-pro
+	// sidecar is the coding surface and needs no opencode, so register only the
+	// pro executor and withhold the classic opencode-driven entry points. The
+	// orchestrators (plan/build/execute/resolve/resume_build) and implement_issue
+	// drive the opencode role harness and fail wherever opencode is absent — the
+	// desktop bundle ships aforge, not opencode — so advertising them just
+	// surfaces broken entries next to swe-pro's working code_task. The role
+	// reasoners stay registered (internal, undiscoverable) so pro_execute can
+	// still call them. SWE_PRO_ENGINE=0 restores the full classic surface.
 	if pro.Available() {
 		n.registerProReasoners()
+		return
 	}
+	n.registerOrchestrators()
+	n.registerIssueReasoner()
 }
 
 // RegisterFast registers the swe-fast surface: the same 25 role reasoners + the
