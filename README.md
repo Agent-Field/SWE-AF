@@ -242,7 +242,7 @@ New to AgentField? Install the control plane first with `curl -fsSL https://agen
 
 ### Deploy with Railway (fastest)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/swe-af)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/agentfield-engineering-team)
 
 One click deploys SWE-AF + AgentField control plane + PostgreSQL. Exactly **one** environment variable is required in Railway — an LLM provider key:
 
