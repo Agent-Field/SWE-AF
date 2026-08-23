@@ -126,7 +126,8 @@ func LoadFastBuildConfig(raw map[string]any) (*FastBuildConfig, error) {
 
 // FastResolveModels ports fast_resolve_models — resolves the four role model
 // strings. Resolution order (last wins): runtime default → env cascade
-// (SWE_DEFAULT_MODEL → AI_MODEL → HARNESS_MODEL, same as the main path) →
+// (SWE_DEFAULT_MODEL → AI_MODEL → HARNESS_MODEL, the latter only on
+// open_code — same as the main path) →
 // models["default"] → models["<role>"]. An unknown key yields the verbatim
 // "Unknown role key" error.
 func FastResolveModels(config *FastBuildConfig) (map[string]string, error) {
@@ -140,7 +141,7 @@ func FastResolveModels(config *FastBuildConfig) (map[string]string, error) {
 	// Deployer env cascade: lets the same variable that selects a model for
 	// the main node select it for fast builds too. Caller-supplied models
 	// (below) still win.
-	if envModel := defaultModelFromEnv(); envModel != "" {
+	if envModel := defaultModelFromEnv(config.Runtime); envModel != "" {
 		for _, role := range fastRoles {
 			resolved[role] = envModel
 		}

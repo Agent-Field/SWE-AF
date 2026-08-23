@@ -160,6 +160,7 @@ def fast_resolve_models(config: FastBuildConfig) -> dict[str, str]:
     Resolution order (last wins):
       1. Runtime default (haiku or the shared open_code default, per runtime)
       2. Env cascade: ``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` → ``HARNESS_MODEL``
+         (``HARNESS_MODEL`` only on the ``open_code`` runtime)
       3. ``models["default"]`` — overrides all roles
       4. ``models["<role>"]`` — overrides a specific role (pm, coder, verifier, git)
 
@@ -178,12 +179,13 @@ def fast_resolve_models(config: FastBuildConfig) -> dict[str, str]:
 
     resolved: dict[str, str] = {role: runtime_default for role in _FAST_ROLES}
 
-    # Deployer env cascade (SWE_DEFAULT_MODEL → AI_MODEL → HARNESS_MODEL), same
-    # as the main path — lets the variable that selects a model for the main
-    # node select it for fast builds too. Caller-supplied models still win.
+    # Deployer env cascade (SWE_DEFAULT_MODEL → AI_MODEL → HARNESS_MODEL, the
+    # latter only on open_code), same as the main path — lets the variable that
+    # selects a model for the main node select it for fast builds too.
+    # Caller-supplied models still win.
     from swe_af.execution.schemas import _default_model_from_env  # noqa: PLC0415
 
-    env_model = _default_model_from_env()
+    env_model = _default_model_from_env(config.runtime)
     if env_model:
         resolved = {role: env_model for role in _FAST_ROLES}
 

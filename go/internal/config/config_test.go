@@ -200,6 +200,65 @@ func TestResolveRuntimeModels_EnvCascade(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeModels_HarnessModelScopedToOpenCode(t *testing.T) {
+	clearProviderEnv(t)
+	// The Docker image bakes HARNESS_MODEL for OpenCode's small_model
+	// interpolation; it must steer open_code only. claude_code and codex keep
+	// their runtime defaults instead of receiving an openrouter/… id their
+	// CLIs cannot consume.
+	t.Setenv("HARNESS_MODEL", "openrouter/deepseek/deepseek-v4-flash-0731")
+
+	got := mustResolve(t, "open_code", nil)
+	if got["pm_model"] != "openrouter/deepseek/deepseek-v4-flash-0731" {
+		t.Errorf("open_code honors HARNESS_MODEL = %q", got["pm_model"])
+	}
+
+	got = mustResolve(t, "claude_code", nil)
+	if got["pm_model"] != "sonnet" {
+		t.Errorf("claude_code ignores HARNESS_MODEL = %q", got["pm_model"])
+	}
+	if got["qa_synthesizer_model"] != "haiku" {
+		t.Errorf("claude_code qa_synthesizer base = %q", got["qa_synthesizer_model"])
+	}
+
+	t.Setenv("SWE_CODEX_AUTH_MODE", "api_key")
+	got = mustResolve(t, "codex", nil)
+	if got["pm_model"] != "gpt-5.3-codex" {
+		t.Errorf("codex ignores HARNESS_MODEL = %q", got["pm_model"])
+	}
+
+	// Deployer-intent vars are NOT runtime-scoped: AI_MODEL still wins on
+	// claude_code.
+	t.Setenv("AI_MODEL", "claude-opus-5")
+	got = mustResolve(t, "claude_code", nil)
+	if got["pm_model"] != "claude-opus-5" {
+		t.Errorf("claude_code honors AI_MODEL = %q", got["pm_model"])
+	}
+}
+
+func TestFastResolveModels_HarnessModelScopedToOpenCode(t *testing.T) {
+	clearProviderEnv(t)
+	t.Setenv("HARNESS_MODEL", "openrouter/qwen/qwen-3-coder")
+
+	openCfg := &FastBuildConfig{Runtime: "open_code"}
+	got, err := FastResolveModels(openCfg)
+	if err != nil {
+		t.Fatalf("FastResolveModels(open_code): %v", err)
+	}
+	if got["pm_model"] != "openrouter/qwen/qwen-3-coder" {
+		t.Errorf("fast open_code honors HARNESS_MODEL = %q", got["pm_model"])
+	}
+
+	claudeCfg := &FastBuildConfig{Runtime: "claude_code"}
+	got, err = FastResolveModels(claudeCfg)
+	if err != nil {
+		t.Fatalf("FastResolveModels(claude_code): %v", err)
+	}
+	if got["pm_model"] != "haiku" {
+		t.Errorf("fast claude_code ignores HARNESS_MODEL = %q", got["pm_model"])
+	}
+}
+
 func TestResolveRuntimeModels_EnvCascadeOrder(t *testing.T) {
 	clearProviderEnv(t)
 	// AI_MODEL used when SWE_DEFAULT_MODEL unset.
