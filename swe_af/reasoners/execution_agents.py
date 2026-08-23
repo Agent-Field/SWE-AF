@@ -1259,13 +1259,15 @@ async def run_qa_synthesizer(
             schema=QASynthesisResult,
             model=model,
         )
-        if result.parsed is not None:
+        # Unlike the harness-backed agents above, router.ai() returns the
+        # validated schema instance itself — there is no .parsed wrapper.
+        if isinstance(result, QASynthesisResult):
             router.note(
-                f"QA synthesizer complete: action={result.parsed.action.value}, "
-                f"stuck={result.parsed.stuck}",
+                f"QA synthesizer complete: action={result.action.value}, "
+                f"stuck={result.stuck}",
                 tags=["qa_synthesizer", "complete"],
             )
-            out = result.parsed.model_dump()
+            out = result.model_dump()
             out["iteration_id"] = iteration_id
             return out
     except FatalHarnessError:
