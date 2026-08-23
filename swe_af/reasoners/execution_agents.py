@@ -1270,6 +1270,10 @@ async def run_qa_synthesizer(
             out = result.model_dump()
             out["iteration_id"] = iteration_id
             return out
+        router.note(
+            f"QA synthesizer returned {type(result).__name__}, not QASynthesisResult",
+            tags=["qa_synthesizer", "error"],
+        )
     except FatalHarnessError:
         raise  # Non-retryable — propagate immediately
     except Exception as e:
