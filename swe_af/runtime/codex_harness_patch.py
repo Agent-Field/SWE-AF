@@ -7,6 +7,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+from swe_af.runtime.activity_heartbeat import (
+    ChildToolActivity,
+    install_subprocess_activity_hooks,
+    run_with_activity_heartbeat,
+)
+
 _PATCHED = False
 
 # Set by the wrapped Agent.harness for the duration of a harness call.
@@ -204,6 +210,7 @@ def apply_codex_harness_patch() -> None:
         return
 
     _ORIGINAL_BUILD_PROMPT_SUFFIX = _schema.build_prompt_suffix
+    install_subprocess_activity_hooks()
 
     def build_prompt_suffix_with_schema_file(schema: Any, cwd: str) -> str:
         """Use Codex-native structured output instead of AgentField's Write-tool suffix.
@@ -402,7 +409,13 @@ def apply_codex_harness_patch() -> None:
         provider_value = kwargs.get("provider")
         token = active_provider.set(str(provider_value) if provider_value else None)
         try:
-            return await _orig_agent_harness(self, prompt, *args, **kwargs)
+            # Agent.note is the existing execution activity/status channel.  The
+            # heartbeat reuses it rather than posting a second kind of update.
+            return await run_with_activity_heartbeat(
+                _orig_agent_harness(self, prompt, *args, **kwargs),
+                note_fn=self.note,
+                activity=ChildToolActivity(),
+            )
         finally:
             active_provider.reset(token)
 
