@@ -148,6 +148,18 @@ class TestFastResolveModelsOpenCode:
         for role in _ALL_FOUR_ROLES:
             assert resolved[role] == "openrouter/qwen/qwen-3-coder"
 
+    def test_harness_model_scoped_to_open_code_in_fast(self, monkeypatch) -> None:
+        # The image-baked HARNESS_MODEL steers open_code fast builds but never
+        # claude_code ones (same scoping as the main path).
+        for var in ("SWE_DEFAULT_MODEL", "AI_MODEL"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("HARNESS_MODEL", "openrouter/qwen/qwen-3-coder")
+        open_resolved = fast_resolve_models(FastBuildConfig(runtime="open_code"))
+        claude_resolved = fast_resolve_models(FastBuildConfig(runtime="claude_code"))
+        for role in _ALL_FOUR_ROLES:
+            assert open_resolved[role] == "openrouter/qwen/qwen-3-coder"
+            assert claude_resolved[role] == "haiku"  # _CLAUDE_CODE_DEFAULT
+
     def test_config_models_beat_env_cascade(self, monkeypatch) -> None:
         monkeypatch.setenv("SWE_DEFAULT_MODEL", "openrouter/qwen/qwen-3-coder")
         cfg = FastBuildConfig(runtime="open_code", models={"default": "openrouter/z-ai/glm-5"})

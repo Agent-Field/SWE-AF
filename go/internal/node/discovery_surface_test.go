@@ -152,7 +152,10 @@ func TestProExecuteIsInternal(t *testing.T) {
 	if m.Description == "" {
 		t.Error("pro_execute lost its description")
 	}
-	assertSurface(t, "swe-planner[pro][entrypoint]", entrypointNames(n), wantEntrypoints)
+	// With the engine on the classic entry points are withheld, so the node
+	// advertises no entry points of its own — the swe-pro sidecar carries the
+	// coding entry (code_task/code_resume).
+	assertSurface(t, "swe-planner[pro][entrypoint]", entrypointNames(n), nil)
 }
 
 // TestExecuteDescribesItsPlanResultInput: execute's plan_result is the one input

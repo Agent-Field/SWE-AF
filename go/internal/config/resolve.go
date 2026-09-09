@@ -242,8 +242,17 @@ var defaultModelEnvVars = []string{"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MOD
 
 // defaultModelFromEnv ports _default_model_from_env: first non-empty (stripped)
 // of SWE_DEFAULT_MODEL → AI_MODEL → HARNESS_MODEL, else "" (meaning None).
-func defaultModelFromEnv() string {
+//
+// HARNESS_MODEL is an OpenCode-ecosystem variable — it also feeds OpenCode's
+// small_model via config interpolation, and the Docker image bakes a default
+// value precisely so that interpolation always has one — so it is consulted
+// only for the open_code runtime. Letting it steer claude_code / codex pushed
+// the image's baked openrouter/… id into CLIs that cannot consume it.
+func defaultModelFromEnv(runtime string) string {
 	for _, v := range defaultModelEnvVars {
+		if v == "HARNESS_MODEL" && runtime != "open_code" {
+			continue
+		}
 		if value := envStripped(v); value != "" {
 			return value
 		}
@@ -275,7 +284,7 @@ func DefaultPlanningModel() string {
 	if highModel := tierModelsFromEnv()["high"]; highModel != "" {
 		return highModel
 	}
-	if envModel := defaultModelFromEnv(); envModel != "" {
+	if envModel := defaultModelFromEnv(DefaultRuntime()); envModel != "" {
 		return envModel
 	}
 	if openRouterOnlyEnv() {
@@ -382,7 +391,7 @@ func ResolveRuntimeModels(runtime string, models map[string]string, fieldNames [
 		resolved[field] = base[field]
 	}
 
-	if envDefault := defaultModelFromEnv(); envDefault != "" {
+	if envDefault := defaultModelFromEnv(runtime); envDefault != "" {
 		for _, field := range fieldNames {
 			resolved[field] = envDefault
 		}
