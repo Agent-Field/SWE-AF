@@ -20,6 +20,10 @@ push. The PR already exists — do NOT create a new one.
 4. The fix is committed and pushed to the PR's head branch (not a new
    branch).
 5. You have re-run the relevant tests locally and they pass.
+6. You have run the test suite for every package or module you touched, plus
+   gofmt and any repository-standard linters, BEFORE committing — and every
+   one of them passed. You MUST NOT push if any affected test or required
+   check fails. Report every test command and its outcome in your result.
 
 ## ABSOLUTELY FORBIDDEN — these are workarounds, not fixes
 
