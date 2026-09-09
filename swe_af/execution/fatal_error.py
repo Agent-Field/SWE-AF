@@ -56,6 +56,36 @@ class FatalHarnessError(RuntimeError):
         self.original_message = message
 
 
+class EmptyHarnessCompletionError(RuntimeError):
+    """Raised when a harness call completes but produces no output at all.
+
+    Distinct from a *schema-invalid* completion (output present but unparseable
+    into the target schema). An empty completion — the harness returned with no
+    parsed object and no raw text, typically in ~1s — almost always means the
+    provider/model pairing is wrong: e.g. a model id prefixed for a *different*
+    runtime (an ``openrouter/…`` model handed to the codex CLI's OpenAI
+    backend, which doesn't know it) or missing/invalid auth for the selected
+    provider. Collapsing this into the generic "failed to produce a valid
+    <artifact>" message makes it indistinguishable from a genuine schema-quality
+    failure, so this error names the provider and model explicitly to point at
+    the real root cause.
+    """
+
+    def __init__(self, *, role: str, provider: str, model: str, detail: str = "") -> None:
+        message = (
+            f"{role} harness returned an empty completion "
+            f"(provider={provider}, model={model}) — check provider "
+            f"auth/model compatibility"
+        )
+        if detail:
+            message = f"{message}: {detail}"
+        super().__init__(message)
+        self.role = role
+        self.provider = provider
+        self.model = model
+        self.original_message = detail
+
+
 def is_fatal_error(error_message: str) -> bool:
     """Return True if *error_message* matches a known fatal API error pattern."""
     if not error_message:
@@ -86,3 +116,99 @@ def check_fatal_harness_error(result) -> None:
     msg = getattr(result, "error_message", "") or ""
     if is_fatal_error(msg):
         raise FatalHarnessError(msg)
+
+
+# The SDK classifies terminal harness failures on ``HarnessResult.failure_type``
+# (``FailureType`` in ``agentfield.harness._result``: none/crash/timeout/
+# api_error/no_output/schema). ``schema`` means the harness *did* produce output
+# that simply failed validation — the opposite of an empty completion.
+#
+# That enum is not re-exported from any public ``agentfield`` module, so rather
+# than importing a private symbol we compare on its token. ``FailureType``
+# subclasses ``str``, so the wire value is stable and this works whether the
+# attribute arrives as an enum member or as a plain string. SDKs predating
+# ``failure_type`` yield ``""`` and keep the previous behavior.
+_SCHEMA_FAILURE_TOKEN = "schema"
+
+
+def _failure_type_token(result) -> str:
+    """Normalized ``failure_type`` token, or ``""`` when absent/unreadable."""
+    raw = getattr(result, "failure_type", None)
+    if raw is None:
+        return ""
+    token = getattr(raw, "value", None)
+    if not isinstance(token, str):
+        token = getattr(raw, "name", None)
+    if not isinstance(token, str):
+        token = str(raw)
+    token = token.strip().lower()
+    # Tolerate a repr-ish "failuretype.schema" spelling from str(enum_member).
+    return token.rsplit(".", 1)[-1]
+
+
+def _is_schema_failure(result) -> bool:
+    """Whether the SDK already classified this as a schema-validation failure."""
+    return _failure_type_token(result) == _SCHEMA_FAILURE_TOKEN
+
+
+def _harness_output_text(result) -> str:
+    """Best-effort raw completion text from a HarnessResult-like object.
+
+    Reads ``result`` (the raw completion string) first, falling back to the
+    ``text`` convenience property. Returns ``""`` when neither is populated.
+    """
+    raw = getattr(result, "result", None)
+    if not raw:
+        raw = getattr(result, "text", None)
+    return raw or ""
+
+
+def check_empty_harness_completion(
+    result, *, role: str, provider: str, model: str
+) -> None:
+    """Raise ``EmptyHarnessCompletionError`` when a harness produced no output.
+
+    Call *after* ``check_fatal_harness_error`` and *before* the caller's
+    ``parsed is None`` schema-quality check. This fires only for the "empty
+    completion" shape — neither a parsed object nor any raw text — which is the
+    signature of a provider/model mismatch (a model id meant for a different
+    runtime, or bad auth) rather than a schema-quality problem.
+
+    It is a no-op — deferring to the caller's generic schema-invalid error,
+    which should also name provider+model — when either:
+
+    - raw text *is* present but couldn't be parsed; or
+    - the SDK already classified the failure as ``failure_type=schema``. That
+      path returns ``result=None`` with no text even though the agent *did*
+      produce output (e.g. it wrote a malformed ``prd.json`` through the Write
+      tool and emitted no closing prose), so the empty-completion shape alone
+      cannot distinguish it from a real provider/model mismatch.
+
+    Parameters
+    ----------
+    result:
+        A ``HarnessResult`` (or any object exposing ``parsed`` / ``result`` /
+        ``text`` / ``failure_type`` / ``error_message``).
+    role:
+        Human label for the failing reasoner (e.g. ``"PM"``, ``"Architect"``).
+    provider:
+        The harness provider the call used (e.g. ``"codex"``, ``"opencode"``).
+    model:
+        The model id the call was made with.
+    """
+    if getattr(result, "parsed", None) is not None:
+        return
+    if _harness_output_text(result).strip():
+        return
+    if _is_schema_failure(result):
+        # The SDK's terminal schema-failure path returns result=None with
+        # failure_type=SCHEMA — e.g. an agent that wrote a malformed prd.json
+        # via the Write tool and emitted no closing prose. There *was* output;
+        # it just didn't validate. Calling that an "empty completion — check
+        # provider auth" points at the wrong root cause, so defer to the
+        # caller's schema-invalid message.
+        return
+    detail = (getattr(result, "error_message", "") or "").strip()
+    raise EmptyHarnessCompletionError(
+        role=role, provider=provider, model=model, detail=detail
+    )

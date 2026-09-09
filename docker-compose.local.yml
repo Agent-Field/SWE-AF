@@ -5,7 +5,7 @@
 #
 # Prerequisites:
 #   - AgentField control plane running on host at localhost:8080
-#   - .env file with ANTHROPIC_API_KEY (and optionally GH_TOKEN)
+#   - .env file with ANTHROPIC_API_KEY or OPENROUTER_API_KEY (and optionally GH_TOKEN)
 
 services:
   # Ephemeral Postgres for build-time integration checks (see docker-compose.yml
@@ -33,9 +33,18 @@ services:
       - PORT=8003
       # Callback URL for control plane to reach this agent
       - AGENT_CALLBACK_URL=http://localhost:8003
-      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      # Empty = auto: open_code when only an OpenRouter key is present,
+      # else claude_code. A baked claude_code fallback here would break
+      # OpenRouter-only deployments.
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
+      # Provider keys and the GitHub token, so exporting them in the shell
+      # works as well as writing them into .env.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - GH_TOKEN=${GH_TOKEN:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}
     ports:

@@ -10,26 +10,30 @@ Two binaries:
 
 | Binary            | Node ID          | Default port | Role                              |
 |-------------------|------------------|--------------|-----------------------------------|
-| `swe-planner`     | `swe-planner-go` | `8005`       | Full pipeline (plan → DAG → PR)   |
-| `swe-fast`        | `swe-fast-go`    | `8006`       | Fast mode (lighter-weight path)   |
+| `swe-planner`     | `swe-planner`    | `8005`       | Full pipeline (plan → DAG → PR)   |
+| `swe-fast`        | `swe-fast`       | `8006`       | Fast mode (lighter-weight path)   |
 
 Module path: `github.com/Agent-Field/SWE-AF/go`.
 
-## Opt-in alongside Python
+## This is the installed node
 
-The Python node is the **default**: `swe-planner` on `:8003` (and `swe-fast` on
-`:8004`), unchanged. This Go port registers **separately** under distinct
-identities — `swe-planner-go` on `:8005` and `swe-fast-go` on `:8006` — so both
-stacks can run against **one** control plane at the same time. Nothing is
-replaced; callers **opt in** by targeting the `-go` reasoner path, e.g.
+`af install https://github.com/Agent-Field/SWE-AF` installs this, under the
+name `swe-planner` — the repo-root manifest declares itself `superseded_by`
+this directory, so the bare URL lands here and an existing Python install is
+replaced in place. Same node id, same reasoner names, same triggers:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner-go.build \
+curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H 'Content-Type: application/json' \
   -d '{"input":{"goal":"...","repo_url":"https://github.com/you/repo"}}'
 ```
 
-`NODE_ID` / `PORT` still override the defaults if you want different ids/ports.
+The Python package under `swe_af/` is untouched and still what `python -m
+swe_af` and the Python compose stack run. Because both now answer to the same
+node id, running them together against **one** control plane needs an explicit
+`NODE_ID` on one of them — `docker-compose.go.yml` sets `swe-planner-go` /
+`swe-fast-go` for exactly that. `NODE_ID` / `PORT` override the defaults
+anywhere you need different ids or ports.
 
 ## Depending on the AgentField Go SDK
 
@@ -62,8 +66,8 @@ make build          # go build ./...
 make vet            # go vet ./...
 make test           # go test ./...
 make check          # vet + test
-make run-planner    # run the full-pipeline node (swe-planner-go, :8005)
-make run-fast       # run the fast-mode node   (swe-fast-go, :8006)
+make run-planner    # run the full-pipeline node (swe-planner, :8005)
+make run-fast       # run the fast-mode node   (swe-fast, :8006)
 ```
 
 `make run-planner` / `make run-fast` need a control plane reachable at
@@ -125,10 +129,14 @@ make docker-down
 
 Adds:
 
-| Service        | Port   | Node id          | Notes                                  |
-|----------------|--------|------------------|----------------------------------------|
-| `swe-agent-go` | `8005` | `swe-planner-go` | full pipeline                          |
-| `swe-fast-go`  | `8006` | `swe-fast-go`    | fast mode (runs the `swe-fast` binary) |
+| Service        | Port   | Node id          | Notes                                     |
+|----------------|--------|------------------|-------------------------------------------|
+| `swe-agent-go` | `8005` | `swe-planner-go` | full pipeline                             |
+| `swe-fast-go`  | `8006` | `swe-fast-go`    | fast mode (runs the `swe-fast` binary)    |
+
+This add-on stack overrides `NODE_ID` to the `-go` ids on purpose: it joins a
+running Python stack on one control plane, and the two would otherwise register
+under the same names.
 
 The control plane (`:8080`), `build-db`, and the `workspaces` volume come from
 the Python stack — the Go add-on joins them via the external `swe-af_default`
@@ -148,15 +156,19 @@ set; the load-bearing ones:
 |-----------------------------------------------------------|------------------------------------------------------|
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`           | Claude runtime (`claude_code`)                       |
 | `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`| Open runtimes (`open_code` / `codex`)                |
-| `GH_TOKEN`                                                | GitHub PAT (`repo` scope) for PRs                    |
-| `SWE_DEFAULT_RUNTIME`                                     | `claude_code` \| `open_code` \| `codex` (default `claude_code`) |
+| `GH_TOKEN`                                                | Optional: GitHub PAT (`repo` scope) — needed for private repos and PRs |
+| `SWE_DEFAULT_RUNTIME`                                     | `claude_code` \| `open_code` \| `codex` (unset: auto — `open_code` when only an OpenRouter key is present, else `claude_code`) |
 | `SWE_DEFAULT_MODEL`                                       | Default model when the request config omits `models` |
 | `SWE_CODEX_AUTH_MODE`                                     | `auto` \| `chatgpt` \| `api_key` (codex CLI auth)     |
 | `OPENCODE_ENABLE_EXA` + `EXA_API_KEY`                     | Optional web search for the open runtime             |
 | `AGENTFIELD_SERVER`                                       | Control-plane URL (default `http://localhost:8080`)  |
 | `AGENT_CALLBACK_URL`                                      | Public URL the control plane calls the node back on. **Required for any containerized/remote deploy that isn't this compose file** (compose sets it per service) — without it the CP gets `504 agent_unreachable` |
-| `NODE_ID`                                                 | Node ID (`swe-planner-go` / `swe-fast-go`)           |
+| `NODE_ID`                                                 | Node ID (`swe-planner` / `swe-fast`)           |
 | `PORT`                                                    | Listen port (`8005` / `8006`)                        |
+| `SWE_PRO_ENGINE`                                          | Route per-issue coding through the bundled high-performance coding engine (beta), vendored for darwin-arm64, darwin-amd64, linux-amd64, and linux-arm64. Windows is not yet supported by the engine; the node logs a warning and falls back to the classic loop there. **Set to `1` for you by `af install` / Desktop; unset (off) everywhere else** — clone, fork, compose, bare binary. `1`/`true`/`yes`/`on` enables, `0`/`false` disables |
+| `SWE_PRO_VARIANT`                                         | Engine reasoning-effort variant (e.g. `low` for fastest turnaround, `high` for depth). Unset keeps the engine's own default |
+| `SWE_PRO_MAX_COST`                                        | Per-run cost ceiling in USD forwarded to the engine on every dispatch. Unset: no SWE-AF-side ceiling |
+| `SWE_PRO_PUBLIC_URL`                                      | Callback base URL for the engine, mirroring `AGENT_CALLBACK_URL` on the nodes. **In Docker this must be set to a container-reachable URL**, otherwise the control plane can't call the engine back |
 
 Advanced knobs (HITL/approvals: `HAX_API_KEY`, `HAX_SDK_URL`, `HAX_SENDER_NAME`,
 `HAX_SENDER_KEY`, `AGENTFIELD_APPROVAL_USER_ID`; git identity for the resolve
@@ -166,20 +178,45 @@ authoritative set. The per-request build config JSON (`runtime`, `models`,
 budget/iteration knobs) is byte-identical to the Python node's — see the root
 [README](../README.md) and `.env.example` for the schema and examples.
 
-## Deployment: `af install` via the subdirectory selector
+## Coding engine (beta)
 
-This directory ships its own `agentfield-package.yaml` (node `swe-planner-go`),
-so the Go node installs like any other package — address the subdirectory with
-the installer's `//` selector:
+The Go node bundles a prebuilt high-performance coding engine alongside the
+classic coding loop. Whether it runs is decided entirely by `SWE_PRO_ENGINE`,
+and the two ways of running the node differ only in who sets that variable:
+
+- **`af install` / AgentField Desktop — on by default.**
+  `agentfield-package.yaml` declares `SWE_PRO_ENGINE` with `default: "1"` and
+  the installer's env resolver injects it, so the node supervises the engine as
+  a sidecar and routes per-issue coding through it without being asked. Set
+  `SWE_PRO_ENGINE=0` to get the classic coder → reviewer/QA loop.
+- **Anything else — off.** A clone, a fork, `docker-compose.go.yml` (which
+  passes `SWE_PRO_ENGINE` through but leaves it empty), or a bare `swe-planner`
+  binary starts on the classic loop. Set `SWE_PRO_ENGINE=1` to opt in.
+
+A missing or non-runnable binary is not fatal — the node logs a warning and
+keeps using the classic loop.
+
+Full env surface (including the `SWE_PRO_*` knobs above, model pools, and the
+sidecar's restart behaviour): [`docs/pro-engine.md`](docs/pro-engine.md).
+
+## Deployment: `af install`
+
+This directory ships its own `agentfield-package.yaml` (node `swe-planner`),
+and the repo-root manifest redirects here, so the bare repo URL is enough. The
+`//` subdirectory selector still works if you want to be explicit:
 
 ```bash
-af install https://github.com/Agent-Field/SWE-AF//go
-af run swe-planner-go       # builds bin/swe-planner at install time (needs Go)
-af uninstall swe-planner-go
+af install https://github.com/Agent-Field/SWE-AF        # redirects here
+af install https://github.com/Agent-Field/SWE-AF//go    # same thing, explicit
+af run swe-planner       # builds bin/swe-planner at install time (needs Go)
+af uninstall swe-planner
 ```
 
-The root manifest still installs the **Python** node (`swe-planner`); both can
-be installed side by side — the registry is keyed by manifest name. The SDK is
+Both manifests declare the name `swe-planner`, so only one can be installed at
+a time — installing this replaces an existing Python install in place, keeping
+its node-scoped secrets. To install the Python node deliberately, clone the
+repo and install the checkout as a local path; local-path installs do not
+follow the redirect. The SDK is
 pinned in `go.mod` by pseudo-version (the same commit the Dockerfile pins), so
 the module resolves without the dev workspace. Docker image / compose / bare
 binary remain the container deployment paths.

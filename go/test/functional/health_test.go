@@ -19,8 +19,8 @@ func TestHealth(t *testing.T) {
 		name string
 		url  string
 	}{
-		{"swe-planner-go", plannerBaseURL + "/health"},
-		{"swe-fast-go", fastBaseURL + "/health"},
+		{"swe-planner", plannerBaseURL + "/health"},
+		{"swe-fast", fastBaseURL + "/health"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

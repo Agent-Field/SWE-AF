@@ -74,7 +74,7 @@ func haxTestServer(t *testing.T) (*hitl.HaxClient, func()) {
 // newDeps builds Deps with a recording note channel and no HITL (Hax nil).
 func newDeps(h *fakeHarness) (*Deps, *recNote) {
 	notes := &recNote{}
-	return &Deps{Harness: h, App: notes, NodeID: "swe-planner-go"}, notes
+	return &Deps{Harness: h, App: notes, NodeID: "swe-planner"}, notes
 }
 
 func keys(m map[string]any) map[string]bool {
@@ -180,7 +180,7 @@ func TestProductManagerDirectCallRuntimeDefaults(t *testing.T) {
 		clearRuntimeEnv(t)
 		t.Setenv("OPENROUTER_API_KEY", "test-key")
 		opts := run(t, map[string]any{})
-		if opts.Provider != "opencode" || opts.Model != "openrouter/deepseek/deepseek-v4-flash" {
+		if opts.Provider != "opencode" || opts.Model != "openrouter/deepseek/deepseek-v4-flash-0731" {
 			t.Fatalf("defaults = provider %q, model %q", opts.Provider, opts.Model)
 		}
 	})

@@ -65,13 +65,14 @@ ENV PATH="/root/.opencode/bin:${PATH}"
 # env override has *some* value to interpolate. Railway / docker-compose
 # overrides win because their env injects after the image's ENV.
 #
-# The provider block itself lives in docker/opencode.json (shared with
-# go/Dockerfile) so the two images cannot drift apart. It declares the
-# existing provider plus infron; a provider with no key set is simply never
-# selected, so shipping both costs nothing at runtime.
-ENV HARNESS_MODEL=openrouter/moonshotai/kimi-k2.6
+# The value MUST match _OPENROUTER_AUTO_DEFAULT_MODEL (swe_af/execution/
+# schemas.py) — it is what an OpenRouter-only deploy actually runs, since the
+# model-resolution cascade reads HARNESS_MODEL for the open_code runtime (and
+# ONLY for open_code: claude_code / codex deployments resolve their own
+# runtime defaults and never see this variable).
+ENV HARNESS_MODEL=openrouter/deepseek/deepseek-v4-flash-0731
 RUN mkdir -p /root/.config/opencode
-COPY docker/opencode.json /root/.config/opencode/opencode.json
+COPY opencode.json /root/.config/opencode/opencode.json
 
 # Git identity — env vars take highest precedence and are inherited by all
 # subprocesses including Claude Code agent instances spawned by the SDK

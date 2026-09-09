@@ -131,19 +131,23 @@ const (
 	codexAPIKeyModel  = "gpt-5.3-codex" // OpenAI API-key auth (api_key mode)
 	codexChatGPTModel = "gpt-5.5"       // ChatGPT-account auth (-codex blocked)
 
-	// Default model for the auto-selected OpenRouter path (see openRouterOnlyEnv).
-	openRouterAutoDefaultModel = "openrouter/deepseek/deepseek-v4-flash"
+	// Default model for the open_code runtime — both the auto-selected
+	// OpenRouter path (see openRouterOnlyEnv) and an explicit
+	// SWE_DEFAULT_RUNTIME=open_code resolve here, so opting in explicitly
+	// never silently swaps the model.
+	openRouterAutoDefaultModel = "openrouter/deepseek/deepseek-v4-flash-0731"
 
 	// Default model for the auto-selected Infron path (see infronOnlyEnv).
 	// Infron is OpenAI-compatible and serves the standard <provider>/<model>
 	// ids, so this is the existing gateway default with the prefix swapped.
-	infronAutoDefaultModel = "infron/deepseek/deepseek-v4-flash"
+	infronAutoDefaultModel = "infron/deepseek/deepseek-v4-flash-0731"
 )
 
 // runtimeBaseModels ports _RUNTIME_BASE_MODELS[runtime] as a fresh copy for the
 // given runtime, or nil if the runtime is unknown. claude_code is all "sonnet"
-// except qa_synthesizer_model="haiku"; open_code is all minimax; codex is all
-// the API-key model (adjusted for auth mode by ResolveRuntimeModels).
+// except qa_synthesizer_model="haiku"; open_code is all
+// openRouterAutoDefaultModel (v4-flash-0731); codex is all the API-key model
+// (adjusted for auth mode by ResolveRuntimeModels).
 func runtimeBaseModels(runtime string) map[string]string {
 	base := make(map[string]string, len(AllModelFields))
 	switch runtime {
@@ -154,7 +158,7 @@ func runtimeBaseModels(runtime string) map[string]string {
 		base["qa_synthesizer_model"] = "haiku"
 	case "open_code":
 		for _, field := range AllModelFields {
-			base[field] = "openrouter/minimax/minimax-m2.5"
+			base[field] = openRouterAutoDefaultModel
 		}
 	case "codex":
 		for _, field := range AllModelFields {
@@ -255,8 +259,17 @@ var defaultModelEnvVars = []string{"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MOD
 
 // defaultModelFromEnv ports _default_model_from_env: first non-empty (stripped)
 // of SWE_DEFAULT_MODEL → AI_MODEL → HARNESS_MODEL, else "" (meaning None).
-func defaultModelFromEnv() string {
+//
+// HARNESS_MODEL is an OpenCode-ecosystem variable — it also feeds OpenCode's
+// small_model via config interpolation, and the Docker image bakes a default
+// value precisely so that interpolation always has one — so it is consulted
+// only for the open_code runtime. Letting it steer claude_code / codex pushed
+// the image's baked openrouter/… id into CLIs that cannot consume it.
+func defaultModelFromEnv(runtime string) string {
 	for _, v := range defaultModelEnvVars {
+		if v == "HARNESS_MODEL" && runtime != "open_code" {
+			continue
+		}
 		if value := envStripped(v); value != "" {
 			return value
 		}
@@ -288,7 +301,7 @@ func DefaultPlanningModel() string {
 	if highModel := tierModelsFromEnv()["high"]; highModel != "" {
 		return highModel
 	}
-	if envModel := defaultModelFromEnv(); envModel != "" {
+	if envModel := defaultModelFromEnv(DefaultRuntime()); envModel != "" {
 		return envModel
 	}
 	if openRouterOnlyEnv() {
@@ -402,7 +415,7 @@ func ResolveRuntimeModels(runtime string, models map[string]string, fieldNames [
 		resolved[field] = base[field]
 	}
 
-	if envDefault := defaultModelFromEnv(); envDefault != "" {
+	if envDefault := defaultModelFromEnv(runtime); envDefault != "" {
 		for _, field := range fieldNames {
 			resolved[field] = envDefault
 		}

@@ -51,7 +51,7 @@ func ciCfg() *config.BuildConfig {
 
 func ciReq(app *mockApp, resolved map[string]string) CIGateRequest {
 	return CIGateRequest{
-		Deps:              &Deps{App: app, NodeID: "swe-planner-go"},
+		Deps:              &Deps{App: app, NodeID: "swe-planner"},
 		Cfg:               ciCfg(),
 		Resolved:          resolved,
 		RepoPath:          "/tmp/repo",

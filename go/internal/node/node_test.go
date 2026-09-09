@@ -61,40 +61,43 @@ var pythonFastReasoners = []string{"build", "fast_plan_tasks", "fast_execute_tas
 var pythonIssueReasoners = []string{"implement_issue"}
 
 func TestRegisterPlannerExactSurface(t *testing.T) {
-	n, err := BuildAgent("swe-planner-go", "8005", "Autonomous SWE planning pipeline")
+	// Pin the pro engine off so an inherited SWE_PRO_ENGINE cannot
+	// widen the surface under test (the gated surface has its own test).
+	t.Setenv("SWE_PRO_ENGINE", "")
+	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
 	}
 	n.RegisterPlanner()
 
-	// swe-planner-go surface = 25 roles + 5 orchestrators + implement_issue
+	// swe-planner surface = 25 roles + 5 orchestrators + implement_issue
 	// = 31 unique names.
 	want := append(append([]string(nil), pythonRoleSurface...), pythonOrchestrators...)
 	want = append(want, pythonIssueReasoners...)
-	assertSurface(t, "swe-planner-go", n.RegisteredNames(), want)
+	assertSurface(t, "swe-planner", n.RegisteredNames(), want)
 }
 
 func TestRegisterFastExactSurface(t *testing.T) {
-	n, err := BuildAgent("swe-fast-go", "8006", "fast desc")
+	n, err := BuildAgent("swe-fast", "8006", "fast desc")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
 	}
 	n.RegisterFast()
 
-	// swe-fast-go surface = 25 roles + 4 fast reasoners + implement_issue
+	// swe-fast surface = 25 roles + 4 fast reasoners + implement_issue
 	// = 30 unique names. It must NOT contain plan/execute/resolve/resume_build
-	// (those live only on swe-planner-go) — assertSurface's extra-name check
+	// (those live only on swe-planner) — assertSurface's extra-name check
 	// enforces that.
 	want := append(append([]string(nil), pythonRoleSurface...), pythonFastReasoners...)
 	want = append(want, pythonIssueReasoners...)
-	assertSurface(t, "swe-fast-go", n.RegisteredNames(), want)
+	assertSurface(t, "swe-fast", n.RegisteredNames(), want)
 }
 
 // TestFastWrappersAreBackedByRoles verifies the seven delegating wrappers
-// (fast/__init__.py) are present on the swe-fast-go surface — each is one of the
+// (fast/__init__.py) are present on the swe-fast surface — each is one of the
 // role names, backed by the full-pipeline role handler (fast.Wrappers identity).
 func TestFastWrappersAreBackedByRoles(t *testing.T) {
-	n, err := BuildAgent("swe-fast-go", "8006", "fast desc")
+	n, err := BuildAgent("swe-fast", "8006", "fast desc")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
 	}
@@ -103,7 +106,7 @@ func TestFastWrappersAreBackedByRoles(t *testing.T) {
 	got := toSet(n.RegisteredNames())
 	for _, w := range fast.WrapperNames() {
 		if !got[w] {
-			t.Errorf("fast wrapper %q not registered on swe-fast-go surface", w)
+			t.Errorf("fast wrapper %q not registered on swe-fast surface", w)
 		}
 	}
 	// Every wrapper must also be one of the role names (identity delegation).

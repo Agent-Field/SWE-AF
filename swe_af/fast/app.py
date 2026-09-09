@@ -21,6 +21,7 @@ from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.schemas import _workspace_root
 from swe_af.fast import fast_router
 from swe_af.fast.schemas import FastBuildConfig, FastBuildResult, fast_resolve_models
+from swe_af.surface import TAG_ENTRYPOINT
 
 NODE_ID = os.getenv("NODE_ID", "swe-fast")
 
@@ -62,7 +63,7 @@ def _runtime_to_provider(runtime: str) -> str:
 
 
 @app.reasoner(
-    tags=["entrypoint"],
+    tags=[TAG_ENTRYPOINT],
     description=(
         "Fast-mode build: one planning pass into a small task list, then code and "
         "verify with tight timeouts. Same goal/repo_path interface as "

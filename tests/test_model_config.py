@@ -85,11 +85,11 @@ class TestResolveRuntimeModels(unittest.TestCase):
         self.assertEqual(resolved["qa_synthesizer_model"], "haiku")
 
     def test_open_code_defaults(self) -> None:
-        # No provider env set → not the auto-OpenRouter path → minimax base default.
+        # No provider env set → the shared open_code base default applies.
         with _provider_env():
             resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(resolved[field], "openrouter/minimax/minimax-m2.5")
+            self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731")
 
     def test_models_default_applies_to_all(self) -> None:
         resolved = resolve_runtime_models(
@@ -127,7 +127,7 @@ class TestBuildConfig(unittest.TestCase):
             cfg = BuildConfig(runtime="open_code")
             self.assertEqual(cfg.ai_provider, "opencode")
             resolved = cfg.resolved_models()
-        self.assertEqual(resolved["coder_model"], "openrouter/minimax/minimax-m2.5")
+        self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash-0731")
 
 
 class TestInfronAutoSelection(unittest.TestCase):
@@ -151,13 +151,28 @@ class TestInfronAutoSelection(unittest.TestCase):
         with _provider_env(INFRON_API_KEY="sk-inf"):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(resolved[field], "infron/deepseek/deepseek-v4-flash")
+            self.assertEqual(resolved[field], "infron/deepseek/deepseek-v4-flash-0731")
 
-    def test_explicit_open_code_keeps_minimax(self) -> None:
+    def test_explicit_open_code_uses_current_base_default(self) -> None:
         with _provider_env(INFRON_API_KEY="sk-inf", SWE_DEFAULT_RUNTIME="open_code"):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(resolved[field], "openrouter/minimax/minimax-m2.5")
+            self.assertEqual(
+                resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731"
+            )
+
+    def test_harness_model_overrides_infron_auto_default(self) -> None:
+        openrouter_model = "openrouter/deepseek/deepseek-v4-flash-0731"
+        with _provider_env(INFRON_API_KEY="sk-inf", HARNESS_MODEL=openrouter_model):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], openrouter_model)
+
+        infron_model = "infron/deepseek/deepseek-v4-flash-0731"
+        with _provider_env(INFRON_API_KEY="sk-inf", HARNESS_MODEL=infron_model):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], infron_model)
 
     def test_swe_default_model_overrides_auto(self) -> None:
         with _provider_env(
@@ -176,7 +191,9 @@ class TestInfronAutoSelection(unittest.TestCase):
             cfg = BuildConfig()
             self.assertEqual(cfg.runtime, "open_code")
             resolved = cfg.resolved_models()
-        self.assertEqual(resolved["coder_model"], "infron/deepseek/deepseek-v4-flash")
+        self.assertEqual(
+            resolved["coder_model"], "infron/deepseek/deepseek-v4-flash-0731"
+        )
 
     def test_model_ids_unchanged_after_prefix_swap(self) -> None:
         """The model id itself does not change across gateways, so the defaults
@@ -217,15 +234,16 @@ class TestOpenRouterAutoSelection(unittest.TestCase):
         with _provider_env(OPENROUTER_API_KEY="sk-or"):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash")
+            self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731")
 
-    def test_explicit_open_code_keeps_minimax(self) -> None:
-        # A deployer who explicitly sets open_code keeps the runtime's own
-        # default even with an OpenRouter key present.
+    def test_explicit_open_code_same_default(self) -> None:
+        # A deployer who explicitly sets open_code resolves to the SAME model
+        # as the auto-selected OpenRouter path — opting in explicitly must
+        # never silently swap the model.
         with _provider_env(OPENROUTER_API_KEY="sk-or", SWE_DEFAULT_RUNTIME="open_code"):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
         for field in ALL_MODEL_FIELDS:
-            self.assertEqual(resolved[field], "openrouter/minimax/minimax-m2.5")
+            self.assertEqual(resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731")
 
     def test_swe_default_model_overrides_auto_deepseek(self) -> None:
         with _provider_env(OPENROUTER_API_KEY="sk-or", SWE_DEFAULT_MODEL="openrouter/qwen/qwen-3"):
@@ -238,7 +256,7 @@ class TestOpenRouterAutoSelection(unittest.TestCase):
             cfg = BuildConfig()
             self.assertEqual(cfg.runtime, "open_code")
             resolved = cfg.resolved_models()
-        self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash")
+        self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash-0731")
 
     def test_infron_key_does_not_disturb_existing_gateway(self) -> None:
         # Adding an Infron key alongside an existing one must not reroute
@@ -255,7 +273,7 @@ class TestOpenRouterAutoSelection(unittest.TestCase):
         self.assertEqual(d["models"]["coder"], "deepseek/deepseek-chat")
         exec_cfg = ExecutionConfig(**d)
         self.assertEqual(exec_cfg.coder_model, "deepseek/deepseek-chat")
-        self.assertEqual(exec_cfg.qa_model, "openrouter/minimax/minimax-m2.5")
+        self.assertEqual(exec_cfg.qa_model, "openrouter/deepseek/deepseek-v4-flash-0731")
 
     def test_legacy_top_level_keys_rejected(self) -> None:
         with self.assertRaises(ValueError) as ctx:
@@ -436,7 +454,7 @@ class TestDefaultModelFromEnv(unittest.TestCase):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
             for field in ALL_MODEL_FIELDS:
                 self.assertEqual(
-                    resolved[field], "openrouter/minimax/minimax-m2.5"
+                    resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731"
                 )
 
     def test_unset_env_uses_runtime_base(self) -> None:
@@ -446,7 +464,7 @@ class TestDefaultModelFromEnv(unittest.TestCase):
             resolved = resolve_runtime_models(runtime="open_code", models=None)
             for field in ALL_MODEL_FIELDS:
                 self.assertEqual(
-                    resolved[field], "openrouter/minimax/minimax-m2.5"
+                    resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731"
                 )
 
     def test_ai_model_env_used_when_swe_default_unset(self) -> None:
@@ -473,6 +491,42 @@ class TestDefaultModelFromEnv(unittest.TestCase):
                 self.assertEqual(
                     resolved[field], "openrouter/moonshotai/kimi-k2.6"
                 )
+
+    def test_harness_model_ignored_on_claude_code(self) -> None:
+        # HARNESS_MODEL is OpenCode-scoped: the Docker image bakes a default
+        # value for OpenCode's small_model interpolation, so honoring it on
+        # claude_code would silently push an openrouter/… id into the Claude
+        # CLI on every Docker deployment.
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
+        env["HARNESS_MODEL"] = "openrouter/deepseek/deepseek-v4-flash-0731"
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="claude_code", models=None)
+            self.assertEqual(resolved["pm_model"], "sonnet")
+            self.assertEqual(resolved["qa_synthesizer_model"], "haiku")
+
+    def test_harness_model_ignored_on_codex(self) -> None:
+        # Same scoping for codex: it resolves its auth-mode default instead of
+        # the baked OpenCode fallback (pre-fix this failed the PM in ~13s).
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
+        env["HARNESS_MODEL"] = "openrouter/deepseek/deepseek-v4-flash-0731"
+        env["SWE_CODEX_AUTH_MODE"] = "api_key"
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="codex", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(resolved[field], "gpt-5.3-codex")
+
+    def test_swe_default_model_still_applies_on_claude_code(self) -> None:
+        # Only HARNESS_MODEL is runtime-scoped — the deployer-intent vars
+        # (SWE_DEFAULT_MODEL, AI_MODEL) keep steering every runtime.
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
+        env["AI_MODEL"] = "claude-opus-5"
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="claude_code", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(resolved[field], "claude-opus-5")
 
     def test_swe_default_model_beats_ai_model_in_cascade(self) -> None:
         # When both are set, the SWE-specific name wins so deployers can
@@ -524,8 +578,8 @@ class TestExecutionConfig(unittest.TestCase):
     def test_open_code_resolution(self) -> None:
         cfg = ExecutionConfig(runtime="open_code")
         self.assertEqual(cfg.ai_provider, "opencode")
-        self.assertEqual(cfg.coder_model, "openrouter/minimax/minimax-m2.5")
-        self.assertEqual(cfg.qa_synthesizer_model, "openrouter/minimax/minimax-m2.5")
+        self.assertEqual(cfg.coder_model, "openrouter/deepseek/deepseek-v4-flash-0731")
+        self.assertEqual(cfg.qa_synthesizer_model, "openrouter/deepseek/deepseek-v4-flash-0731")
 
     def test_models_override(self) -> None:
         cfg = ExecutionConfig(runtime="claude_code", models={"default": "sonnet", "qa": "opus"})
@@ -561,7 +615,7 @@ class TestExecutionConfig(unittest.TestCase):
         self.assertEqual(cfg.ci_fixer_model, "sonnet")
 
         cfg = ExecutionConfig(runtime="open_code")
-        self.assertEqual(cfg.ci_fixer_model, "openrouter/minimax/minimax-m2.5")
+        self.assertEqual(cfg.ci_fixer_model, "openrouter/deepseek/deepseek-v4-flash-0731")
 
         cfg = ExecutionConfig(
             runtime="claude_code", models={"ci_fixer": "opus"}
@@ -628,6 +682,32 @@ class TestRuntimeProviderMapping(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             normalize_runtime_provider("bad_runtime")
+
+
+class TestDockerfileHarnessModelDefault(unittest.TestCase):
+    """Guard: the HARNESS_MODEL the images bake must be the OpenRouter auto
+    default the code and README promise. Docker layer caching plus the env
+    cascade means a drifted value silently becomes what every OpenRouter-only
+    deployment actually runs (that is exactly how kimi-k2.6 shipped)."""
+
+    def _dockerfile_value(self, relpath: str) -> str:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, relpath), encoding="utf-8") as fp:
+            for line in fp:
+                if line.startswith("ENV HARNESS_MODEL="):
+                    return line.strip().split("=", 1)[1]
+        raise AssertionError(f"no ENV HARNESS_MODEL line in {relpath}")
+
+    def test_python_image_matches_auto_default(self) -> None:
+        self.assertEqual(
+            self._dockerfile_value("Dockerfile"), _OPENROUTER_AUTO_DEFAULT_MODEL
+        )
+
+    def test_go_image_matches_auto_default(self) -> None:
+        self.assertEqual(
+            self._dockerfile_value(os.path.join("go", "Dockerfile")),
+            _OPENROUTER_AUTO_DEFAULT_MODEL,
+        )
 
 
 if __name__ == "__main__":

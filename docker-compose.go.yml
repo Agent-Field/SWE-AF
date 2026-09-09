@@ -2,8 +2,11 @@
 #
 # The Python docker-compose.yml is the DEFAULT stack (control plane + the Python
 # swe-planner/swe-fast nodes) and is left 100% untouched. This file adds ONLY
-# the two Go nodes, registered under DISTINCT identities so both stacks can run
-# against one control plane simultaneously:
+# the two Go nodes. Both implementations now default to the SAME node ids
+# (swe-planner / swe-fast) — they are one node, not siblings — so running them
+# together requires overriding NODE_ID here, which is what the services below
+# do. That override exists solely for side-by-side comparison; an installed Go
+# node keeps its own default ids.
 #
 #     swe-agent-go  ->  node id "swe-planner-go", :8005
 #     swe-fast-go   ->  node id "swe-fast-go",    :8006
@@ -45,11 +48,30 @@ services:
       - NODE_ID=swe-planner-go
       - PORT=8005
       - AGENT_CALLBACK_URL=http://swe-agent-go:8005
-      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      # Empty = auto: open_code when only an OpenRouter key is present,
+      # else claude_code. A baked claude_code fallback here would break
+      # OpenRouter-only deployments.
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - GH_TOKEN=${GH_TOKEN:-}
+      # High-performance coding engine. The on-by-default behaviour belongs to
+      # `af install` alone (its manifest injects SWE_PRO_ENGINE=1); a checkout
+      # running in production keeps the binary's own default — off — so export
+      # SWE_PRO_ENGINE=1 to enable it here. The public URL must be
+      # container-reachable: the engine otherwise advertises
+      # http://localhost:8801, which the control plane cannot reach from its
+      # own container.
+      - SWE_PRO_ENGINE=${SWE_PRO_ENGINE:-}
+      - SWE_PRO_PUBLIC_URL=${SWE_PRO_PUBLIC_URL:-http://swe-agent-go:8801}
+      - SWE_PRO_MODELS_HIGH=${SWE_PRO_MODELS_HIGH:-}
+      - SWE_PRO_MODELS_LOW=${SWE_PRO_MODELS_LOW:-}
+      - SWE_PRO_VARIANT=${SWE_PRO_VARIANT:-}
+      - SWE_PRO_MAX_COST=${SWE_PRO_MAX_COST:-}
       # Go direct-LLM path (run_qa_synthesizer via the SDK ai.DefaultConfig
       # client). An OPENAI/OPENROUTER key enables it; AI_BASE_URL/AI_MODEL
       # override the endpoint/default model. No key -> deterministic fallback.
@@ -76,9 +98,9 @@ services:
       - NODE_ID=swe-fast-go
       - PORT=8006
       - AGENT_CALLBACK_URL=http://swe-fast-go:8006
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
-      - GH_TOKEN=${GH_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - GH_TOKEN=${GH_TOKEN:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -87,7 +109,8 @@ services:
       - AI_BASE_URL=${AI_BASE_URL:-}
       - AI_MODEL=${AI_MODEL:-}
       - OPENCODE_MODEL=${OPENCODE_MODEL:-}
-      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-claude_code}
+      # Empty = auto (see swe-agent-go note).
+      - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       # build-db lives in the Python stack; reachable over the shared network.

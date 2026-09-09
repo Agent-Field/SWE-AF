@@ -18,7 +18,11 @@ from pydantic import (
     model_validator,
 )
 from swe_af.hitl.ask_user import AskUserForm
-from swe_af.runtime.providers import RUNTIME_VALUES, runtime_to_harness_provider
+from swe_af.runtime.providers import (
+    RUNTIME_VALUES,
+    normalize_runtime_provider,
+    runtime_to_harness_provider,
+)
 
 # Global default for all agent max_turns. Change this one value to adjust everywhere.
 DEFAULT_AGENT_MAX_TURNS: int = 150
@@ -606,13 +610,23 @@ _LEGACY_TOP_LEVEL_EQUIVALENTS: dict[str, str] = {
 _CODEX_API_KEY_MODEL = "gpt-5.3-codex"   # OpenAI API-key auth (api_key mode)
 _CODEX_CHATGPT_MODEL = "gpt-5.5"         # ChatGPT-account auth (-codex blocked)
 
+# Default model for the open_code runtime — both the auto-selected OpenRouter
+# path (see _openrouter_only_env) and an explicit SWE_DEFAULT_RUNTIME=open_code
+# resolve here, so opting in explicitly never silently swaps the model.
+_OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
+
+# Default model for the auto-selected Infron path (see _infron_only_env).
+# Infron is OpenAI-compatible and serves the standard <provider>/<model> ids,
+# so this is the existing gateway default with the prefix swapped.
+_INFRON_AUTO_DEFAULT_MODEL = "infron/deepseek/deepseek-v4-flash-0731"
+
 _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "claude_code": {
         **{field: "sonnet" for field in ALL_MODEL_FIELDS},
         "qa_synthesizer_model": "haiku",
     },
     "open_code": {
-        **{field: "openrouter/minimax/minimax-m2.5" for field in ALL_MODEL_FIELDS},
+        **{field: _OPENROUTER_AUTO_DEFAULT_MODEL for field in ALL_MODEL_FIELDS},
     },
     "codex": {
         **{field: _CODEX_API_KEY_MODEL for field in ALL_MODEL_FIELDS},
@@ -649,15 +663,6 @@ def _codex_default_model() -> str:
 
 def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode", "codex"]:
     return runtime_to_harness_provider(runtime)  # type: ignore[return-value]
-
-
-# Default model for the auto-selected OpenRouter path (see _openrouter_only_env).
-_OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash"
-
-# Default model for the auto-selected Infron path (see _infron_only_env).
-# Infron is OpenAI-compatible and serves the standard <provider>/<model> ids,
-# so this is the existing gateway default with the prefix swapped.
-_INFRON_AUTO_DEFAULT_MODEL = "infron/deepseek/deepseek-v4-flash"
 
 
 def _openrouter_only_env() -> bool:
@@ -701,9 +706,10 @@ def _default_runtime() -> Literal["claude_code", "open_code", "codex"]:
 
     Lets the deployer pick the runtime without every caller having to pass
     a config. When ``SWE_DEFAULT_RUNTIME`` is unset, auto-selects ``open_code``
-    if only an OpenRouter key is present (see ``_openrouter_only_env``),
-    otherwise ``claude_code``. Logs and falls back to ``claude_code`` when the
-    env value isn't a valid runtime.
+    if only an OpenRouter or Infron key is present (see
+    ``_openrouter_only_env`` and ``_infron_only_env``), otherwise
+    ``claude_code``. Logs and falls back to ``claude_code`` when the env value
+    isn't a valid runtime.
     """
     value = os.getenv("SWE_DEFAULT_RUNTIME", "").strip()
     if not value:
@@ -727,8 +733,8 @@ _DEFAULT_MODEL_ENV_VARS: tuple[str, ...] = (
 )
 
 
-def _default_model_from_env() -> str | None:
-    """Pick a single model id from deployer env vars.
+def _default_model_from_env(runtime: str) -> str | None:
+    """Pick a single model id from deployer env vars, for ``runtime``.
 
     Cascades through the well-known env-var names this stack uses for model
     selection so the same Railway / docker-compose variable that points
@@ -737,11 +743,21 @@ def _default_model_from_env() -> str | None:
 
         SWE_DEFAULT_MODEL  →  AI_MODEL  →  HARNESS_MODEL
 
+    ``HARNESS_MODEL`` is an OpenCode-ecosystem variable — it also feeds
+    OpenCode's ``small_model`` via config interpolation, and the Docker image
+    bakes a default value precisely so that interpolation always has one — so
+    it only participates in the cascade for the ``open_code`` runtime. Letting
+    it steer ``claude_code`` / ``codex`` pushed the image's baked
+    ``openrouter/…`` id into CLIs that cannot consume it, breaking every
+    non-OpenCode Docker deployment that didn't also set ``SWE_DEFAULT_MODEL``.
+
     Caller-supplied ``models={"default": …}`` and per-role overrides still
     beat the env value (see ``resolve_runtime_models`` precedence). All
     unset / empty → ``None``, which means "use the runtime base defaults".
     """
     for var in _DEFAULT_MODEL_ENV_VARS:
+        if var == "HARNESS_MODEL" and runtime != "open_code":
+            continue
         value = os.getenv(var, "").strip()
         if value:
             return value
@@ -764,34 +780,60 @@ def _tier_models_from_env() -> dict[str, str]:
     return tiers
 
 
-def _default_planning_model() -> str:
+def _default_planning_model(runtime: str | None = None) -> str:
     """Model for the planning reasoners (the ``plan`` pipeline) when the caller
-    passes no model.
+    passes no model, resolved for the *given runtime*.
 
     The planning reasoners take an explicit ``model`` argument rather than a
-    runtime ``models={}`` config, so the ``resolve_runtime_models`` cascade
-    doesn't apply to them. This mirrors that cascade for the planning path so an
-    OpenRouter-only deployment is zero-config. The planning reasoners are
-    high-tier roles (see ``ROLE_TO_TIER``), so ``SWE_MODEL_HIGH`` beats the
-    generic default-model env — the same relative precedence tier env vars have
-    in ``resolve_runtime_models``. Precedence, first match wins:
+    runtime ``models={}`` config, so the SDK never runs the
+    ``resolve_runtime_models`` cascade for them. This delegates to that same
+    cascade for the high-tier ``pm`` role so the planning path picks a model
+    that is valid for ``runtime`` — critically, the auto default is
+    runtime-gated and never leaks a provider-prefixed id (e.g. an
+    ``openrouter/…`` model) into a runtime whose CLI cannot consume it. That
+    cross-runtime leak was the root cause of silent ~1s empty completions when a
+    caller pinned ``codex`` in an OpenRouter-only environment.
+
+    ``runtime`` is normalized (aliases like ``claude`` / ``opencode`` accepted).
+    When omitted, the runtime is resolved from the environment via
+    ``_default_runtime`` — and the auto default then follows *that* runtime.
+    Omitting the argument therefore does **not** reproduce the old env-only
+    cascade in every configuration. The old cascade returned ``sonnet`` whenever
+    ``SWE_DEFAULT_RUNTIME`` was set to anything at all (setting it opts out of
+    ``_openrouter_only_env``), so these deployments change behavior:
+
+        SWE_DEFAULT_RUNTIME=open_code, no model env  → was ``sonnet``,
+            now the ``open_code`` base default
+        SWE_DEFAULT_RUNTIME=codex, no model env      → was ``sonnet``,
+            now the codex base default for the active auth mode
+
+    That is the intended fix, not a regression: a deployer who pinned a runtime
+    was silently getting a *Claude* planning model for it. Everything else is
+    unchanged — no ``SWE_DEFAULT_RUNTIME`` (auto-selection, both the
+    OpenRouter-only and the Claude branch), ``SWE_DEFAULT_RUNTIME=claude_code``,
+    and an invalid ``SWE_DEFAULT_RUNTIME`` all resolve exactly as before, as does
+    any configuration that sets a model env var (layers 1–2 below).
+
+    Precedence is inherited from ``resolve_runtime_models`` (highest first):
 
         1. ``SWE_MODEL_HIGH`` (planning reasoners are high-tier)
-        2. deployer env (``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` → ``HARNESS_MODEL``)
-        3. the OpenRouter default when only an OpenRouter key is present
-        4. the Claude ``sonnet`` alias (historical default)
+        2. deployer env (``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` →
+           ``HARNESS_MODEL``, the latter only on ``open_code``)
+        3. the runtime's own auto/base default:
+             - ``codex``       → a codex-native model (never ``openrouter/…``)
+             - ``open_code``   → the OpenRouter auto default (OpenRouter-only
+                                 env) or the ``open_code`` base default
+             - ``claude_code`` → the Claude ``sonnet`` alias (historical default)
+
+    Env / explicit values (layers 1–2) still win verbatim — the deployer owns
+    them — so only the auto default (layer 3) is made runtime-aware.
     """
-    high_model = _tier_models_from_env().get("high")
-    if high_model:
-        return high_model
-    env_model = _default_model_from_env()
-    if env_model:
-        return env_model
-    if _openrouter_only_env():
-        return _OPENROUTER_AUTO_DEFAULT_MODEL
-    if _infron_only_env():
-        return _INFRON_AUTO_DEFAULT_MODEL
-    return "sonnet"
+    resolved_runtime = normalize_runtime_provider(runtime) if runtime else _default_runtime()
+    return resolve_runtime_models(
+        runtime=resolved_runtime,
+        models=None,
+        field_names=["pm_model"],
+    )["pm_model"]
 
 
 def _legacy_hint_for_model_key(key: str) -> str:
@@ -865,7 +907,9 @@ def resolve_runtime_models(
     Resolution order (lowest → highest precedence):
         1. runtime base defaults (``_RUNTIME_BASE_MODELS[runtime]``)
         2. env-var cascade: ``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` →
-           ``HARNESS_MODEL`` (first non-empty wins, applies to all roles)
+           ``HARNESS_MODEL`` (first non-empty wins, applies to all roles;
+           ``HARNESS_MODEL`` is consulted only on the ``open_code`` runtime —
+           see ``_default_model_from_env``)
         3. tier env vars: ``SWE_MODEL_LOW`` / ``SWE_MODEL_MED`` /
            ``SWE_MODEL_HIGH``, each applying to the roles in its tier
            (see ``ROLE_TO_TIER``)
@@ -897,7 +941,7 @@ def resolve_runtime_models(
         base = {field: _INFRON_AUTO_DEFAULT_MODEL for field in base}
     resolved: dict[str, str] = {field: base[field] for field in field_names}
 
-    env_default = _default_model_from_env()
+    env_default = _default_model_from_env(runtime)
     if env_default:
         for field in field_names:
             resolved[field] = env_default

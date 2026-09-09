@@ -18,7 +18,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 GO_DOCKERFILE = REPO_ROOT / "go" / "Dockerfile"
-OPENCODE_CONFIG = REPO_ROOT / "docker" / "opencode.json"
+OPENCODE_CONFIG = REPO_ROOT / "opencode.json"
 REQUIREMENTS_DOCKER = REPO_ROOT / "requirements-docker.txt"
 
 
@@ -74,21 +74,14 @@ def test_dockerfile_installs_codex_cli(dockerfile_content: str) -> None:
 
 def test_dockerfile_preserves_opencode_install(dockerfile_content: str) -> None:
     assert "https://opencode.ai/install" in dockerfile_content
-    # The provider block moved out of the Dockerfile into docker/opencode.json
-    # (shared by both images); the Dockerfile now only has to copy it in.
-    assert "docker/opencode.json" in dockerfile_content
-
-
-def test_both_dockerfiles_share_one_opencode_config() -> None:
-    """Python and Go images must copy the same config, or they drift apart."""
-    for path in (DOCKERFILE, GO_DOCKERFILE):
-        assert "COPY docker/opencode.json /root/.config/opencode/opencode.json" in (
-            path.read_text()
-        ), f"{path} must copy the shared opencode config"
+    expected_copy = "COPY opencode.json /root/.config/opencode/opencode.json"
+    assert expected_copy in dockerfile_content
+    assert expected_copy in GO_DOCKERFILE.read_text()
+    assert "OPENROUTER_API_KEY" in OPENCODE_CONFIG.read_text()
 
 
 class TestOpenCodeProviders:
-    """docker/opencode.json wires the harness providers for both images."""
+    """The root opencode.json wires the harness providers for both images."""
 
     def test_model_follows_harness_model_env(self, opencode_config: dict) -> None:
         """Both model and small_model must honor HARNESS_MODEL.
@@ -119,7 +112,7 @@ class TestOpenCodeProviders:
         # what makes this a base-URL change rather than a model-mapping
         # exercise.
         assert "moonshotai/kimi-k2.6" in models
-        assert "deepseek/deepseek-v4-flash" in models
+        assert "deepseek/deepseek-v4-flash-0731" in models
 
 
 def test_docker_requirements_pin_cryptography_below_sigill_version() -> None:

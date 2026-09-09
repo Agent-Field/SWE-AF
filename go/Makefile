@@ -24,11 +24,11 @@ lint:
 	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run || \
 		echo "golangci-lint not installed; skipping (install: https://golangci-lint.run)"
 
-# Run the full-pipeline node (swe-planner-go, default port 8005).
+# Run the full-pipeline node (swe-planner, default port 8005).
 run-planner:
 	go run ./cmd/swe-planner
 
-# Run the fast-mode node (swe-fast-go, default port 8006).
+# Run the fast-mode node (swe-fast, default port 8006).
 run-fast:
 	go run ./cmd/swe-fast
 
@@ -47,7 +47,7 @@ docker-build:
 		--build-arg AGENTFIELD_SDK_REF=$(AGENTFIELD_SDK_REF) \
 		-t $(IMAGE) ..
 
-# Bring up the Go nodes (swe-agent-go:8005 + swe-fast-go:8006) as an ADD-ON to
+# Bring up the Go nodes (swe-agent-go:8005 + swe-fast:8006) as an ADD-ON to
 # the Python stack. Start the Python stack first (`docker compose up` — it owns
 # the control plane + shared network); this add-on joins that network as an
 # external reference.

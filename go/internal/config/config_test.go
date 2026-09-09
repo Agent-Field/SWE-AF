@@ -123,11 +123,11 @@ func TestResolveRuntimeModels_ClaudeCodeDefaults(t *testing.T) {
 }
 
 func TestResolveRuntimeModels_OpenCodeDefaults(t *testing.T) {
-	clearProviderEnv(t) // no provider env -> not auto-openrouter -> minimax base
+	clearProviderEnv(t) // no provider env -> the shared open_code base applies
 	got := mustResolve(t, "open_code", nil)
 	for _, field := range AllModelFields {
-		if got[field] != "openrouter/minimax/minimax-m2.5" {
-			t.Errorf("field %s = %q, want minimax", field, got[field])
+		if got[field] != "openrouter/deepseek/deepseek-v4-flash-0731" {
+			t.Errorf("field %s = %q, want deepseek base", field, got[field])
 		}
 	}
 }
@@ -137,20 +137,24 @@ func TestResolveRuntimeModels_OpenRouterAutoDefaults(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "sk-or")
 	got := mustResolve(t, "open_code", nil)
 	for _, field := range AllModelFields {
-		if got[field] != "openrouter/deepseek/deepseek-v4-flash" {
+		if got[field] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 			t.Errorf("field %s = %q, want deepseek auto", field, got[field])
 		}
 	}
 }
 
-func TestResolveRuntimeModels_ExplicitOpenCodeKeepsMinimax(t *testing.T) {
+// TestResolveRuntimeModels_ExplicitOpenCodeSameDefault: an explicit
+// SWE_DEFAULT_RUNTIME=open_code resolves to the SAME model as the
+// auto-selected OpenRouter path — opting in explicitly must never silently
+// swap the model.
+func TestResolveRuntimeModels_ExplicitOpenCodeSameDefault(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("OPENROUTER_API_KEY", "sk-or")
 	t.Setenv("SWE_DEFAULT_RUNTIME", "open_code")
 	got := mustResolve(t, "open_code", nil)
 	for _, field := range AllModelFields {
-		if got[field] != "openrouter/minimax/minimax-m2.5" {
-			t.Errorf("field %s = %q, want minimax (explicit)", field, got[field])
+		if got[field] != "openrouter/deepseek/deepseek-v4-flash-0731" {
+			t.Errorf("field %s = %q, want deepseek (explicit)", field, got[field])
 		}
 	}
 }
@@ -201,6 +205,65 @@ func TestResolveRuntimeModels_EnvCascade(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeModels_HarnessModelScopedToOpenCode(t *testing.T) {
+	clearProviderEnv(t)
+	// The Docker image bakes HARNESS_MODEL for OpenCode's small_model
+	// interpolation; it must steer open_code only. claude_code and codex keep
+	// their runtime defaults instead of receiving an openrouter/… id their
+	// CLIs cannot consume.
+	t.Setenv("HARNESS_MODEL", "openrouter/deepseek/deepseek-v4-flash-0731")
+
+	got := mustResolve(t, "open_code", nil)
+	if got["pm_model"] != "openrouter/deepseek/deepseek-v4-flash-0731" {
+		t.Errorf("open_code honors HARNESS_MODEL = %q", got["pm_model"])
+	}
+
+	got = mustResolve(t, "claude_code", nil)
+	if got["pm_model"] != "sonnet" {
+		t.Errorf("claude_code ignores HARNESS_MODEL = %q", got["pm_model"])
+	}
+	if got["qa_synthesizer_model"] != "haiku" {
+		t.Errorf("claude_code qa_synthesizer base = %q", got["qa_synthesizer_model"])
+	}
+
+	t.Setenv("SWE_CODEX_AUTH_MODE", "api_key")
+	got = mustResolve(t, "codex", nil)
+	if got["pm_model"] != "gpt-5.3-codex" {
+		t.Errorf("codex ignores HARNESS_MODEL = %q", got["pm_model"])
+	}
+
+	// Deployer-intent vars are NOT runtime-scoped: AI_MODEL still wins on
+	// claude_code.
+	t.Setenv("AI_MODEL", "claude-opus-5")
+	got = mustResolve(t, "claude_code", nil)
+	if got["pm_model"] != "claude-opus-5" {
+		t.Errorf("claude_code honors AI_MODEL = %q", got["pm_model"])
+	}
+}
+
+func TestFastResolveModels_HarnessModelScopedToOpenCode(t *testing.T) {
+	clearProviderEnv(t)
+	t.Setenv("HARNESS_MODEL", "openrouter/qwen/qwen-3-coder")
+
+	openCfg := &FastBuildConfig{Runtime: "open_code"}
+	got, err := FastResolveModels(openCfg)
+	if err != nil {
+		t.Fatalf("FastResolveModels(open_code): %v", err)
+	}
+	if got["pm_model"] != "openrouter/qwen/qwen-3-coder" {
+		t.Errorf("fast open_code honors HARNESS_MODEL = %q", got["pm_model"])
+	}
+
+	claudeCfg := &FastBuildConfig{Runtime: "claude_code"}
+	got, err = FastResolveModels(claudeCfg)
+	if err != nil {
+		t.Fatalf("FastResolveModels(claude_code): %v", err)
+	}
+	if got["pm_model"] != "haiku" {
+		t.Errorf("fast claude_code ignores HARNESS_MODEL = %q", got["pm_model"])
+	}
+}
+
 func TestResolveRuntimeModels_EnvCascadeOrder(t *testing.T) {
 	clearProviderEnv(t)
 	// AI_MODEL used when SWE_DEFAULT_MODEL unset.
@@ -224,7 +287,7 @@ func TestResolveRuntimeModels_EmptyEnvTreatedAsUnset(t *testing.T) {
 	t.Setenv("HARNESS_MODEL", "   ")
 	got := mustResolve(t, "open_code", nil)
 	for _, field := range AllModelFields {
-		if got[field] != "openrouter/minimax/minimax-m2.5" {
+		if got[field] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 			t.Errorf("empty env -> base: field %s = %q", field, got[field])
 		}
 	}
@@ -362,7 +425,7 @@ func TestBuildConfig_OpenCodeProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved["coder_model"] != "openrouter/minimax/minimax-m2.5" {
+	if resolved["coder_model"] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Errorf("coder_model = %q", resolved["coder_model"])
 	}
 }
@@ -378,7 +441,7 @@ func TestBuildConfig_AutoOpenRouterEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved["coder_model"] != "openrouter/deepseek/deepseek-v4-flash" {
+	if resolved["coder_model"] != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Errorf("coder_model = %q", resolved["coder_model"])
 	}
 }
@@ -577,7 +640,7 @@ func TestBuildConfig_ToExecutionConfigDictRoundtrip(t *testing.T) {
 	if execCfg.CoderModel() != "deepseek/deepseek-chat" {
 		t.Errorf("exec coder_model = %q", execCfg.CoderModel())
 	}
-	if execCfg.QAModel() != "openrouter/minimax/minimax-m2.5" {
+	if execCfg.QAModel() != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Errorf("exec qa_model = %q", execCfg.QAModel())
 	}
 	if execCfg.MaxRetriesPerIssue != 2 {
@@ -649,7 +712,7 @@ func TestExecutionConfig_CIFixerRole(t *testing.T) {
 	if mustLoadExec(t, map[string]any{"runtime": "claude_code"}).CIFixerModel() != "sonnet" {
 		t.Error("ci_fixer default claude")
 	}
-	if mustLoadExec(t, map[string]any{"runtime": "open_code"}).CIFixerModel() != "openrouter/minimax/minimax-m2.5" {
+	if mustLoadExec(t, map[string]any{"runtime": "open_code"}).CIFixerModel() != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Error("ci_fixer default opencode")
 	}
 	cfg := mustLoadExec(t, map[string]any{"runtime": "claude_code", "models": map[string]any{"ci_fixer": "opus"}})
@@ -711,6 +774,10 @@ func TestDefaultFastRuntime(t *testing.T) {
 		{"empty -> claude_code", map[string]string{"SWE_DEFAULT_RUNTIME": ""}, true, "claude_code"},
 		{"open_code", map[string]string{"SWE_DEFAULT_RUNTIME": "open_code"}, true, "open_code"},
 		{"invalid -> claude_code", map[string]string{"SWE_DEFAULT_RUNTIME": "bogus"}, true, "claude_code"},
+		// The main path's OpenRouter auto-detect applies to fast builds too.
+		{"openrouter only -> open_code", map[string]string{"OPENROUTER_API_KEY": "sk-or"}, true, "open_code"},
+		{"openrouter + anthropic -> claude_code", map[string]string{
+			"OPENROUTER_API_KEY": "sk-or", "ANTHROPIC_API_KEY": "sk-ant"}, true, "claude_code"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -764,8 +831,33 @@ func TestFastResolveModels(t *testing.T) {
 		cfg, _ := LoadFastBuildConfig(map[string]any{"runtime": "open_code"})
 		got, _ := FastResolveModels(cfg)
 		for _, role := range fastRoles {
-			if got[role] != "qwen/qwen-2.5-coder-32b-instruct" {
-				t.Errorf("%s = %q", role, got[role])
+			if got[role] != "openrouter/deepseek/deepseek-v4-flash-0731" {
+				t.Errorf("%s = %q, want the shared open_code default", role, got[role])
+			}
+		}
+	})
+
+	t.Run("env cascade applies to fast roles", func(t *testing.T) {
+		t.Setenv("SWE_DEFAULT_MODEL", "openrouter/qwen/qwen-3-coder")
+		cfg, _ := LoadFastBuildConfig(map[string]any{"runtime": "open_code"})
+		got, _ := FastResolveModels(cfg)
+		for _, role := range fastRoles {
+			if got[role] != "openrouter/qwen/qwen-3-coder" {
+				t.Errorf("%s = %q, want env cascade value", role, got[role])
+			}
+		}
+	})
+
+	t.Run("config models beat the env cascade", func(t *testing.T) {
+		t.Setenv("SWE_DEFAULT_MODEL", "openrouter/qwen/qwen-3-coder")
+		cfg, _ := LoadFastBuildConfig(map[string]any{
+			"runtime": "open_code",
+			"models":  map[string]any{"default": "openrouter/z-ai/glm-5"},
+		})
+		got, _ := FastResolveModels(cfg)
+		for _, role := range fastRoles {
+			if got[role] != "openrouter/z-ai/glm-5" {
+				t.Errorf("%s = %q, want config override", role, got[role])
 			}
 		}
 	})

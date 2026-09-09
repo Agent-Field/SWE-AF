@@ -181,7 +181,7 @@ func TestRunCoderDirectCallRuntimeDefaults(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RunCoder: %v", err)
 	}
-	if mh.gotOpts.Provider != "opencode" || mh.gotOpts.Model != "openrouter/deepseek/deepseek-v4-flash" {
+	if mh.gotOpts.Provider != "opencode" || mh.gotOpts.Model != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Fatalf("defaults = provider %q, model %q", mh.gotOpts.Provider, mh.gotOpts.Model)
 	}
 }

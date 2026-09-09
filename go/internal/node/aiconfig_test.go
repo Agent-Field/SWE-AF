@@ -37,9 +37,9 @@ func TestResolveAIConfigWithoutKey(t *testing.T) {
 // (AIConfig nil) when no AI key is present.
 func TestBuildAgentConstructsWithoutKey(t *testing.T) {
 	clearAIKeys(t)
-	t.Setenv("NODE_ID", "swe-planner-go-test")
+	t.Setenv("NODE_ID", "swe-planner-test")
 
-	n, err := BuildAgent("swe-planner-go", "8005", "test node")
+	n, err := BuildAgent("swe-planner", "8005", "test node")
 	if err != nil {
 		t.Fatalf("BuildAgent errored without an AI key: %v", err)
 	}

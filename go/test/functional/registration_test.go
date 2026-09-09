@@ -14,10 +14,12 @@ import (
 // fast reasoners + the same roles), NOT from reading the Go register.go. The
 // test fails loudly on any missing or extra name.
 
-// plannerReasoners: 5 orchestrators + 25 role reasoners = 30.
+// plannerReasoners: 5 orchestrators + 25 role reasoners + implement_issue = 31.
 var plannerReasoners = []string{
 	// orchestrators (swe_af/app.py)
 	"build", "plan", "execute", "resolve", "resume_build",
+	// issue-level entry point (swe_af/issue, included by both apps)
+	"implement_issue",
 	// planning roles
 	"run_product_manager", "run_environment_scout", "run_architect",
 	"run_tech_lead", "run_sprint_planner",
@@ -33,9 +35,9 @@ var plannerReasoners = []string{
 	"run_ci_watcher", "run_ci_fixer", "run_pr_resolver",
 }
 
-// fastReasoners: 4 fast reasoners + the same 25 role reasoners = 29. The fast
-// node deliberately does NOT register the 5 orchestrators (swe_af/fast/app.py
-// only defines its own `build`).
+// fastReasoners: 4 fast reasoners + the same 25 role reasoners + implement_issue
+// = 30. The fast node deliberately does NOT register the 5 orchestrators
+// (swe_af/fast/app.py only defines its own `build`).
 var fastReasoners = func() []string {
 	fast := []string{"build", "fast_plan_tasks", "fast_execute_tasks", "fast_verify"}
 	// the 25 roles = plannerReasoners minus the 5 orchestrators.
@@ -60,8 +62,8 @@ func TestRegistrationParity(t *testing.T) {
 		want   []string
 		count  int
 	}{
-		{plannerNodeID, plannerReasoners, 30},
-		{fastNodeID, fastReasoners, 29},
+		{plannerNodeID, plannerReasoners, 31},
+		{fastNodeID, fastReasoners, 30},
 	}
 
 	for _, tc := range cases {

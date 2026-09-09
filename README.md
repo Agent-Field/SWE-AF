@@ -232,7 +232,7 @@ af install https://github.com/Agent-Field/SWE-AF
 af run swe-planner
 ```
 
-`af install` clones the repo, provisions an isolated Python environment, and registers the `swe-planner` node with your control plane. On first `af run` you're prompted for the required secrets — an LLM provider key (`ANTHROPIC_API_KEY` **or** `OPENROUTER_API_KEY`) plus `GH_TOKEN` — which are stored encrypted and reused across every node, so you enter each only once. Then kick off a build:
+`af install` clones the repo, provisions an isolated Python environment, and registers the `swe-planner` node with your control plane. On first `af run` you're prompted for the one required secret — an LLM provider key (`ANTHROPIC_API_KEY` **or** `OPENROUTER_API_KEY`) — which is stored encrypted and reused across every node, so you enter it only once. (Add `GH_TOKEN` when you want builds to clone private repos and open pull requests.) Then kick off a build:
 
 ```bash
 af call swe-planner.build --in '{"goal": "Add JWT auth", "repo_url": "https://github.com/user/my-repo"}'
@@ -242,12 +242,16 @@ New to AgentField? Install the control plane first with `curl -fsSL https://agen
 
 ### Deploy with Railway (fastest)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/swe-af)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/agentfield-engineering-team)
 
-One click deploys SWE-AF + AgentField control plane + PostgreSQL. Set two environment variables in Railway:
+One click deploys SWE-AF + AgentField control plane + PostgreSQL. Exactly **one** environment variable is required in Railway — an LLM provider key:
 
-- `CLAUDE_CODE_OAUTH_TOKEN` — run `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits)
-- `GH_TOKEN` — GitHub personal access token with `repo` scope for PR creation
+- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. With only this set (no `ANTHROPIC_API_KEY`, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash-0731` — no further configuration needed.
+- *Alternative:* `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits), to run the `claude_code` runtime instead.
+
+Optional:
+
+- `GH_TOKEN` — GitHub personal access token with `repo` scope. Needed only to clone **private** repos, push branches, and open pull requests; builds against public repos work without it.
 
 Once deployed, trigger a build:
 
@@ -379,11 +383,37 @@ For Infron with `open_code`, set `INFRON_API_KEY` and use `infron/<provider>/<mo
 SWE_DEFAULT_MODEL=infron/moonshotai/kimi-k2.6
 ```
 
-With **only** an `INFRON_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway key, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults to `infron/deepseek/deepseek-v4-flash` — the same rule the existing gateway path already follows. A gateway key already configured keeps precedence, so adding an Infron key never reroutes an existing deployment on its own.
+With **only** an `INFRON_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway key, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults to `infron/deepseek/deepseek-v4-flash-0731` — the same rule the existing gateway path already follows. A gateway key already configured keeps precedence, so adding an Infron key never reroutes an existing deployment on its own.
+
+> Docker and Railway deployments using Infron must set `HARNESS_MODEL=infron/deepseek/deepseek-v4-flash-0731` (or another `infron/...` id) in the environment. The image bakes an `openrouter/...` value that the `open_code` model cascade reads after the Infron auto default and would otherwise override it. `SWE_DEFAULT_MODEL` pins every role model but does not feed OpenCode's `small_model`; set `HARNESS_MODEL` for that path (setting both is fine).
+
+### MiniMax direct providers
+
+The Docker images include direct MiniMax provider entries for both supported regions and API compatibility modes. `MiniMax-M3` and `MiniMax-M2.7` are available in every entry.
+
+| Region | OpenAI-compatible `open_code` model IDs | Anthropic-compatible `open_code` model IDs | Anthropic base URL |
+|---|---|---|---|
+| Global | `minimax-global-openai/MiniMax-M3`, `minimax-global-openai/MiniMax-M2.7` | `minimax-anthropic/MiniMax-M3`, `minimax-anthropic/MiniMax-M2.7` | `https://api.minimax.io/anthropic` |
+| China | `minimax-cn-openai/MiniMax-M3`, `minimax-cn-openai/MiniMax-M2.7` | `minimax-anthropic/MiniMax-M3`, `minimax-anthropic/MiniMax-M2.7` | `https://api.minimaxi.com/anthropic` |
+
+| Model | Context window | Input modalities | Thinking | Input / output / cache read / cache write per million tokens |
+|---|---:|---|---|---|
+| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | $0.30 / $1.20 / $0.06 / not charged |
+| `MiniMax-M2.7` | 204,800 | text | always on | $0.30 / $1.20 / $0.06 / $0.375 |
+
+`MiniMax-M3` pricing is tiered by input length: requests over 512K input tokens are billed at $0.60 / $2.40 / $0.12 instead. The baked provider metadata uses the standard ≤512K tier, which is what normal coding requests hit.
+
+For the direct OpenAI-compatible path, set `MINIMAX_API_KEY`, use `runtime: "open_code"`, and select one of the `minimax-global-openai/*` or `minimax-cn-openai/*` model IDs above. The configured OpenAI-compatible base URLs are `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`.
+
+For the Anthropic-compatible OpenCode path, set `MINIMAX_API_KEY`, set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above, use `runtime: "open_code"`, and select `minimax-anthropic/MiniMax-M3` or `minimax-anthropic/MiniMax-M2.7`. The provider configuration appends `/v1`; keep `ANTHROPIC_BASE_URL` at the regional `/anthropic` URL.
+
+For the Anthropic-compatible Claude path, set `ANTHROPIC_AUTH_TOKEN`, set `ANTHROPIC_BASE_URL` to the regional `/anthropic` URL shown above, use `runtime: "claude_code"`, and select `MiniMax-M3` or `MiniMax-M2.7`. Do not append `/v1`; Claude Code adds `/v1/messages` to the configured base URL. Unset `ANTHROPIC_API_KEY` (and `CLAUDE_CODE_OAUTH_TOKEN`) in that deployment — an Anthropic credential left in the environment can be sent to the non-Anthropic endpoint.
+
+`ANTHROPIC_BASE_URL` is process-wide, so one deployment cannot route Claude and MiniMax Anthropic-compatible traffic to different endpoints.
 
 For Codex with ChatGPT subscription auth, install the Codex CLI on the host, run `codex login`, leave `OPENAI_API_KEY` unset for this process, and set `SWE_CODEX_AUTH_MODE=chatgpt` or `auto`. For OpenAI API-platform billing, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
-> **Codex deployments using the Docker image must set `SWE_DEFAULT_MODEL=gpt-5.3-codex` on the environment** (or pass `models: {"default": "gpt-5.3-codex"}` in every build's `config`). The image bakes `HARNESS_MODEL=openrouter/moonshotai/kimi-k2.6` as an OpenCode fallback, and SWE-AF's model-resolution env cascade reads `HARNESS_MODEL` — so without `SWE_DEFAULT_MODEL` set, the Codex CLI receives an OpenRouter model id it can't handle and the Product Manager reasoner fails in ~13s. Setting `SWE_DEFAULT_MODEL` makes the cascade pin every role to the Codex model.
+> The Docker image bakes `HARNESS_MODEL=openrouter/deepseek/deepseek-v4-flash-0731` so OpenCode's `small_model` config interpolation always has a value. `HARNESS_MODEL` only affects the `open_code` runtime — `claude_code` and `codex` deployments resolve their own runtime defaults (codex picks its model by auth mode) and can override per role via `SWE_DEFAULT_MODEL` / `models` as usual.
 
 > Codex CLI's `workspace-write` sandbox uses bubblewrap (`bwrap`) and needs Linux user namespaces enabled on the host. Most production Linux hosts and managed container runtimes (Railway, etc.) allow this by default, but local Docker on WSL2 or hardened environments may refuse with `bwrap: No permissions to create a new namespace`. If the verifier reports that error, the coder ran but couldn't write files — enable user namespaces on the host before relying on the codex runtime there.
 
@@ -517,16 +547,22 @@ Benchmark assets, logs, evaluator, and generated projects live in [`examples/age
 
 ```bash
 cp .env.example .env
-# Add your API key: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
-# Optionally add GH_TOKEN for PR workflow
+# Uncomment exactly ONE provider key: OPENROUTER_API_KEY (recommended),
+# ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, or GOOGLE_API_KEY
+# Optionally add GH_TOKEN (private-repo clones, pushing branches, opening PRs)
 
 docker compose up -d
 ```
 
+> `.env.example` ships with **every** provider key commented out — uncomment
+> exactly one. In particular, don't leave a placeholder `ANTHROPIC_API_KEY`
+> value in place: any non-empty value forces the `claude_code` runtime and
+> breaks an OpenRouter-only setup.
+
 Submit a build:
 
 ```bash
-# Default (Claude)
+# Default runtime (auto-selected from whichever provider key is in .env)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'
@@ -608,7 +644,9 @@ JSON
 
 Requirements:
 
-- `GH_TOKEN` in `.env` with `repo` scope
+- `GH_TOKEN` in `.env` with `repo` scope — required for *this* workflow, since
+  it clones private repos, pushes the branch, and opens the PR. Builds that
+  stay local (`repo_path`) or target a public repo don't need it.
 - Repo access for that token
 
 ### Post-PR CI gate
@@ -743,8 +781,8 @@ Notes for main-harness authors:
 - Cap your fan-out: each delegation is a paid multi-agent run. A handful of
   concurrent issues per repo is the sweet spot — the node also bounds its own
   concurrency.
-- Available identically on `swe-fast.implement_issue` and, in the Go port, on
-  `swe-planner-go` / `swe-fast-go`.
+- Available identically on `swe-fast.implement_issue`, and on the Go
+  implementation under those same node ids.
 
 A ready-made Claude Code skill for this flow ships in
 [`.claude/skills/delegate-issue/`](.claude/skills/delegate-issue/SKILL.md).
@@ -928,16 +966,44 @@ make clean-examples
 
 ---
 
-## Go implementation (opt-in)
+## Go implementation
 
-This repo also ships a Go port of the node under [`go/`](go/README.md). The
-**Python implementation is the default** — everything above is unchanged and
-still runs as `swe-planner` (`:8003`) / `swe-fast` (`:8004`). The Go port
-registers **separately** as `swe-planner-go` (`:8005`) and `swe-fast-go`
-(`:8006`), so both stacks can run against one control plane simultaneously.
-Opt in by targeting the `-go` reasoner path (e.g.
-`POST /api/v1/execute/async/swe-planner-go.build`). See
+The node under [`go/`](go/README.md) is what `af install` gives you, and it
+registers under the same ids as everything above — `swe-planner` and
+`swe-fast` — so no trigger, reasoner name, or API shape changes with it. The
+repo-root manifest declares itself `superseded_by` `//go`, so
+`af install https://github.com/Agent-Field/SWE-AF` lands there and replaces an
+existing Python install in place, keeping its node-scoped secrets.
+
+The Python implementation is unchanged and still what `python -m swe_af` and
+the compose stack in `docker-compose.yml` run. Because the two now answer to
+the same node ids, running both against one control plane needs an explicit
+`NODE_ID` on one of them — `docker-compose.go.yml` does that. See
 [`go/README.md`](go/README.md) for build, run, and Docker instructions.
+
+### Coding engine (beta)
+
+The Go node ships a prebuilt high-performance coding engine next to the classic
+coding loop. Whether it runs depends on how you got the node:
+
+| How you run SWE-AF | Engine | To change it |
+| --- | --- | --- |
+| `af install` / AgentField Desktop | **On by default** — `go/agentfield-package.yaml` declares `SWE_PRO_ENGINE` with `default: "1"`, and the installer injects it | `SWE_PRO_ENGINE=0` for the classic loop |
+| Clone, fork, `docker-compose.go.yml`, or a bare binary | **Off** — nothing changes unless you ask for it | `SWE_PRO_ENGINE=1` to opt in |
+
+The gate is purely the environment variable; the manifest is simply what sets
+it for you on an `af install`. With the engine on, builds route per-issue
+coding through it — everything else, including branch/push/PR, stays with the
+standard pipeline. Turn it off and the node returns to the classic
+coder → reviewer/QA loop. Reasoner names and input/output shapes are identical
+either way, so switching costs nothing but a restart.
+
+If the binary isn't present or isn't runnable, the node logs a warning and
+keeps using the classic loop, so the flag is safe to leave on.
+
+Tuning knobs (`SWE_PRO_VARIANT`, `SWE_PRO_MAX_COST`, `SWE_PRO_PUBLIC_URL`)
+and the full env surface are documented in
+[`go/docs/pro-engine.md`](go/docs/pro-engine.md).
 
 ---
 

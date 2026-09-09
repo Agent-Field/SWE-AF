@@ -14,14 +14,28 @@ package node
 //     those role names, backed by the full-pipeline role handlers (fast.Wrappers
 //     is the identity delegation map that documents this).
 //
-// Tags: the Go port registers under a distinct identity from the Python node
-// (swe-planner-go / swe-fast-go) so both stacks can run against one control
-// plane. Role reasoners carry ["swe-planner-go"] on BOTH nodes — mirroring the
-// Python structure where they are registered through the swe-planner-tagged
-// AgentRouter, but grouped under the Go node's -go identity. The four fast-node
-// reasoners carry ["swe-fast-go"] (Python: fast_router tags=["swe-fast"]). The
-// five orchestrators carry ["swe-planner-go"] to group them with the node in the
-// control-plane UI (design §8).
+// Tags match the Python node's exactly, because this registers under the same
+// identity: a caller's trigger does not change when the implementation does.
+// Role reasoners carry ["swe-planner"] on BOTH nodes — mirroring the Python
+// structure where they are registered through the swe-planner-tagged
+// AgentRouter. The four fast-node reasoners carry ["swe-fast"] (Python:
+// fast_router tags=["swe-fast"]). The five orchestrators carry ["swe-planner"]
+// to group them with the node in the control-plane UI (design §8).
+//
+// Two further tags are load-bearing for discovery rather than grouping:
+//
+//   - "entrypoint" marks a reasoner a caller may legitimately start from —
+//     build, implement_issue, plan, resolve, resume_build. `af ls --entrypoints`
+//     and GET /api/v1/discovery/capabilities filter on it. execute is NOT one:
+//     its plan_result input is produced by plan, not hand-written.
+//   - "internal" marks the pipeline stages an orchestrator drives and nothing
+//     else should call — every role reasoner plus pro_execute. Each also carries
+//     a description saying so, because a discovering coding agent that sees a
+//     bare name (run_product_manager) will otherwise invoke it directly and get
+//     a failure that reads like a broken node.
+//
+// Running this alongside the Python node against one control plane therefore
+// needs an explicit NODE_ID on one of them; docker-compose.go.yml does that.
 
 import (
 	"context"
@@ -39,17 +53,36 @@ import (
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fast"
 	"github.com/Agent-Field/SWE-AF/go/internal/issue"
+	"github.com/Agent-Field/SWE-AF/go/internal/pro"
 )
 
 const (
-	tagPlanner = "swe-planner-go"
-	tagFast    = "swe-fast-go"
+	tagPlanner    = "swe-planner"
+	tagFast       = "swe-fast"
+	tagEntrypoint = "entrypoint"
+	tagInternal   = "internal"
 )
 
-// RegisterPlanner registers the full swe-planner surface: 25 role reasoners +
-// 5 orchestrators + the issue-level entry point (31 total). Ports swe_af/app.py.
+// RegisterPlanner registers the swe-planner surface. With the pro engine off it
+// is the full classic surface: 25 role reasoners + 5 orchestrators + the
+// issue-level entry point (31 total), porting swe_af/app.py. With the pro engine
+// on (pro.Available()), the classic entry points are withheld and only the pro
+// executor is added — see the body for why.
 func (n *Node) RegisterPlanner() {
 	n.registerRoles()
+	// Pro engine on (the af-install / desktop default): the bundled swe-pro
+	// sidecar is the coding surface and needs no opencode, so register only the
+	// pro executor and withhold the classic opencode-driven entry points. The
+	// orchestrators (plan/build/execute/resolve/resume_build) and implement_issue
+	// drive the opencode role harness and fail wherever opencode is absent — the
+	// desktop bundle ships aforge, not opencode — so advertising them just
+	// surfaces broken entries next to swe-pro's working code_task. The role
+	// reasoners stay registered (internal, undiscoverable) so pro_execute can
+	// still call them. SWE_PRO_ENGINE=0 restores the full classic surface.
+	if pro.Available() {
+		n.registerProReasoners()
+		return
+	}
 	n.registerOrchestrators()
 	n.registerIssueReasoner()
 }
@@ -68,12 +101,24 @@ func (n *Node) RegisterFast() {
 // Role reasoners (identical on both nodes)
 // ---------------------------------------------------------------------------
 
+// internalRoleOpts is the single source of the registration metadata every role
+// reasoner carries: the swe-planner group tag, the "internal" marker, and the
+// one-line description that tells a discovering caller this stage is driven by
+// an orchestrator. area names the role package's domain (planning, coding,
+// gitops, advisor, ci) — the only part that varies across the 25.
+func internalRoleOpts(area string) []agent.ReasonerOption {
+	return []agent.ReasonerOption{
+		agent.WithReasonerTags(tagPlanner, tagInternal),
+		agent.WithDescription("Internal " + area + " pipeline stage invoked by the orchestrators " +
+			"(build/plan/execute) — do not call directly."),
+	}
+}
+
 // registerRoles wires the 25 execution/planning role reasoners, each backed by
 // its package handler and threaded with the Deps built from the agent. All are
-// tagged ["swe-planner-go"] (Python groups them under the swe-planner router).
+// tagged ["swe-planner","internal"] (Python groups them under the swe-planner
+// router) and described per internalRoleOpts.
 func (n *Node) registerRoles() {
-	tag := agent.WithReasonerTags(tagPlanner)
-
 	planningDeps := &planning.Deps{
 		Harness:          n.App,
 		App:              n.App,
@@ -82,18 +127,21 @@ func (n *Node) registerRoles() {
 		NodeID:           n.NodeID,
 		AgentFieldServer: n.AgentFieldServer,
 	}
+	planningOpts := internalRoleOpts("planning")
 	for name, h := range planning.Handlers() {
-		regHandler(n, name, planningDeps, h, tag)
+		regHandler(n, name, planningDeps, h, planningOpts...)
 	}
 
 	codingDeps := &coding.Deps{Harness: n.App, AI: n.App, Note: n.App}
+	codingOpts := internalRoleOpts("coding")
 	for name, h := range coding.Handlers() {
-		regHandler(n, name, codingDeps, h, tag)
+		regHandler(n, name, codingDeps, h, codingOpts...)
 	}
 
 	gitopsDeps := &gitops.Deps{App: n.App}
+	gitopsOpts := internalRoleOpts("gitops")
 	for name, h := range gitops.Handlers() {
-		regHandler(n, name, gitopsDeps, h, tag)
+		regHandler(n, name, gitopsDeps, h, gitopsOpts...)
 	}
 
 	advisorDeps := &advisor.Deps{
@@ -104,13 +152,15 @@ func (n *Node) registerRoles() {
 		NodeID:           n.NodeID,
 		AgentFieldServer: n.AgentFieldServer,
 	}
+	advisorOpts := internalRoleOpts("advisor")
 	for name, h := range advisor.Handlers() {
-		regHandler(n, name, advisorDeps, h, tag)
+		regHandler(n, name, advisorDeps, h, advisorOpts...)
 	}
 
 	ciDeps := &ci.Deps{App: n.App}
+	ciOpts := internalRoleOpts("ci")
 	for name, h := range ci.Handlers() {
-		regHandler(n, name, ciDeps, h, tag)
+		regHandler(n, name, ciDeps, h, ciOpts...)
 	}
 }
 
@@ -130,6 +180,16 @@ func (n *Node) registerOrchestrators() {
 		CIGate:           orch.RunCIGate,
 		ApprovalGate:     orch.PlanApprovalGate,
 	}
+	// Engine default routing (seamless path): with the flag truthy AND the
+	// binary present, builds and execute calls that name no execute_fn_target
+	// route per-issue coding through pro_execute on this node. Callers that pass
+	// a target keep full control. Flag-on with a missing binary degrades to the
+	// classic loop
+	// (pro.Start logs the warning) instead of routing to a node that never
+	// joined.
+	if pro.Available() {
+		deps.DefaultExecuteFnTarget = n.NodeID + ".pro_execute"
+	}
 
 	handlers := orch.Handlers() // {"build": Build}
 	orch.RegisterPlan(handlers) // adds {"plan": Plan}
@@ -138,13 +198,13 @@ func (n *Node) registerOrchestrators() {
 	handlers["resume_build"] = orch.ResumeBuildHandler
 
 	// Python registers the orchestrators via @app.reasoner(): only `build`
-	// carries tags (["entrypoint"]) plus an explicit routing description; the
-	// others get their docstring summaries as descriptions — keep the
-	// registration payload identical.
+	// carries an explicit routing description, the others get their docstring
+	// summaries. The "entrypoint" tag goes on every orchestrator a caller may
+	// legitimately start from (orchestratorEntrypoints).
 	for name, h := range handlers {
 		var opts []agent.ReasonerOption
-		if name == "build" {
-			opts = append(opts, agent.WithReasonerTags("entrypoint"))
+		if orchestratorEntrypoints[name] {
+			opts = append(opts, agent.WithReasonerTags(tagEntrypoint))
 		}
 		if d, ok := orchestratorDescriptions[name]; ok {
 			opts = append(opts, agent.WithDescription(d))
@@ -156,6 +216,19 @@ func (n *Node) registerOrchestrators() {
 	}
 }
 
+// orchestratorEntrypoints is the set of orchestrators a caller may start a run
+// from, and therefore the ones tagged "entrypoint" for discovery. plan, resolve
+// and resume_build are advanced but legitimate entries (a goal, a PR URL and a
+// checkpointed repo respectively). execute is deliberately absent: its
+// plan_result input is only producible by a prior plan call, so surfacing it as
+// an entry point invites hand-written garbage.
+var orchestratorEntrypoints = map[string]bool{
+	"build":        true,
+	"plan":         true,
+	"resolve":      true,
+	"resume_build": true,
+}
+
 // orchestratorDescriptions mirrors the Python side: build's explicit
 // description= kwarg, and the docstring first paragraphs the Python SDK
 // auto-registers for the other orchestrators (swe_af/app.py).
@@ -165,8 +238,10 @@ var orchestratorDescriptions = map[string]string{
 		"repo_url; returns a verified feature branch (optionally a draft PR). " +
 		"Typical wall-clock 25-60 min. For one well-scoped change with known files, " +
 		"prefer implement_issue.",
-	"plan":         "Run the full planning pipeline.",
-	"execute":      "Execute a planned DAG with self-healing replanning.",
+	"plan": "Run the full planning pipeline.",
+	"execute": "Execute a planned DAG with self-healing replanning. Input plan_result comes " +
+		"from a prior plan call — not a hand-written object; prefer build unless you are " +
+		"resuming a custom pipeline.",
 	"resolve":      "Update an existing PR: merge base, fix CI, address review comments, push.",
 	"resume_build": "Resume a crashed build from the last checkpoint.",
 }
@@ -192,7 +267,7 @@ func (n *Node) registerFastReasoners() {
 		var opts []agent.ReasonerOption
 		if name == "build" {
 			opts = append(opts,
-				agent.WithReasonerTags("entrypoint"),
+				agent.WithReasonerTags(tagEntrypoint),
 				agent.WithDescription(
 					"Fast-mode build: one planning pass into a small task list, then code and "+
 						"verify with tight timeouts. Same goal/repo_path interface as "+
@@ -223,7 +298,7 @@ func (n *Node) registerIssueReasoner() {
 		Note:   n.App,
 		NodeID: n.NodeID,
 	}
-	tag := agent.WithReasonerTags("swe-issue-go", "entrypoint")
+	tag := agent.WithReasonerTags("swe-issue-go", tagEntrypoint)
 	for name, h := range issue.Handlers() {
 		opts := []agent.ReasonerOption{tag, agent.WithDescription(
 			"Issue-level build (sub-harness entry): implements ONE fully-scoped issue " +
@@ -240,14 +315,46 @@ func (n *Node) registerIssueReasoner() {
 }
 
 // ---------------------------------------------------------------------------
+// Pro-engine surface (SWE_PRO_ENGINE-gated, swe-planner only)
+// ---------------------------------------------------------------------------
+
+// registerProReasoners wires the pro-engine adapter. Called only when
+// pro.Available(), so the classic surface — and the parity test asserting it —
+// is unchanged whenever SWE_PRO_ENGINE is falsy or the binary is missing.
+func (n *Node) registerProReasoners() {
+	deps := &pro.Deps{
+		Call:       newCallFn(n.App),
+		Note:       n.App,
+		EngineNode: pro.NodeID(),
+	}
+	for name, h := range pro.Handlers() {
+		opts := []agent.ReasonerOption{
+			// "internal": pro_execute is an execute_fn_target, reached by
+			// build/execute routing per-issue coding through it — not a surface a
+			// caller starts a run from.
+			agent.WithReasonerTags(tagPlanner, tagInternal),
+			agent.WithDescription(
+				"Pro-engine executor: implements ONE fully-scoped issue via the " +
+					"bundled pro coding engine. Matches the execute_fn_target contract — " +
+					"set config.execute_fn_target to \"<node>.pro_execute\" on build/execute " +
+					"to route per-issue coding through it."),
+		}
+		if s, ok := proSchemas[name]; ok {
+			opts = append(opts, agent.WithInputSchema(s))
+		}
+		regHandler(n, name, deps, h, opts...)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Registration helper
 // ---------------------------------------------------------------------------
 
 // regHandler adapts a package handler (func(ctx, *Deps, input) (any, error)) to
 // the SDK's HandlerFunc (func(ctx, input) (any, error)) by capturing deps, then
-// registers it under name and records the name on the node. D is inferred from
-// deps; the package Handler types are assignable to the parameter's unnamed func
-// type.
+// registers it under name and records the name plus its resolved discovery
+// metadata on the node. D is inferred from deps; the package Handler types are
+// assignable to the parameter's unnamed func type.
 func regHandler[D any](
 	n *Node,
 	name string,
@@ -256,9 +363,25 @@ func regHandler[D any](
 	opts ...agent.ReasonerOption,
 ) {
 	n.registered = append(n.registered, name)
+	n.recordMeta(name, opts)
 	n.App.RegisterReasoner(name, func(ctx context.Context, input map[string]any) (any, error) {
 		return h(ctx, deps, input)
 	}, opts...)
+}
+
+// recordMeta resolves opts the same way RegisterReasoner does — by applying them
+// to a zero agent.Reasoner — and keeps the tags/description under name. The SDK
+// exposes no reader for its registered reasoners, so this mirror is what lets
+// the surface tests assert what a caller discovers.
+func (n *Node) recordMeta(name string, opts []agent.ReasonerOption) {
+	var r agent.Reasoner
+	for _, opt := range opts {
+		opt(&r)
+	}
+	if n.meta == nil {
+		n.meta = make(map[string]ReasonerMeta)
+	}
+	n.meta[name] = ReasonerMeta{Tags: r.Tags, Description: r.Description}
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +445,13 @@ var issueSchemas = map[string]json.RawMessage{
 	"implement_issue": schema(`{"type":"object","additionalProperties":true,"required":["issue","repo_path"],"properties":{` +
 		`"issue":{"type":"object"},"repo_path":{"type":"string"},"base_branch":{"type":"string"},` +
 		`"artifacts_dir":{"type":"string"},"additional_context":{"type":"string"},"config":{"type":"object"}}}`),
+}
+
+// proSchemas maps the opt-in pro-engine reasoners to their input schemas.
+var proSchemas = map[string]json.RawMessage{
+	// pro_execute(issue, repo_path) — the execute_fn_target calling convention.
+	"pro_execute": schema(`{"type":"object","additionalProperties":true,"required":["issue","repo_path"],"properties":{` +
+		`"issue":{"type":"object"},"repo_path":{"type":"string"}}}`),
 }
 
 // fastSchemas maps the 4 fast reasoner names to their input schemas.
