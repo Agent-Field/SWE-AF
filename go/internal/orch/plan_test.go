@@ -447,8 +447,8 @@ func TestPlanOpenRouterOnlyDefaults(t *testing.T) {
 	if len(pm) != 1 {
 		t.Fatalf("expected 1 PM call, got %d", len(pm))
 	}
-	if got := mapStr(pm[0].input, "ai_provider", ""); got != "open_code" {
-		t.Errorf("ai_provider = %q, want open_code", got)
+	if got := mapStr(pm[0].input, "ai_provider", ""); got != "aforge" {
+		t.Errorf("ai_provider = %q, want aforge", got)
 	}
 	if got := mapStr(pm[0].input, "model", ""); got != "openrouter/deepseek/deepseek-v4-flash-0731" {
 		t.Errorf("model = %q, want the OpenRouter auto default", got)

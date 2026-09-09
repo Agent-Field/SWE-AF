@@ -14,8 +14,9 @@ import (
 
 const (
 	fastClaudeCodeDefault = "haiku"
-	// Fast mode shares the open_code default with the main path so an
-	// OpenRouter-only install behaves the same on both nodes.
+	// Fast mode shares the OpenRouter default with the main path so an
+	// OpenRouter-only install behaves the same on both nodes. aforge and
+	// open_code resolve to the same model id.
 	fastOpenCodeDefault = openRouterAutoDefaultModel
 )
 
@@ -46,14 +47,14 @@ var fastValidKeys = map[string]struct{}{
 }
 
 // DefaultFastRuntime ports _default_fast_runtime, honoring SWE_DEFAULT_RUNTIME.
-// When unset (or blank), auto-selects open_code if only an OpenRouter key is
+// When unset (or blank), auto-selects aforge if only an OpenRouter key is
 // present — the same detection the main path uses (openRouterOnlyEnv) — else
 // claude_code. An invalid value falls back to claude_code.
 func DefaultFastRuntime() string {
 	value := envStripped("SWE_DEFAULT_RUNTIME")
 	if value == "" {
 		if openRouterOnlyEnv() {
-			return "open_code"
+			return "aforge"
 		}
 		return "claude_code"
 	}
@@ -72,7 +73,7 @@ func fastRuntimeDefault(runtime string) string {
 		return codexDefaultModel()
 	case "claude_code":
 		return fastClaudeCodeDefault
-	case "open_code":
+	case "aforge", "open_code":
 		return fastOpenCodeDefault
 	default:
 		return ""

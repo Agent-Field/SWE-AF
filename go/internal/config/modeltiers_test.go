@@ -41,6 +41,8 @@ func TestModelTiers_NoTierEnvsUnchanged(t *testing.T) {
 		}},
 		{"open_code base defaults", "open_code", nil,
 			func(string) string { return openCodeBaseModel }},
+		{"aforge base defaults", "aforge", nil,
+			func(string) string { return openCodeBaseModel }},
 		{"codex base defaults", "codex", map[string]string{"SWE_CODEX_AUTH_MODE": "api_key"},
 			func(string) string { return "gpt-5.3-codex" }},
 	}

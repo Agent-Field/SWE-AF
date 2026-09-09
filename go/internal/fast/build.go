@@ -135,13 +135,16 @@ func repoNameFromURL(url string) string {
 }
 
 // runtimeToProvider ports fast/app.py::_runtime_to_provider — the fast-specific
-// runtime→ai_provider map (note: anything not claude_code/codex → "opencode").
+// runtime→ai_provider map (note: anything not claude_code/codex/aforge →
+// "opencode").
 func runtimeToProvider(runtime string) string {
 	switch runtime {
 	case "claude_code":
 		return "claude"
 	case "codex":
 		return "codex"
+	case "aforge":
+		return "aforge"
 	default:
 		return "opencode"
 	}

@@ -3,15 +3,56 @@
 # Build from the SWE-AF repo root so the whole go/ module is in context:
 #     docker build -f go/Dockerfile .
 #
-# The Go module depends on the AgentField Go SDK via a `replace` directive
-# (go/go.mod: replace github.com/Agent-Field/agentfield/sdk/go => ../../agentfield/sdk/go).
-# The SDK lives in a *sibling* repo that is NOT in this build context, so the
-# builder stage clones it at a pinned ref and lays it out so the replace path
-# (../../agentfield/sdk/go, relative to /src/SWE-AF/go) resolves to /src/agentfield/sdk/go.
+# The Go module requires the AgentField Go SDK by version (go/go.mod:
+# github.com/Agent-Field/agentfield/sdk/go v0.1.130) and the builder resolves it
+# through the module proxy — there is no `replace` directive, so nothing here
+# depends on a sibling checkout. The builder still sparse-clones the SDK at
+# AGENTFIELD_SDK_REF: it records the exact commit behind that version in the
+# image and fails the build early if the ref ever disappears.
 #
 # Cache-busting (per the docker cache rule): the SDK checkout is keyed on the
 # AGENTFIELD_SDK_REF build arg. Bump the ref (or pass --build-arg) to force a
-# re-clone; an unchanged ref restores the cached layer.
+# re-clone; an unchanged ref restores the cached layer. Keep it on the same
+# release as go/go.mod's require.
+
+# ---------------------------------------------------------------------------
+# Stage 0 — aforge: fetch the released AForge CLI from the public download host
+# and verify it against the release checksums before it ever enters the image.
+#
+# The release publishes GZIPPED binaries plus a checksums.txt whose hashes are
+# of the DECOMPRESSED binaries, so this stage gunzips first and then rewrites
+# the matching checksum line to the local file name before `sha256sum -c`.
+#
+# Both ARGs are overridable so a mirror / air-gapped registry can be used:
+#   docker build --build-arg AFORGE_BASE_URL=... --build-arg AFORGE_VERSION=...
+# Changing AFORGE_VERSION also busts this layer's cache (per the docker cache
+# rule) — a floating URL alone would keep restoring a stale binary.
+# ---------------------------------------------------------------------------
+ARG AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge
+ARG AFORGE_VERSION=v0.1.0
+
+FROM debian:bookworm-slim AS aforge
+ARG AFORGE_BASE_URL
+ARG AFORGE_VERSION
+# TARGETARCH is populated by BuildKit; the fallback keeps the classic builder
+# working on the only architecture this image is published for.
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /out
+RUN set -eu; \
+    arch="${TARGETARCH:-amd64}"; \
+    curl -fsSL "${AFORGE_BASE_URL}/${AFORGE_VERSION}/aforge-linux-${arch}.gz" -o aforge.gz; \
+    gunzip -c aforge.gz > aforge; \
+    curl -fsSL "${AFORGE_BASE_URL}/${AFORGE_VERSION}/checksums.txt" -o checksums.txt; \
+    grep " aforge-linux-${arch}$" checksums.txt | sed 's/  aforge-linux-.*/  aforge/' > aforge.sha256; \
+    test -s aforge.sha256; \
+    sha256sum -c aforge.sha256; \
+    chmod +x aforge; \
+    ./aforge --help > /dev/null; \
+    rm -f aforge.gz checksums.txt aforge.sha256
+
 
 # ---------------------------------------------------------------------------
 # Stage 1 — builder: clone the SDK at a pinned ref, build both static binaries.
@@ -20,9 +61,10 @@
 # control-plane Go prerequisite (Go 1.23+).
 FROM golang:1.23-bookworm AS builder
 
-# Pinned AgentField SDK ref. Default = agentfield origin/main HEAD at port time
-# (v0.1.107-rc.1). Changing this string invalidates the clone layer below.
-ARG AGENTFIELD_SDK_REF=20955b2637b4708758c328a4f64fe460c7d4b772
+# Pinned AgentField SDK ref. Default = the sdk/go/v0.1.130 tag commit, the same
+# release go/go.mod requires. Changing this string invalidates the clone layer
+# below.
+ARG AGENTFIELD_SDK_REF=aba20a9b248d9ee6c74f4e7e688ef0740c542dc9
 ARG AGENTFIELD_REPO=https://github.com/Agent-Field/agentfield.git
 
 WORKDIR /src
@@ -42,7 +84,7 @@ RUN git init -q /src/agentfield && \
 
 # Prime the module cache from go.mod/go.sum before copying sources so dependency
 # downloads cache independently of source edits. GOWORK=off: no workspace in the
-# image, resolution goes through the replace directive.
+# image, resolution goes through go.mod's versioned require.
 ENV GOWORK=off CGO_ENABLED=0 GOOS=linux
 COPY go/go.mod go/go.sum /src/SWE-AF/go/
 WORKDIR /src/SWE-AF/go
@@ -67,7 +109,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # ca-certificates (HTTPS for gh/opencode/npm), jq (agent bash), openssh-client
 # (optional SSH git), nodejs+npm (codex + claude-code CLIs), gh CLI (draft PRs),
 # OpenCode CLI (open_code runtime), Codex CLI (codex runtime), Claude Code CLI
-# (claude_code runtime).
+# (claude_code runtime). The AForge CLI (aforge runtime) is copied in from
+# stage 0 rather than installed here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates openssh-client jq nodejs npm \
     # Python test tooling: repos under build are frequently Python, and both
@@ -151,6 +194,9 @@ RUN git config --global user.name "SWE-AF" && \
     git config --global user.email "eng@agentfield.ai" && \
     gh auth setup-git --hostname github.com --force
 
+# AForge CLI (aforge runtime), fetched + checksum-verified in stage 0.
+COPY --from=aforge /out/aforge /usr/local/bin/aforge
+
 # Application binaries (static, from the builder stage).
 COPY --from=builder /out/swe-planner /usr/local/bin/swe-planner
 COPY --from=builder /out/swe-fast /usr/local/bin/swe-fast
@@ -174,7 +220,8 @@ EXPOSE 8005
 # need distinct identities, and the swe-fast service overrides NODE_ID/PORT.
 ENV PORT=8005 \
     AGENTFIELD_SERVER=http://control-plane:8080 \
-    NODE_ID=swe-planner
+    NODE_ID=swe-planner \
+    AGENTFIELD_AFORGE_COMMAND=exec
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1

@@ -40,10 +40,11 @@ func TestDefaultRuntime(t *testing.T) {
 	}{
 		{"no keys -> claude_code", nil, "claude_code"},
 		{"anthropic -> claude_code", map[string]string{"ANTHROPIC_API_KEY": "sk-ant"}, "claude_code"},
-		{"openrouter only -> open_code", map[string]string{"OPENROUTER_API_KEY": "sk-or"}, "open_code"},
-		{"both keys -> claude_code", map[string]string{"ANTHROPIC_API_KEY": "sk-ant", "OPENROUTER_API_KEY": "sk-or"}, "claude_code"},
+		{"openrouter only -> aforge", map[string]string{"OPENROUTER_API_KEY": "sk-or"}, "aforge"},
+		{"both keys -> aforge (OpenRouter wins)", map[string]string{"ANTHROPIC_API_KEY": "sk-ant", "OPENROUTER_API_KEY": "sk-or"}, "aforge"},
 		{"explicit runtime beats autoselect", map[string]string{"OPENROUTER_API_KEY": "sk-or", "SWE_DEFAULT_RUNTIME": "claude_code"}, "claude_code"},
 		{"env open_code", map[string]string{"SWE_DEFAULT_RUNTIME": "open_code"}, "open_code"},
+		{"env aforge", map[string]string{"SWE_DEFAULT_RUNTIME": "aforge"}, "aforge"},
 		{"env codex", map[string]string{"SWE_DEFAULT_RUNTIME": "codex"}, "codex"},
 		{"invalid env -> claude_code", map[string]string{"SWE_DEFAULT_RUNTIME": "bogus_runtime"}, "claude_code"},
 		{"empty env -> claude_code", map[string]string{"SWE_DEFAULT_RUNTIME": ""}, "claude_code"},
@@ -292,7 +293,7 @@ func TestResolveRuntimeModels_Errors(t *testing.T) {
 	clearProviderEnv(t)
 	if _, err := ResolveRuntimeModels("bad_runtime", nil, nil); err == nil {
 		t.Fatal("expected error for invalid runtime")
-	} else if err.Error() != "Unsupported runtime 'bad_runtime'. Valid runtimes: claude_code, open_code, codex" {
+	} else if err.Error() != "Unsupported runtime 'bad_runtime'. Valid runtimes: aforge, claude_code, open_code, codex" {
 		t.Fatalf("runtime error string = %q", err.Error())
 	}
 	_, err := ResolveRuntimeModels("claude_code", map[string]string{"bad": "opus"}, nil)
@@ -429,8 +430,8 @@ func TestBuildConfig_AutoOpenRouterEndToEnd(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("OPENROUTER_API_KEY", "sk-or")
 	cfg := mustLoadBuild(t, nil)
-	if cfg.Runtime != "open_code" {
-		t.Fatalf("runtime = %q, want open_code", cfg.Runtime)
+	if cfg.Runtime != "aforge" {
+		t.Fatalf("runtime = %q, want aforge", cfg.Runtime)
 	}
 	resolved, err := cfg.ResolvedModels()
 	if err != nil {
@@ -770,9 +771,9 @@ func TestDefaultFastRuntime(t *testing.T) {
 		{"open_code", map[string]string{"SWE_DEFAULT_RUNTIME": "open_code"}, true, "open_code"},
 		{"invalid -> claude_code", map[string]string{"SWE_DEFAULT_RUNTIME": "bogus"}, true, "claude_code"},
 		// The main path's OpenRouter auto-detect applies to fast builds too.
-		{"openrouter only -> open_code", map[string]string{"OPENROUTER_API_KEY": "sk-or"}, true, "open_code"},
-		{"openrouter + anthropic -> claude_code", map[string]string{
-			"OPENROUTER_API_KEY": "sk-or", "ANTHROPIC_API_KEY": "sk-ant"}, true, "claude_code"},
+		{"openrouter only -> aforge", map[string]string{"OPENROUTER_API_KEY": "sk-or"}, true, "aforge"},
+		{"openrouter + anthropic -> aforge", map[string]string{
+			"OPENROUTER_API_KEY": "sk-or", "ANTHROPIC_API_KEY": "sk-ant"}, true, "aforge"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

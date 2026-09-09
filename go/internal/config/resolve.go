@@ -131,21 +131,25 @@ const (
 	codexAPIKeyModel  = "gpt-5.3-codex" // OpenAI API-key auth (api_key mode)
 	codexChatGPTModel = "gpt-5.5"       // ChatGPT-account auth (-codex blocked)
 
-	// Default model for the open_code runtime — both the auto-selected
-	// OpenRouter path (see openRouterOnlyEnv) and an explicit
-	// SWE_DEFAULT_RUNTIME=open_code resolve here, so opting in explicitly
+	// Default model for the OpenRouter-backed runtimes (aforge, open_code) —
+	// both the auto-selected OpenRouter path (see openRouterOnlyEnv) and an
+	// explicit SWE_DEFAULT_RUNTIME resolve here, so opting in explicitly
 	// never silently swaps the model.
 	openRouterAutoDefaultModel = "openrouter/deepseek/deepseek-v4-flash-0731"
 )
 
 // runtimeBaseModels ports _RUNTIME_BASE_MODELS[runtime] as a fresh copy for the
 // given runtime, or nil if the runtime is unknown. claude_code is all "sonnet"
-// except qa_synthesizer_model="haiku"; open_code is all
+// except qa_synthesizer_model="haiku"; aforge and open_code are all
 // openRouterAutoDefaultModel (v4-flash-0731); codex is all the API-key model
 // (adjusted for auth mode by ResolveRuntimeModels).
 func runtimeBaseModels(runtime string) map[string]string {
 	base := make(map[string]string, len(AllModelFields))
 	switch runtime {
+	case "aforge":
+		for _, field := range AllModelFields {
+			base[field] = openRouterAutoDefaultModel
+		}
 	case "claude_code":
 		for _, field := range AllModelFields {
 			base[field] = "sonnet"
@@ -174,26 +178,28 @@ func envStripped(key string) string {
 }
 
 // openRouterOnlyEnv ports _openrouter_only_env: whether the deployer implicitly
-// chose the OpenRouter runtime (no explicit SWE_DEFAULT_RUNTIME, no Anthropic
-// key, but an OpenRouter key present).
+// chose the OpenRouter runtime (no explicit SWE_DEFAULT_RUNTIME, but an
+// OpenRouter key present). An Anthropic key alongside it no longer vetoes the
+// choice — OpenRouter wins, and SWE_DEFAULT_RUNTIME=claude_code is the opt-out.
 func openRouterOnlyEnv() bool {
 	if envStripped("SWE_DEFAULT_RUNTIME") != "" {
-		return false
-	}
-	if envStripped("ANTHROPIC_API_KEY") != "" {
 		return false
 	}
 	return envStripped("OPENROUTER_API_KEY") != ""
 }
 
 // DefaultRuntime ports _default_runtime, honoring SWE_DEFAULT_RUNTIME.
-// When unset, auto-selects open_code if only an OpenRouter key is present,
+// When unset, auto-selects aforge if only an OpenRouter key is present,
 // otherwise claude_code. An invalid env value falls back to claude_code.
+//
+// The aforge default requires an AgentField Go SDK whose harness.BuildProvider
+// knows the "aforge" provider (agentfield#905). go.mod pins sdk/go v0.1.130,
+// which carries it — see go/README.md § Docker.
 func DefaultRuntime() string {
 	value := envStripped("SWE_DEFAULT_RUNTIME")
 	if value == "" {
 		if openRouterOnlyEnv() {
-			return "open_code"
+			return "aforge"
 		}
 		return "claude_code"
 	}

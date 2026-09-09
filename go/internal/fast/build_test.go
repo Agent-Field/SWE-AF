@@ -214,7 +214,7 @@ func TestRepoNameFromURL(t *testing.T) {
 
 // Contract: _runtime_to_provider maps runtime strings (fast-specific fallback).
 func TestRuntimeToProvider(t *testing.T) {
-	cases := map[string]string{"claude_code": "claude", "open_code": "opencode", "codex": "codex", "other": "opencode"}
+	cases := map[string]string{"claude_code": "claude", "open_code": "opencode", "aforge": "aforge", "codex": "codex", "other": "opencode"}
 	for runtime, want := range cases {
 		if got := runtimeToProvider(runtime); got != want {
 			t.Errorf("runtimeToProvider(%q) = %q, want %q", runtime, got, want)

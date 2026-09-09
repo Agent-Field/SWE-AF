@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Reproduce go/Dockerfile's sparse SDK clone; keep in sync with its AGENTFIELD_SDK_REF.
-      AGENTFIELD_SDK_REF: 20955b2637b4708758c328a4f64fe460c7d4b772
+      AGENTFIELD_SDK_REF: aba20a9b248d9ee6c74f4e7e688ef0740c542dc9
       AGENTFIELD_REPO: https://github.com/Agent-Field/agentfield.git
       GOWORK: off
     steps:
@@ -72,3 +72,51 @@ jobs:
       - name: Test (race)
         working-directory: SWE-AF/go
         run: go test -race -count=1 ./...
+
+  aforge-fetch-stage:
+    # SWE-AF had no docker job at all. This one builds JUST the `aforge` fetch
+    # stage of both Dockerfiles — the part that downloads the released AForge
+    # CLI and checksum-verifies it — so a bad version/URL/checksum fails here
+    # instead of on a deploy. It deliberately skips the rest of the image
+    # (apt, npm, the Go build), which is minutes of work for no extra signal.
+    #
+    # The download host is probed first: until agentfield.ai serves
+    # /downloads/aforge/<version>/, the job reports a notice and passes. Flip
+    # `--target aforge` to a full `docker build .` once the host is live and
+    # this becomes the image-build gate.
+    name: AForge fetch stage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read the AForge coordinates from the Dockerfile
+        id: coords
+        run: |
+          base="$(awk -F= '/^ARG AFORGE_BASE_URL=/{print $2; exit}' Dockerfile)"
+          version="$(awk -F= '/^ARG AFORGE_VERSION=/{print $2; exit}' Dockerfile)"
+          test -n "$base" && test -n "$version"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "AForge $version from $base"
+
+      - name: Probe the download host
+        id: probe
+        env:
+          BASE: ${{ steps.coords.outputs.base }}
+          VERSION: ${{ steps.coords.outputs.version }}
+        run: |
+          if curl -fsS --head --max-time 30 "${BASE}/${VERSION}/checksums.txt" >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${BASE}/${VERSION}/checksums.txt is not reachable yet — skipping the AForge fetch-stage build."
+          fi
+
+      - name: Build the fetch stage (Python image)
+        if: steps.probe.outputs.available == 'true'
+        run: docker build --target aforge -t swe-af-aforge-stage .
+
+      - name: Build the fetch stage (Go image)
+        if: steps.probe.outputs.available == 'true'
+        run: docker build --target aforge -f go/Dockerfile -t swe-af-go-aforge-stage .

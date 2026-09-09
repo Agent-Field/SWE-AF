@@ -7,6 +7,11 @@ def test_runtime_to_harness_adapter_supports_codex() -> None:
     assert runtime_to_harness_adapter("codex") == "codex"
 
 
+def test_runtime_to_harness_adapter_supports_aforge_aliases() -> None:
+    assert runtime_to_harness_adapter("aforge") == "aforge"
+    assert runtime_to_harness_adapter("aforge-v2") == "aforge"
+
+
 def test_execution_agents_source_uses_shared_runtime_adapter() -> None:
     import inspect
     import swe_af.reasoners.execution_agents as execution_agents

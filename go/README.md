@@ -37,25 +37,23 @@ anywhere you need different ids or ports.
 
 ## Depending on the AgentField Go SDK
 
-There are **no `sdk/go/vX.Y.Z` submodule tags** in the agentfield repo, so a
-normal versioned `require` is impossible. The port depends on the SDK
-(`github.com/Agent-Field/agentfield/sdk/go`) two ways:
+The agentfield repo now publishes `sdk/go/vX.Y.Z` submodule tags, so `go.mod`
+carries a plain versioned require:
 
-- **Dev — Go workspace.** A `go.work` at the shared parent of both repos
-  (`<workspace>/go.work`) lists `./SWE-AF/go` and `./agentfield/sdk/go`,
-  so edits to the SDK are picked up live with zero `go.mod` churn. It is not
-  committed (it spans two repos). With the workspace present, `go build ./...`
-  just works.
-- **CI / Docker — `replace` directive.** `go.mod` carries
-  `replace github.com/Agent-Field/agentfield/sdk/go => ../../agentfield/sdk/go`.
-  Any build without the workspace (set `GOWORK=off`, or build where no `go.work`
-  exists) resolves the SDK through that relative path, which must point at a
-  sibling checkout of the agentfield repo. The Docker builder clones it there
-  automatically (see below).
+```
+require github.com/Agent-Field/agentfield/sdk/go v0.1.130
+```
 
-Migration target: once agentfield publishes `sdk/go/vX.Y.Z` submodule tags, drop
-the `replace` and switch to a real `require`. The agentfield repo is treated as
-read-only — every SDK gap is worked around app-side.
+There is no `replace` directive: CI, Docker and a bare `go build ./...` all
+resolve the SDK through the module proxy. `go/Dockerfile` and
+`.github/workflows/ci.yml` pin the same release by commit
+(`AGENTFIELD_SDK_REF`, the `sdk/go/v0.1.130` tag commit) — bump the require and
+those refs together.
+
+For SDK development a `go.work` at the shared parent of both repos
+(`<workspace>/go.work`, listing `./SWE-AF/go` and `./agentfield/sdk/go`) still
+layers a local checkout on top with zero `go.mod` churn. It is not committed
+(it spans two repos). Set `GOWORK=off` to build the way CI and Docker do.
 
 ## Build & run locally
 
@@ -74,8 +72,8 @@ make run-fast       # run the fast-mode node   (swe-fast, :8006)
 `AGENTFIELD_SERVER` (default `http://localhost:8080`). Both nodes read all
 configuration from the environment at startup (the Go SDK reads no env itself).
 
-To build without the dev workspace (the way CI/Docker do), a sibling agentfield
-checkout must exist at `../../agentfield`:
+To build the way CI/Docker do — ignoring any `go.work`, resolving the SDK from
+the module proxy:
 
 ```bash
 GOWORK=off go build ./...
@@ -83,11 +81,13 @@ GOWORK=off go build ./...
 
 ## Docker
 
-The image is a multi-stage build. The builder clones the AgentField Go SDK at a
-**pinned ref** and lays it out so the `replace` path resolves, then builds both
-static binaries; the runtime stage is a slim Debian with the same external CLI
-surface the agents shell out to (`git`, `gh`, `jq`, OpenCode, Codex, Claude
-Code).
+The image is a multi-stage build. A fetch stage downloads the released AForge
+CLI and verifies it against the release `checksums.txt` before it enters the
+image; the builder resolves the AgentField Go SDK at the version `go.mod`
+requires (and clones it at the matching **pinned ref**), then builds both static
+binaries; the
+runtime stage is a slim Debian with the same external CLI surface the agents
+shell out to (`git`, `gh`, `jq`, AForge, OpenCode, Codex, Claude Code).
 
 Build the image (context is the **repo root**, so the whole `go/` module is
 available and the SDK clone can be laid out as a sibling):
@@ -109,6 +109,26 @@ The SDK clone layer is cache-keyed on this arg — **bump the ref to pull a newe
 SDK**; an unchanged ref restores the cached clone (same rationale as the
 docker-pip cache-busting rule: the constraint string itself must change to
 invalidate the layer).
+
+The AForge download is pinned the same way:
+
+```bash
+docker build -f go/Dockerfile \
+     --build-arg AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge \
+     --build-arg AFORGE_VERSION=v0.1.0 \
+     -t swe-af-go:latest .
+```
+
+`AFORGE_VERSION` is part of the fetch layer's cache key, so bumping it is what
+pulls a newer AForge — a floating URL alone would keep restoring the cached
+binary. `AFORGE_BASE_URL` exists so a mirror can be substituted.
+
+> **The `aforge` runtime needs a Go SDK that has the aforge harness provider.**
+> That is agentfield#905, first released in `sdk/go/v0.1.130` — the version
+> `go/go.mod` requires and the commit `AGENTFIELD_SDK_REF` pins here and in
+> `.github/workflows/ci.yml`. Keep the three in sync when bumping; an older SDK
+> returns `unknown harness provider: "aforge"` and the node has to be pointed at
+> another runtime with `SWE_DEFAULT_RUNTIME`.
 
 ### Compose: opt-in add-on to the Python stack
 
@@ -155,9 +175,10 @@ set; the load-bearing ones:
 | Variable                                                  | Purpose                                              |
 |-----------------------------------------------------------|------------------------------------------------------|
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`           | Claude runtime (`claude_code`)                       |
-| `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`| Open runtimes (`open_code` / `codex`)                |
+| `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`| Open runtimes (`aforge` / `open_code` / `codex`)     |
 | `GH_TOKEN`                                                | Optional: GitHub PAT (`repo` scope) — needed for private repos and PRs |
-| `SWE_DEFAULT_RUNTIME`                                     | `claude_code` \| `open_code` \| `codex` (unset: auto — `open_code` when only an OpenRouter key is present, else `claude_code`) |
+| `SWE_DEFAULT_RUNTIME`                                     | `aforge` \| `claude_code` \| `open_code` \| `codex` (unset: auto — `aforge` when an OpenRouter key is available, else `claude_code`) |
+| `AGENTFIELD_AFORGE_COMMAND`                               | AForge headless command — `exec` (default, baked into the image) or `do` |
 | `SWE_DEFAULT_MODEL`                                       | Default model when the request config omits `models` |
 | `SWE_CODEX_AUTH_MODE`                                     | `auto` \| `chatgpt` \| `api_key` (codex CLI auth)     |
 | `OPENCODE_ENABLE_EXA` + `EXA_API_KEY`                     | Optional web search for the open runtime             |
