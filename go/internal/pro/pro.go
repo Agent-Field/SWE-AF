@@ -101,16 +101,23 @@ func Enabled() bool {
 func BinPath() string { return envOr(EnvBin, DefaultBin) }
 
 // runnable reports whether path is an existing regular file we could actually
-// spawn. Mere existence is not enough: a copy that lost its execute bit (some
-// installers create destination files with a fresh 0644 mode) would otherwise
-// look available and then fail at exec time, which is exactly the state the
-// availability gate exists to avoid.
+// spawn. On Unix, mere existence is not enough: a copy that lost its execute
+// bit (some installers create destination files with a fresh 0644 mode) would
+// otherwise look available and then fail at exec time. Windows does not expose
+// execute bits through os.Stat, so a regular file is sufficient there.
 func runnable(path string) bool {
 	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
+	if err != nil {
 		return false
 	}
-	return info.Mode().Perm()&0o111 != 0
+	return runnableMode(runtime.GOOS, info.Mode())
+}
+
+func runnableMode(goos string, mode os.FileMode) bool {
+	if !mode.IsRegular() {
+		return false
+	}
+	return goos == "windows" || mode.Perm()&0o111 != 0
 }
 
 // osExecutable is os.Executable, indirected so tests can point the sibling
@@ -126,7 +133,15 @@ var osExecutable = os.Executable
 // plain name stays as a fallback for layouts that place one hand-built engine
 // beside the node (an unpacked image, a local engine build).
 func siblingNames() []string {
-	return []string{"swe-pro-" + runtime.GOOS + "-" + runtime.GOARCH, "swe-pro"}
+	return siblingNamesFor(runtime.GOOS, runtime.GOARCH)
+}
+
+func siblingNamesFor(goos, goarch string) []string {
+	platformName := "swe-pro-" + goos + "-" + goarch
+	if goos == "windows" {
+		return []string{platformName + ".exe", "swe-pro.exe", platformName, "swe-pro"}
+	}
+	return []string{platformName, "swe-pro"}
 }
 
 // ResolveBin returns the first runnable engine binary on disk. An explicit

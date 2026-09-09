@@ -706,8 +706,8 @@ _DEFAULT_MODEL_ENV_VARS: tuple[str, ...] = (
 )
 
 
-def _default_model_from_env() -> str | None:
-    """Pick a single model id from deployer env vars.
+def _default_model_from_env(runtime: str) -> str | None:
+    """Pick a single model id from deployer env vars, for ``runtime``.
 
     Cascades through the well-known env-var names this stack uses for model
     selection so the same Railway / docker-compose variable that points
@@ -716,11 +716,21 @@ def _default_model_from_env() -> str | None:
 
         SWE_DEFAULT_MODEL  →  AI_MODEL  →  HARNESS_MODEL
 
+    ``HARNESS_MODEL`` is an OpenCode-ecosystem variable — it also feeds
+    OpenCode's ``small_model`` via config interpolation, and the Docker image
+    bakes a default value precisely so that interpolation always has one — so
+    it only participates in the cascade for the ``open_code`` runtime. Letting
+    it steer ``claude_code`` / ``codex`` pushed the image's baked
+    ``openrouter/…`` id into CLIs that cannot consume it, breaking every
+    non-OpenCode Docker deployment that didn't also set ``SWE_DEFAULT_MODEL``.
+
     Caller-supplied ``models={"default": …}`` and per-role overrides still
     beat the env value (see ``resolve_runtime_models`` precedence). All
     unset / empty → ``None``, which means "use the runtime base defaults".
     """
     for var in _DEFAULT_MODEL_ENV_VARS:
+        if var == "HARNESS_MODEL" and runtime != "open_code":
+            continue
         value = os.getenv(var, "").strip()
         if value:
             return value
@@ -780,7 +790,8 @@ def _default_planning_model(runtime: str | None = None) -> str:
     Precedence is inherited from ``resolve_runtime_models`` (highest first):
 
         1. ``SWE_MODEL_HIGH`` (planning reasoners are high-tier)
-        2. deployer env (``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` → ``HARNESS_MODEL``)
+        2. deployer env (``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` →
+           ``HARNESS_MODEL``, the latter only on ``open_code``)
         3. the runtime's own auto/base default:
              - ``codex``       → a codex-native model (never ``openrouter/…``)
              - ``open_code``   → the OpenRouter auto default (OpenRouter-only
@@ -869,7 +880,9 @@ def resolve_runtime_models(
     Resolution order (lowest → highest precedence):
         1. runtime base defaults (``_RUNTIME_BASE_MODELS[runtime]``)
         2. env-var cascade: ``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` →
-           ``HARNESS_MODEL`` (first non-empty wins, applies to all roles)
+           ``HARNESS_MODEL`` (first non-empty wins, applies to all roles;
+           ``HARNESS_MODEL`` is consulted only on the ``open_code`` runtime —
+           see ``_default_model_from_env``)
         3. tier env vars: ``SWE_MODEL_LOW`` / ``SWE_MODEL_MED`` /
            ``SWE_MODEL_HIGH``, each applying to the roles in its tier
            (see ``ROLE_TO_TIER``)
@@ -898,7 +911,7 @@ def resolve_runtime_models(
         base = {field: _OPENROUTER_AUTO_DEFAULT_MODEL for field in base}
     resolved: dict[str, str] = {field: base[field] for field in field_names}
 
-    env_default = _default_model_from_env()
+    env_default = _default_model_from_env(runtime)
     if env_default:
         for field in field_names:
             resolved[field] = env_default

@@ -408,6 +408,42 @@ class TestDefaultModelFromEnv(unittest.TestCase):
                     resolved[field], "openrouter/moonshotai/kimi-k2.6"
                 )
 
+    def test_harness_model_ignored_on_claude_code(self) -> None:
+        # HARNESS_MODEL is OpenCode-scoped: the Docker image bakes a default
+        # value for OpenCode's small_model interpolation, so honoring it on
+        # claude_code would silently push an openrouter/… id into the Claude
+        # CLI on every Docker deployment.
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
+        env["HARNESS_MODEL"] = "openrouter/deepseek/deepseek-v4-flash-0731"
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="claude_code", models=None)
+            self.assertEqual(resolved["pm_model"], "sonnet")
+            self.assertEqual(resolved["qa_synthesizer_model"], "haiku")
+
+    def test_harness_model_ignored_on_codex(self) -> None:
+        # Same scoping for codex: it resolves its auth-mode default instead of
+        # the baked OpenCode fallback (pre-fix this failed the PM in ~13s).
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
+        env["HARNESS_MODEL"] = "openrouter/deepseek/deepseek-v4-flash-0731"
+        env["SWE_CODEX_AUTH_MODE"] = "api_key"
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="codex", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(resolved[field], "gpt-5.3-codex")
+
+    def test_swe_default_model_still_applies_on_claude_code(self) -> None:
+        # Only HARNESS_MODEL is runtime-scoped — the deployer-intent vars
+        # (SWE_DEFAULT_MODEL, AI_MODEL) keep steering every runtime.
+        cascade_vars = {"SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"}
+        env = {k: v for k, v in os.environ.items() if k not in cascade_vars}
+        env["AI_MODEL"] = "claude-opus-5"
+        with mock.patch.dict(os.environ, env, clear=True):
+            resolved = resolve_runtime_models(runtime="claude_code", models=None)
+            for field in ALL_MODEL_FIELDS:
+                self.assertEqual(resolved[field], "claude-opus-5")
+
     def test_swe_default_model_beats_ai_model_in_cascade(self) -> None:
         # When both are set, the SWE-specific name wins so deployers can
         # override the global AI_MODEL just for this service.
@@ -562,6 +598,32 @@ class TestRuntimeProviderMapping(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             normalize_runtime_provider("bad_runtime")
+
+
+class TestDockerfileHarnessModelDefault(unittest.TestCase):
+    """Guard: the HARNESS_MODEL the images bake must be the OpenRouter auto
+    default the code and README promise. Docker layer caching plus the env
+    cascade means a drifted value silently becomes what every OpenRouter-only
+    deployment actually runs (that is exactly how kimi-k2.6 shipped)."""
+
+    def _dockerfile_value(self, relpath: str) -> str:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, relpath), encoding="utf-8") as fp:
+            for line in fp:
+                if line.startswith("ENV HARNESS_MODEL="):
+                    return line.strip().split("=", 1)[1]
+        raise AssertionError(f"no ENV HARNESS_MODEL line in {relpath}")
+
+    def test_python_image_matches_auto_default(self) -> None:
+        self.assertEqual(
+            self._dockerfile_value("Dockerfile"), _OPENROUTER_AUTO_DEFAULT_MODEL
+        )
+
+    def test_go_image_matches_auto_default(self) -> None:
+        self.assertEqual(
+            self._dockerfile_value(os.path.join("go", "Dockerfile")),
+            _OPENROUTER_AUTO_DEFAULT_MODEL,
+        )
 
 
 if __name__ == "__main__":
