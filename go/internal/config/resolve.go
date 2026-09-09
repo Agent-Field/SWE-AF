@@ -136,6 +136,11 @@ const (
 	// SWE_DEFAULT_RUNTIME=open_code resolve here, so opting in explicitly
 	// never silently swaps the model.
 	openRouterAutoDefaultModel = "openrouter/deepseek/deepseek-v4-flash-0731"
+
+	// Default model for the auto-selected Infron path (see infronOnlyEnv).
+	// Infron is OpenAI-compatible and serves the standard <provider>/<model>
+	// ids, so this is the existing gateway default with the prefix swapped.
+	infronAutoDefaultModel = "infron/deepseek/deepseek-v4-flash-0731"
 )
 
 // runtimeBaseModels ports _RUNTIME_BASE_MODELS[runtime] as a fresh copy for the
@@ -186,13 +191,31 @@ func openRouterOnlyEnv() bool {
 	return envStripped("OPENROUTER_API_KEY") != ""
 }
 
+// infronOnlyEnv ports _infron_only_env: whether the deployer implicitly chose
+// the Infron gateway (no explicit SWE_DEFAULT_RUNTIME, no Anthropic key, no
+// other gateway key, but an Infron key present). A gateway key that was already
+// honored before Infron existed keeps precedence, so adding an Infron key never
+// silently reroutes an existing deployment.
+func infronOnlyEnv() bool {
+	if envStripped("SWE_DEFAULT_RUNTIME") != "" {
+		return false
+	}
+	if envStripped("ANTHROPIC_API_KEY") != "" {
+		return false
+	}
+	if envStripped("OPENROUTER_API_KEY") != "" {
+		return false
+	}
+	return envStripped("INFRON_API_KEY") != ""
+}
+
 // DefaultRuntime ports _default_runtime, honoring SWE_DEFAULT_RUNTIME.
-// When unset, auto-selects open_code if only an OpenRouter key is present,
+// When unset, auto-selects open_code if only a gateway key is present,
 // otherwise claude_code. An invalid env value falls back to claude_code.
 func DefaultRuntime() string {
 	value := envStripped("SWE_DEFAULT_RUNTIME")
 	if value == "" {
-		if openRouterOnlyEnv() {
+		if openRouterOnlyEnv() || infronOnlyEnv() {
 			return "open_code"
 		}
 		return "claude_code"
@@ -272,8 +295,8 @@ func tierModelsFromEnv() map[string]string {
 // DefaultPlanningModel ports _default_planning_model: SWE_MODEL_HIGH first
 // (the planning reasoners are high-tier roles, see RoleToTier — the same
 // relative precedence tier env vars have in ResolveRuntimeModels), then the
-// env cascade, then the OpenRouter default when only an OpenRouter key is
-// present, else "sonnet".
+// env cascade, then the gateway default when only a gateway key is present,
+// else "sonnet".
 func DefaultPlanningModel() string {
 	if highModel := tierModelsFromEnv()["high"]; highModel != "" {
 		return highModel
@@ -283,6 +306,9 @@ func DefaultPlanningModel() string {
 	}
 	if openRouterOnlyEnv() {
 		return openRouterAutoDefaultModel
+	}
+	if infronOnlyEnv() {
+		return infronAutoDefaultModel
 	}
 	return "sonnet"
 }
@@ -377,6 +403,10 @@ func ResolveRuntimeModels(runtime string, models map[string]string, fieldNames [
 	} else if runtime == "open_code" && openRouterOnlyEnv() {
 		for field := range base {
 			base[field] = openRouterAutoDefaultModel
+		}
+	} else if runtime == "open_code" && infronOnlyEnv() {
+		for field := range base {
+			base[field] = infronAutoDefaultModel
 		}
 	}
 

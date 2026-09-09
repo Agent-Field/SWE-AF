@@ -48,14 +48,15 @@ services:
       - NODE_ID=swe-planner-go
       - PORT=8005
       - AGENT_CALLBACK_URL=http://swe-agent-go:8005
-      # Empty = auto: open_code when only an OpenRouter key is present,
-      # else claude_code. A baked claude_code fallback here would break
-      # OpenRouter-only deployments.
+      # Empty = auto: open_code when only an OpenRouter or Infron key is
+      # present, else claude_code. A baked claude_code fallback here would
+      # break gateway-only deployments.
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - INFRON_API_KEY=${INFRON_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - GH_TOKEN=${GH_TOKEN:-}
@@ -102,6 +103,7 @@ services:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - GH_TOKEN=${GH_TOKEN:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - INFRON_API_KEY=${INFRON_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       # Go direct-LLM path (run_qa_synthesizer via the SDK ai.DefaultConfig

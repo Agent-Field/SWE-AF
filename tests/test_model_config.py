@@ -12,6 +12,7 @@ from swe_af.execution.schemas import (
     BuildConfig,
     ExecutionConfig,
     ROLE_TO_MODEL_FIELD,
+    _INFRON_AUTO_DEFAULT_MODEL,
     _OPENROUTER_AUTO_DEFAULT_MODEL,
     _default_planning_model,
     _default_runtime,
@@ -23,6 +24,7 @@ from swe_af.execution.schemas import (
 _PROVIDER_ENV_KEYS = (
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
+    "INFRON_API_KEY",
     "SWE_DEFAULT_RUNTIME",
     "SWE_DEFAULT_MODEL",
     "AI_MODEL",
@@ -128,6 +130,80 @@ class TestBuildConfig(unittest.TestCase):
         self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash-0731")
 
 
+class TestInfronAutoSelection(unittest.TestCase):
+    """The Infron gateway mirrors the existing gateway auto-selection path:
+    with only an INFRON_API_KEY present, SWE-AF picks open_code and the Infron
+    default model. A gateway key already configured keeps precedence."""
+
+    def test_infron_only_auto_selects_open_code(self) -> None:
+        with _provider_env(INFRON_API_KEY="sk-inf"):
+            self.assertEqual(_default_runtime(), "open_code")
+
+    def test_anthropic_key_keeps_claude_code(self) -> None:
+        with _provider_env(ANTHROPIC_API_KEY="sk-ant", INFRON_API_KEY="sk-inf"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_explicit_runtime_overrides_autoselect(self) -> None:
+        with _provider_env(INFRON_API_KEY="sk-inf", SWE_DEFAULT_RUNTIME="claude_code"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_auto_infron_defaults_to_deepseek(self) -> None:
+        with _provider_env(INFRON_API_KEY="sk-inf"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "infron/deepseek/deepseek-v4-flash-0731")
+
+    def test_explicit_open_code_uses_current_base_default(self) -> None:
+        with _provider_env(INFRON_API_KEY="sk-inf", SWE_DEFAULT_RUNTIME="open_code"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(
+                resolved[field], "openrouter/deepseek/deepseek-v4-flash-0731"
+            )
+
+    def test_harness_model_overrides_infron_auto_default(self) -> None:
+        openrouter_model = "openrouter/deepseek/deepseek-v4-flash-0731"
+        with _provider_env(INFRON_API_KEY="sk-inf", HARNESS_MODEL=openrouter_model):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], openrouter_model)
+
+        infron_model = "infron/deepseek/deepseek-v4-flash-0731"
+        with _provider_env(INFRON_API_KEY="sk-inf", HARNESS_MODEL=infron_model):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], infron_model)
+
+    def test_swe_default_model_overrides_auto(self) -> None:
+        with _provider_env(
+            INFRON_API_KEY="sk-inf", SWE_DEFAULT_MODEL="infron/moonshotai/kimi-k2.6"
+        ):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "infron/moonshotai/kimi-k2.6")
+
+    def test_planning_model_uses_infron_default(self) -> None:
+        with _provider_env(INFRON_API_KEY="sk-inf"):
+            self.assertEqual(_default_planning_model(), _INFRON_AUTO_DEFAULT_MODEL)
+
+    def test_build_config_auto_infron_end_to_end(self) -> None:
+        with _provider_env(INFRON_API_KEY="sk-inf"):
+            cfg = BuildConfig()
+            self.assertEqual(cfg.runtime, "open_code")
+            resolved = cfg.resolved_models()
+        self.assertEqual(
+            resolved["coder_model"], "infron/deepseek/deepseek-v4-flash-0731"
+        )
+
+    def test_model_ids_unchanged_after_prefix_swap(self) -> None:
+        """The model id itself does not change across gateways, so the defaults
+        differ only by prefix. Guards against the constants drifting apart."""
+        self.assertEqual(
+            _INFRON_AUTO_DEFAULT_MODEL.split("/", 1)[1],
+            _OPENROUTER_AUTO_DEFAULT_MODEL.split("/", 1)[1],
+        )
+
+
 class TestOpenRouterAutoSelection(unittest.TestCase):
     """When only an OpenRouter key is present (no explicit runtime), SWE-AF
     auto-selects the open_code runtime and defaults to DeepSeek."""
@@ -181,6 +257,14 @@ class TestOpenRouterAutoSelection(unittest.TestCase):
             self.assertEqual(cfg.runtime, "open_code")
             resolved = cfg.resolved_models()
         self.assertEqual(resolved["coder_model"], "openrouter/deepseek/deepseek-v4-flash-0731")
+
+    def test_infron_key_does_not_disturb_existing_gateway(self) -> None:
+        # Adding an Infron key alongside an existing one must not reroute
+        # anything.
+        with _provider_env(OPENROUTER_API_KEY="sk-or", INFRON_API_KEY="sk-inf"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], _OPENROUTER_AUTO_DEFAULT_MODEL)
 
     def test_to_execution_config_dict_roundtrips(self) -> None:
         cfg = BuildConfig(runtime="open_code", models={"coder": "deepseek/deepseek-chat"})
