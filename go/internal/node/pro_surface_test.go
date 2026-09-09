@@ -83,3 +83,28 @@ func TestProSurfaceEnabledButBinaryMissing(t *testing.T) {
 		t.Error("pro_execute registered with SWE_PRO_ENGINE set but no binary — must degrade to the classic loop")
 	}
 }
+
+// TestWorkspaceHandleWithheldWhenProSurfaceReplacesClassic: get_workspace_handle
+// is part of the classic planner surface, so the pro engine replaces it along
+// with the orchestrators. A mirror is only ever attached by the classic
+// build/execute path, which is withheld under pro — so the reasoner could only
+// ever answer {"available": false}, and an entrypoint-tagged surface that can
+// only answer that is an invitation to route to it. Mirroring itself stays on
+// (furrowd keeps serving mirrors made before the flag flipped); it is the
+// advertised entry point that goes.
+func TestWorkspaceHandleWithheldWhenProSurfaceReplacesClassic(t *testing.T) {
+	t.Setenv(pro.EnvEnabled, "1")
+	fakeEngineBin(t)
+
+	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
+	if err != nil {
+		t.Fatalf("BuildAgent: %v", err)
+	}
+	// Mirroring fully on: the gate must be the pro surface, not furrow.
+	n.Furrow = stubAttacher{enabled: true}
+	n.RegisterPlanner()
+
+	if toSet(n.RegisteredNames())["get_workspace_handle"] {
+		t.Error("get_workspace_handle registered with the pro surface on — it belongs to the classic entry points the pro engine replaces")
+	}
+}

@@ -93,6 +93,9 @@ func ExecuteHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 
 	opts := []dag.Option{
 		dag.WithNoteFn(deps.NewNoteFn(ctx)),
+		dag.WithLevelCompleteFn(func(level int) {
+			deps.furrowPublish(scopeIDFromCtx(ctx), fmt.Sprintf("level %d complete", level))
+		}),
 		dag.WithGitConfig(in.GitConfig),
 		dag.WithResume(in.Resume),
 		dag.WithBuildID(in.BuildID),

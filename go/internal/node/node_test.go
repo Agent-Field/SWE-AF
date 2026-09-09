@@ -2,13 +2,43 @@ package node
 
 import (
 	"context"
+	"encoding/json"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fast"
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
+
+func TestFurrowRootResolutionPrecedence(t *testing.T) {
+	t.Setenv("AGENTFIELD_HOME", "")
+	t.Setenv("SWE_FURROW_DATA_DIR", "")
+	t.Setenv("SWE_FURROW_REMOTES_ROOT", "")
+	store, remotes := furrowRoots()
+	if store != filepath.Join(workspace.Root(), ".furrow-store") || remotes != filepath.Join(workspace.Root(), ".furrow-remotes") {
+		t.Fatalf("legacy roots = (%q, %q)", store, remotes)
+	}
+
+	home := t.TempDir()
+	t.Setenv("AGENTFIELD_HOME", home)
+	store, remotes = furrowRoots()
+	if store != filepath.Join(home, "furrow", "store") || remotes != filepath.Join(home, "furrow", "remotes") {
+		t.Fatalf("AGENTFIELD_HOME roots = (%q, %q)", store, remotes)
+	}
+
+	t.Setenv("SWE_FURROW_DATA_DIR", "/override/store")
+	t.Setenv("SWE_FURROW_REMOTES_ROOT", "/override/remotes")
+	store, remotes = furrowRoots()
+	if store != "/override/store" || remotes != "/override/remotes" {
+		t.Fatalf("override roots = (%q, %q)", store, remotes)
+	}
+}
 
 // pythonRoleSurface is the independent parity checklist: the exact 25 role
 // reasoner names the Python swe_af.reasoners.router registers (pipeline.py's 5
@@ -50,6 +80,8 @@ var pythonRoleSurface = []string{
 
 // pythonOrchestrators is the 5 orchestrator reasoners defined on swe_af.app
 // (app.py @app.reasoner()): build, plan, execute, resolve, resume_build.
+// get_workspace_handle is deliberately NOT here: it is gated on furrow being
+// switched on, and TestWorkspaceHandleReasonerIsGatedOnFurrow owns it.
 var pythonOrchestrators = []string{"build", "plan", "execute", "resolve", "resume_build"}
 
 // pythonFastReasoners is the 4 first-class fast reasoners: fast/app.py's build
@@ -61,9 +93,13 @@ var pythonFastReasoners = []string{"build", "fast_plan_tasks", "fast_execute_tas
 var pythonIssueReasoners = []string{"implement_issue"}
 
 func TestRegisterPlannerExactSurface(t *testing.T) {
-	// Pin the pro engine off so an inherited SWE_PRO_ENGINE cannot
-	// widen the surface under test (the gated surface has its own test).
+	// Pin the pro engine and furrow off so an inherited SWE_PRO_ENGINE,
+	// SWE_FURROW_ENABLED or FURROW_PUBLIC_ADDR (which auto-enables mirroring
+	// when the enable flag is unconfigured) cannot widen the surface under
+	// test (each gated surface has its own test).
 	t.Setenv("SWE_PRO_ENGINE", "")
+	t.Setenv(furrow.EnvEnabled, "")
+	t.Setenv(furrow.EnvPublicAddr, "")
 	n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
 	if err != nil {
 		t.Fatalf("BuildAgent: %v", err)
@@ -75,6 +111,99 @@ func TestRegisterPlannerExactSurface(t *testing.T) {
 	want := append(append([]string(nil), pythonRoleSurface...), pythonOrchestrators...)
 	want = append(want, pythonIssueReasoners...)
 	assertSurface(t, "swe-planner", n.RegisteredNames(), want)
+}
+
+// stubAttacher is an enabled furrow that never mirrors anything: enough to
+// open the registration gate, nothing more.
+type stubAttacher struct{ enabled bool }
+
+func (s stubAttacher) Enabled() bool                                         { return s.enabled }
+func (s stubAttacher) Attach(string, string, string) (*furrow.Handle, error) { return nil, nil }
+func (s stubAttacher) Publish(string, string) error                          { return nil }
+func (s stubAttacher) Handle(string) *furrow.Handle                          { return nil }
+func (s stubAttacher) Detach(string) error                                   { return nil }
+func (s stubAttacher) Sweep(time.Duration, int64) (int, error)               { return 0, nil }
+
+// get_workspace_handle hands out the connection details for a live workspace
+// mirror. Mirroring is opt-in, so on a node that never makes a mirror the
+// reasoner must not be advertised at all — an entrypoint-tagged surface that
+// can only ever answer {"available": false} is an invitation to route to it.
+func TestWorkspaceHandleReasonerIsGatedOnFurrow(t *testing.T) {
+	const name = "get_workspace_handle"
+	for _, tc := range []struct {
+		label    string
+		attacher furrow.Attacher
+		want     bool
+	}{
+		{label: "furrow absent", attacher: nil, want: false},
+		{label: "furrow present but disabled", attacher: stubAttacher{}, want: false},
+		{label: "furrow mirroring", attacher: stubAttacher{enabled: true}, want: true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Setenv("SWE_PRO_ENGINE", "")
+			t.Setenv(furrow.EnvEnabled, "")
+			t.Setenv(furrow.EnvPublicAddr, "")
+			n, err := BuildAgent("swe-planner", "8005", "Autonomous SWE planning pipeline")
+			if err != nil {
+				t.Fatalf("BuildAgent: %v", err)
+			}
+			n.Furrow = tc.attacher
+			n.RegisterPlanner()
+			if got := toSet(n.RegisteredNames())[name]; got != tc.want {
+				t.Fatalf("%s registered = %v, want %v", name, got, tc.want)
+			}
+		})
+	}
+}
+
+// get_workspace_handle answers anyone who can reach the node and name a run —
+// there is no per-caller authorization anywhere on that path. The handle's Key
+// decrypts the workspace and its Token authenticates to furrowd read-write, so
+// neither may be the default answer to an unauthenticated question.
+func TestWorkspaceHandleRedactsSecretsUnlessOperatorOptsIn(t *testing.T) {
+	handle := &furrow.Handle{
+		Version: furrow.HandleVersion, Remote: "ssh://node.internal:8802", Namespace: "run-1",
+		Key: "0123456789abcdef", Token: "transport-token", RepoPath: "/work/repo",
+	}
+	for _, tc := range []struct {
+		env  string
+		want bool // secrets present
+	}{
+		{env: "", want: false},
+		{env: "0", want: false},
+		{env: "no", want: false},
+		{env: "1", want: true},
+		{env: "true", want: true},
+	} {
+		t.Run("SWE_FURROW_EXPOSE_SECRETS="+tc.env, func(t *testing.T) {
+			t.Setenv(furrow.EnvExposeSecrets, tc.env)
+			result := workspaceHandleResult(handle)
+
+			_, gotKey := result["key"]
+			_, gotToken := result["token"]
+			if gotKey != tc.want || gotToken != tc.want {
+				t.Fatalf("key present = %v, token present = %v, want both %v", gotKey, gotToken, tc.want)
+			}
+			if result["secrets_redacted"] != !tc.want {
+				t.Errorf("secrets_redacted = %v, want %v", result["secrets_redacted"], !tc.want)
+			}
+			// Redacting must not blind the caller: what a mirror IS stays.
+			for _, key := range []string{"v", "remote", "namespace", "repo_path"} {
+				if _, ok := result[key]; !ok {
+					t.Errorf("result dropped %q, which carries no secret", key)
+				}
+			}
+			// Nothing may smuggle the secrets back through another field.
+			rendered, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if leaked := strings.Contains(string(rendered), handle.Key) ||
+				strings.Contains(string(rendered), handle.Token); leaked != tc.want {
+				t.Fatalf("secret material in payload = %v, want %v: %s", leaked, tc.want, rendered)
+			}
+		})
+	}
 }
 
 func TestRegisterFastExactSurface(t *testing.T) {

@@ -93,9 +93,10 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 
 	deps.Note(ctx, fmt.Sprintf("Build starting (build_id=%s)", buildID), "build", "start")
 
-	// Scope key for the credentials store; cleared in the deferred finally so
-	// even an error leaves no secrets in process memory.
-	scopeID := runIDFromCtx(ctx)
+	// Scope key for the credentials store AND for this build's workspace mirror;
+	// cleared in the deferred finally so even an error leaves no secrets in
+	// process memory. Both consumers below guard against an empty scope.
+	scopeID := scopeIDFromCtx(ctx)
 	defer func() {
 		if scopeID != "" {
 			hitl.ClearScopedCredentials(scopeID)
@@ -147,6 +148,12 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			"build", "clone", "multi-repo", "complete")
 	}
 	manifestMap := dumpToMap(manifest)
+
+	workspaceHandle := deps.furrowAttach(scopeID, buildID, repoPath)
+	if workspaceHandle != nil {
+		deps.Note(ctx, fmt.Sprintf("Workspace mirror ready (namespace=%s)", workspaceHandle.Namespace),
+			"build", "furrow")
+	}
 
 	// 1. PLAN + GIT INIT (concurrent — no data dependency).
 	deps.Note(ctx, "Phase 1: Planning + Git init (parallel)", "build", "parallel")
@@ -488,6 +495,10 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		CIGateResults: ciGateResults,
 	}
 	buildResultMap := dumpToMap(buildResult)
+	deps.furrowPublish(scopeID, "build complete")
+	if workspaceHandle != nil {
+		buildResultMap["workspace_handle"] = dumpToMap(workspaceHandle)
+	}
 
 	// Empty-build guard: nothing shipped AND verification failed → report failed.
 	// Return the SDK's result-carrying &agent.ReasonerFailed so the async handler

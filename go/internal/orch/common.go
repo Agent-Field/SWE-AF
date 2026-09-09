@@ -25,6 +25,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/coding"
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
@@ -64,6 +65,11 @@ type Deps struct {
 	CIGate           CIGateRunner
 	ApprovalGate     ApprovalGate
 
+	// Furrow mirrors a build's workspace to a per-run encrypted remote so a
+	// caller can clone and follow it while the build runs. A nil Attacher (the
+	// default) disables the whole feature silently.
+	Furrow furrow.Attacher
+
 	// DefaultExecuteFnTarget, when non-empty, is the external coder target
 	// applied by the execute path whenever a request does not name one — the
 	// node-level engine opt-in seam. A caller-supplied execute_fn_target
@@ -94,7 +100,25 @@ var sleepFn = func(ctx context.Context, d time.Duration) {
 	}
 }
 
-func runIDFromCtx(ctx context.Context) string       { return executionContextFrom(ctx).RunID }
+// scopeIDFromCtx is the key every per-run store in a build files its state
+// under: the control-plane run ID when there is one, and the root workflow ID
+// when the run ID is absent. planning.Scout already stashes scoped credentials
+// behind exactly this fallback, so anything keyed differently would look at a
+// row Scout never wrote.
+//
+// The fallback is not cosmetic. An empty key is a SHARED key: the furrow
+// registry would file two unrelated builds under the same row, and the second
+// build's Attach would hand back the first build's workspace path, recovery key
+// and transport token. Whatever this returns must either identify one build or
+// be empty, and callers must treat empty as "no scoped state at all".
+func scopeIDFromCtx(ctx context.Context) string {
+	ec := executionContextFrom(ctx)
+	if ec.RunID != "" {
+		return ec.RunID
+	}
+	return ec.RootWorkflowID
+}
+
 func executionIDFromCtx(ctx context.Context) string { return executionContextFrom(ctx).ExecutionID }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +129,26 @@ func executionIDFromCtx(ctx context.Context) string { return executionContextFro
 func (d *Deps) Note(ctx context.Context, message string, tags ...string) {
 	if d != nil && d.App != nil {
 		d.App.Note(ctx, message, tags...)
+	}
+}
+
+// furrowAttach forwards to the optional workspace mirror without allowing an
+// unavailable or failed attachment to affect the build.
+func (d *Deps) furrowAttach(runID, buildID, repoPath string) *furrow.Handle {
+	if d == nil || d.Furrow == nil {
+		return nil
+	}
+	handle, err := d.Furrow.Attach(runID, buildID, repoPath)
+	if err != nil {
+		return nil
+	}
+	return handle
+}
+
+// furrowPublish publishes a best-effort workspace snapshot.
+func (d *Deps) furrowPublish(runID, label string) {
+	if d != nil && d.Furrow != nil {
+		_ = d.Furrow.Publish(runID, label)
 	}
 }
 

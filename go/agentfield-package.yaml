@@ -67,6 +67,61 @@ user_environment:
       description: Engine reasoning-effort variant (low | high) — unset keeps the engine default
     - name: SWE_PRO_MAX_COST
       description: Per-run USD ceiling for the engine — unset means no per-run cap
+    - name: SWE_FURROW_ENABLED
+      description: >-
+        Furrow workspace mirroring. Set 1/true/yes/on to force it on, 0 to force it
+        off. Unset, it follows FURROW_PUBLIC_ADDR: cloud deploys (where the desktop
+        app provisions a public sync port and sets that variable) mirror out of the
+        box, local installs stay off. Mirroring copies the whole build workspace —
+        including untracked files and any secrets the coder wrote there — into a
+        second encrypted store on this node.
+      # No default on purpose: a non-empty default is injected into the node's
+      # environment as an EXPLICIT value, which would defeat the unset-follows-
+      # FURROW_PUBLIC_ADDR behaviour that turns mirroring on in cloud deploys.
+      default: ""
+    - name: SWE_FURROW_EXPOSE_SECRETS
+      description: >-
+        Return the recovery key and transport token from get_workspace_handle instead of
+        redacting them. That reasoner authorizes no one — any caller with a run ID is
+        answered — and the key decrypts the workspace while the token grants read-write
+        access to its remote. Enable only on a single-tenant, trusted cluster.
+      default: "0"
+    - name: SWE_FURROW_BIN
+      description: Path to the furrow client binary — unset auto-resolves (/usr/local/bin/furrow, then vendored bin/furrow-<os>-<arch>)
+      default: ""
+    - name: SWE_FURROWD_BIN
+      description: Path to the furrow daemon binary — unset auto-resolves (/usr/local/bin/furrowd, then vendored bin/furrowd-<os>-<arch>)
+      default: ""
+    - name: SWE_FURROW_DATA_DIR
+      description: Furrow client data directory — unset uses $AGENTFIELD_HOME/furrow/store when AGENTFIELD_HOME is set, otherwise <workspace root>/.furrow-store
+      default: ""
+    - name: SWE_FURROW_REMOTES_ROOT
+      description: Furrow remote stores root — unset uses $AGENTFIELD_HOME/furrow/remotes when AGENTFIELD_HOME is set, otherwise <workspace root>/.furrow-remotes
+      default: ""
+    - name: SWE_FURROW_TTL_HOURS
+      description: Retention time for mirrored workspaces in hours
+      default: "72"
+    - name: SWE_FURROW_MAX_GB
+      description: Maximum aggregate furrow store size in GB; 0 means unlimited disk (no budget eviction)
+      default: "20"
+    - name: FURROWD_ADDR
+      description: Address on which furrowd listens
+      default: ":8802"
+    - name: FURROW_PUBLIC_ADDR
+      description: >-
+        Public furrowd host and port advertised in ssh:// workspace handles. The
+        AgentField desktop app's cloud deploy sets this on the control-plane service
+        (a Railway TCP proxy in front of furrowd's port 8802) and nodes inherit it;
+        its presence also turns mirroring on unless SWE_FURROW_ENABLED says otherwise.
+      default: ""
+    - name: FURROW_DIAL_TOKEN
+      description: Token from an ssh:// workspace handle used by furrow clients
+    - name: FURROW_DIAL_INSECURE
+      description: Allow the default self-signed furrowd certificate; required for ssh:// handles until certificate pinning is available
+    - name: FURROWD_TLS_CERT
+      description: Path to an operator-provided furrowd TLS certificate
+    - name: FURROWD_TLS_KEY
+      description: Path to the matching operator-provided furrowd TLS private key
     - name: AGENTFIELD_SERVER
       description: Control-plane URL
       default: http://localhost:8080
