@@ -52,6 +52,20 @@ type Node struct {
 	// surface. RegisterReasoner is a pure insert keyed by name, so this slice
 	// equals the agent's reasoner set (the test also guards against duplicates).
 	registered []string
+
+	// meta records the resolved discovery metadata of every reasoner passed
+	// through regHandler, keyed by name. The SDK keeps its own reasoner map
+	// unexported, so this is the only way the surface tests can assert what a
+	// caller actually sees on the control plane.
+	meta map[string]ReasonerMeta
+}
+
+// ReasonerMeta is the discovery-facing metadata a reasoner registers with: the
+// tags and the description `af ls` and GET /api/v1/discovery/capabilities show
+// a caller deciding which reasoner to invoke.
+type ReasonerMeta struct {
+	Tags        []string
+	Description string
 }
 
 // RegisteredNames returns a copy of the reasoner names registered on this node,
@@ -59,6 +73,18 @@ type Node struct {
 // matches the Python node.
 func (n *Node) RegisteredNames() []string {
 	return append([]string(nil), n.registered...)
+}
+
+// RegisteredMeta returns a copy of the registration metadata keyed by reasoner
+// name. Used by the surface tests to assert the entrypoint tagging and the
+// internal-stage markers a discovering caller routes on.
+func (n *Node) RegisteredMeta() map[string]ReasonerMeta {
+	out := make(map[string]ReasonerMeta, len(n.meta))
+	for name, m := range n.meta {
+		m.Tags = append([]string(nil), m.Tags...)
+		out[name] = m
+	}
+	return out
 }
 
 // BuildAgent constructs the SWE-AF agent from the environment exactly as the

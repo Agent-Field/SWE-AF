@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/afx"
@@ -78,7 +79,6 @@ func ProExecute(ctx context.Context, deps *Deps, input map[string]any) (any, err
 	// Optional env-driven dispatch overrides: cost ceiling, sub-agent model
 	// pools and reasoning-effort variant. Unset keeps the engine's defaults.
 	for env, kw := range map[string]string{
-		EnvMaxCost:    "max_cost",
 		EnvModelsHigh: "high",
 		EnvModelsLow:  "low",
 		EnvVariant:    "variant",
@@ -86,6 +86,17 @@ func ProExecute(ctx context.Context, deps *Deps, input map[string]any) (any, err
 		if v := os.Getenv(env); v != "" {
 			kwargs[kw] = v
 		}
+	}
+	// max_cost is a number in the engine's contract — code_task rejects string
+	// scalars rather than coercing them, so forwarding the raw env string
+	// would fail every dispatch. An unparseable ceiling is a configuration
+	// error surfaced per-dispatch, not a limit to drop silently.
+	if v := os.Getenv(EnvMaxCost); v != "" {
+		cost, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return nil, fmt.Errorf("pro_execute: %s=%q is not a number", EnvMaxCost, v)
+		}
+		kwargs["max_cost"] = cost
 	}
 
 	name, _ := in.Issue["name"].(string)

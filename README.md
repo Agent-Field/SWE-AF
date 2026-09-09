@@ -242,7 +242,7 @@ New to AgentField? Install the control plane first with `curl -fsSL https://agen
 
 ### Deploy with Railway (fastest)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/swe-af)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/agentfield-engineering-team)
 
 One click deploys SWE-AF + AgentField control plane + PostgreSQL. Exactly **one** environment variable is required in Railway — an LLM provider key:
 
@@ -377,9 +377,33 @@ JSON
 
 For OpenRouter with `open_code`, use model IDs in `openrouter/<provider>/<model>` format (for example `openrouter/minimax/minimax-m2.5`).
 
+### MiniMax direct providers
+
+The Docker images include direct MiniMax provider entries for both supported regions and API compatibility modes. `MiniMax-M3` and `MiniMax-M2.7` are available in every entry.
+
+| Region | OpenAI-compatible `open_code` model IDs | Anthropic-compatible `open_code` model IDs | Anthropic base URL |
+|---|---|---|---|
+| Global | `minimax-global-openai/MiniMax-M3`, `minimax-global-openai/MiniMax-M2.7` | `minimax-anthropic/MiniMax-M3`, `minimax-anthropic/MiniMax-M2.7` | `https://api.minimax.io/anthropic` |
+| China | `minimax-cn-openai/MiniMax-M3`, `minimax-cn-openai/MiniMax-M2.7` | `minimax-anthropic/MiniMax-M3`, `minimax-anthropic/MiniMax-M2.7` | `https://api.minimaxi.com/anthropic` |
+
+| Model | Context window | Input modalities | Thinking | Input / output / cache read / cache write per million tokens |
+|---|---:|---|---|---|
+| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | $0.30 / $1.20 / $0.06 / not charged |
+| `MiniMax-M2.7` | 204,800 | text | always on | $0.30 / $1.20 / $0.06 / $0.375 |
+
+`MiniMax-M3` pricing is tiered by input length: requests over 512K input tokens are billed at $0.60 / $2.40 / $0.12 instead. The baked provider metadata uses the standard ≤512K tier, which is what normal coding requests hit.
+
+For the direct OpenAI-compatible path, set `MINIMAX_API_KEY`, use `runtime: "open_code"`, and select one of the `minimax-global-openai/*` or `minimax-cn-openai/*` model IDs above. The configured OpenAI-compatible base URLs are `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`.
+
+For the Anthropic-compatible OpenCode path, set `MINIMAX_API_KEY`, set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above, use `runtime: "open_code"`, and select `minimax-anthropic/MiniMax-M3` or `minimax-anthropic/MiniMax-M2.7`. The provider configuration appends `/v1`; keep `ANTHROPIC_BASE_URL` at the regional `/anthropic` URL.
+
+For the Anthropic-compatible Claude path, set `ANTHROPIC_AUTH_TOKEN`, set `ANTHROPIC_BASE_URL` to the regional `/anthropic` URL shown above, use `runtime: "claude_code"`, and select `MiniMax-M3` or `MiniMax-M2.7`. Do not append `/v1`; Claude Code adds `/v1/messages` to the configured base URL. Unset `ANTHROPIC_API_KEY` (and `CLAUDE_CODE_OAUTH_TOKEN`) in that deployment — an Anthropic credential left in the environment can be sent to the non-Anthropic endpoint.
+
+`ANTHROPIC_BASE_URL` is process-wide, so one deployment cannot route Claude and MiniMax Anthropic-compatible traffic to different endpoints.
+
 For Codex with ChatGPT subscription auth, install the Codex CLI on the host, run `codex login`, leave `OPENAI_API_KEY` unset for this process, and set `SWE_CODEX_AUTH_MODE=chatgpt` or `auto`. For OpenAI API-platform billing, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
-> **Codex deployments using the Docker image must set `SWE_DEFAULT_MODEL=gpt-5.3-codex` on the environment** (or pass `models: {"default": "gpt-5.3-codex"}` in every build's `config`). The image bakes `HARNESS_MODEL=openrouter/moonshotai/kimi-k2.6` as an OpenCode fallback, and SWE-AF's model-resolution env cascade reads `HARNESS_MODEL` — so without `SWE_DEFAULT_MODEL` set, the Codex CLI receives an OpenRouter model id it can't handle and the Product Manager reasoner fails in ~13s. Setting `SWE_DEFAULT_MODEL` makes the cascade pin every role to the Codex model.
+> The Docker image bakes `HARNESS_MODEL=openrouter/deepseek/deepseek-v4-flash-0731` so OpenCode's `small_model` config interpolation always has a value. `HARNESS_MODEL` only affects the `open_code` runtime — `claude_code` and `codex` deployments resolve their own runtime defaults (codex picks its model by auth mode) and can override per role via `SWE_DEFAULT_MODEL` / `models` as usual.
 
 > Codex CLI's `workspace-write` sandbox uses bubblewrap (`bwrap`) and needs Linux user namespaces enabled on the host. Most production Linux hosts and managed container runtimes (Railway, etc.) allow this by default, but local Docker on WSL2 or hardened environments may refuse with `bwrap: No permissions to create a new namespace`. If the verifier reports that error, the coder ran but couldn't write files — enable user namespaces on the host before relying on the codex runtime there.
 

@@ -137,8 +137,28 @@ func TestProExecuteMaxCostForwarded(t *testing.T) {
 		map[string]any{"issue": sampleIssue(), "repo_path": "/tmp/repo"}); err != nil {
 		t.Fatal(err)
 	}
-	if rec.kwargs["max_cost"] != "2.50" {
-		t.Errorf("max_cost = %v, want 2.50", rec.kwargs["max_cost"])
+	// The engine's contract types max_cost as a number and rejects string
+	// scalars, so the ceiling must cross the wire as a float, not the raw
+	// env string.
+	if rec.kwargs["max_cost"] != 2.50 {
+		t.Errorf("max_cost = %#v, want float64 2.5", rec.kwargs["max_cost"])
+	}
+}
+
+func TestProExecuteMaxCostUnparseable(t *testing.T) {
+	t.Setenv(EnvMaxCost, "five dollars")
+	rec := &callRec{res: map[string]any{"status": "pass"}}
+	deps := &Deps{Call: rec.call, EngineNode: "swe-pro"}
+	_, err := ProExecute(context.Background(), deps,
+		map[string]any{"issue": sampleIssue(), "repo_path": "/tmp/repo"})
+	if err == nil {
+		t.Fatal("want an error for an unparseable cost ceiling, got nil")
+	}
+	if !strings.Contains(err.Error(), EnvMaxCost) || !strings.Contains(err.Error(), "five dollars") {
+		t.Errorf("error should name the env var and value: %v", err)
+	}
+	if rec.target != "" {
+		t.Errorf("nothing may be dispatched on a bad ceiling; called %q", rec.target)
 	}
 }
 

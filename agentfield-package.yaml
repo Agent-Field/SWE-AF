@@ -29,7 +29,7 @@ agent_node:
 
 user_environment:
   require_one_of:
-    # SWE-AF runs on either Claude (Anthropic) or open models via OpenRouter.
+    # SWE-AF runs on Claude-compatible APIs or open models via OpenCode.
     # Provide one. With only an OpenRouter key it auto-selects the open_code
     # runtime and defaults to openrouter/deepseek/deepseek-v4-flash-0731.
     - id: llm_provider
@@ -52,10 +52,20 @@ user_environment:
       description: GitHub token (repo scope) — needed to clone private repos, push branches, and open pull requests
       type: secret
       scope: global
+    - name: MINIMAX_API_KEY
+      description: MiniMax API key; also set SWE_DEFAULT_RUNTIME and SWE_DEFAULT_MODEL
+      type: secret
+      scope: global
+    - name: ANTHROPIC_AUTH_TOKEN
+      description: Anthropic-compatible token; also set ANTHROPIC_BASE_URL and runtime/model overrides
+      type: secret
+      scope: global
     - name: SWE_DEFAULT_RUNTIME
       description: Coding runtime for every role (claude_code | open_code | codex)
     - name: SWE_DEFAULT_MODEL
       description: Override the model id for every role (e.g. openrouter/deepseek/deepseek-v4-flash-0731)
+    - name: ANTHROPIC_BASE_URL
+      description: Anthropic-compatible base URL for OpenCode or Claude Code
     - name: AGENTFIELD_SERVER
       description: Control-plane URL
       default: http://localhost:8080

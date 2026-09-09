@@ -20,9 +20,11 @@ func fakeEngineBin(t *testing.T) {
 }
 
 // TestRegisterPlannerProSurfaceGated: with SWE_PRO_ENGINE set and the engine
-// binary present, the planner surface is the default 31 names plus exactly the
-// pro handlers — and nothing on the fast node changes (the pro surface is
-// planner-only).
+// binary present, the pro engine REPLACES the classic surface — the internal
+// role reasoners and the pro handlers register, but the opencode-driven
+// orchestrators and implement_issue are withheld (they'd fail wherever opencode
+// is absent; the swe-pro sidecar is the working coding entry). Nothing on the
+// fast node changes (the pro surface is planner-only).
 func TestRegisterPlannerProSurfaceGated(t *testing.T) {
 	t.Setenv(pro.EnvEnabled, "1")
 	fakeEngineBin(t)
@@ -33,8 +35,7 @@ func TestRegisterPlannerProSurfaceGated(t *testing.T) {
 	}
 	n.RegisterPlanner()
 
-	want := append(append([]string(nil), pythonRoleSurface...), pythonOrchestrators...)
-	want = append(want, pythonIssueReasoners...)
+	want := append([]string(nil), pythonRoleSurface...)
 	for name := range pro.Handlers() {
 		want = append(want, name)
 	}

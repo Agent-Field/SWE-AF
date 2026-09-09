@@ -42,7 +42,11 @@ def parse_log(filepath):
                 try:
                     events.append(json.loads(line))
                 except json.JSONDecodeError:
-                    pass
+                    print(
+                        f"Warning: skipping malformed JSONL line in {filepath}: "
+                        f"{line[:200]!r}",
+                        file=sys.stderr,
+                    )
     return events
 
 

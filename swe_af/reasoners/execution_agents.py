@@ -85,6 +85,7 @@ from swe_af.prompts.workspace import (
     workspace_setup_task_prompt,
 )
 from swe_af.tools.web_search import maybe_apply_coder_guardrail
+from swe_af.surface import internal_role
 
 from . import router
 
@@ -122,7 +123,7 @@ def _build_issue_results(failed_issues: list[dict]):
 # ---------------------------------------------------------------------------
 
 
-@router.reasoner()
+@internal_role(router, "advisor")
 async def run_retry_advisor(
     issue: dict,
     error_message: str,
@@ -203,7 +204,7 @@ async def run_retry_advisor(
     ).model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "advisor")
 async def run_issue_advisor(
     issue: dict,
     original_issue: dict,
@@ -316,7 +317,7 @@ async def run_issue_advisor(
     return fallback.model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "advisor")
 async def run_replanner(
     dag_state: dict,
     failed_issues: list[dict],
@@ -442,7 +443,7 @@ async def run_replanner(
     return fallback.model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "advisor")
 async def run_issue_writer(
     issue: dict,
     prd_summary: str,
@@ -523,7 +524,7 @@ async def run_issue_writer(
     }
 
 
-@router.reasoner()
+@internal_role(router, "advisor")
 async def run_verifier(
     prd: dict,
     repo_path: str,
@@ -596,7 +597,7 @@ async def run_verifier(
 # ---------------------------------------------------------------------------
 
 
-@router.reasoner()
+@internal_role(router, "gitops")
 async def run_git_init(
     repo_path: str,
     goal: str,
@@ -679,7 +680,7 @@ async def run_git_init(
     ).model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "gitops")
 async def run_workspace_setup(
     repo_path: str,
     integration_branch: str,
@@ -746,7 +747,7 @@ async def run_workspace_setup(
     return {"workspaces": [], "success": False}
 
 
-@router.reasoner()
+@internal_role(router, "gitops")
 async def run_merger(
     repo_path: str,
     integration_branch: str,
@@ -819,7 +820,7 @@ async def run_merger(
     ).model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "gitops")
 async def run_integration_tester(
     repo_path: str,
     integration_branch: str,
@@ -894,7 +895,7 @@ async def run_integration_tester(
     ).model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "gitops")
 async def run_workspace_cleanup(
     repo_path: str,
     worktrees_dir: str,
@@ -961,7 +962,7 @@ async def run_workspace_cleanup(
 # ---------------------------------------------------------------------------
 
 
-@router.reasoner()
+@internal_role(router, "coding")
 async def run_coder(
     issue: dict,
     worktree_path: str,
@@ -1057,7 +1058,7 @@ async def run_coder(
     ).model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "coding")
 async def run_qa(
     worktree_path: str,
     coder_result: dict,
@@ -1131,7 +1132,7 @@ async def run_qa(
     ).model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "coding")
 async def run_code_reviewer(
     worktree_path: str,
     coder_result: dict,
@@ -1214,7 +1215,7 @@ async def run_code_reviewer(
     ).model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "coding")
 async def run_qa_synthesizer(
     qa_result: dict,
     review_result: dict,
@@ -1310,7 +1311,7 @@ async def run_qa_synthesizer(
 # ---------------------------------------------------------------------------
 
 
-@router.reasoner()
+@internal_role(router, "advisor")
 async def generate_fix_issues(
     failed_criteria: list[dict],
     dag_state: dict,
@@ -1414,7 +1415,7 @@ async def generate_fix_issues(
 # ---------------------------------------------------------------------------
 
 
-@router.reasoner()
+@internal_role(router, "gitops")
 async def run_repo_finalize(
     repo_path: str,
     artifacts_dir: str = "",
@@ -1472,7 +1473,7 @@ async def run_repo_finalize(
 # ---------------------------------------------------------------------------
 
 
-@router.reasoner()
+@internal_role(router, "gitops")
 async def run_github_pr(
     repo_path: str,
     integration_branch: str,
@@ -1545,7 +1546,7 @@ async def run_github_pr(
 # ---------------------------------------------------------------------------
 
 
-@router.reasoner()
+@internal_role(router, "ci")
 async def run_ci_watcher(
     repo_path: str,
     pr_number: int,
@@ -1597,7 +1598,7 @@ async def run_ci_watcher(
     return result.model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "ci")
 async def run_ci_fixer(
     repo_path: str,
     pr_number: int,
@@ -1686,7 +1687,7 @@ async def run_ci_fixer(
     ).model_dump()
 
 
-@router.reasoner()
+@internal_role(router, "ci")
 async def run_pr_resolver(
     repo_path: str,
     pr_number: int,

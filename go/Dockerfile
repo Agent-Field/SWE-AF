@@ -128,10 +128,15 @@ ENV PATH="/root/.opencode/bin:${PATH}"
 # so it must honor the same env var the rest of the stack uses. Default the
 # value inside the image so a fresh container has *some* value to interpolate;
 # Railway / docker-compose overrides win because their env injects afterward.
-ENV HARNESS_MODEL=openrouter/moonshotai/kimi-k2.6
-RUN mkdir -p /root/.config/opencode && \
-    echo '{"$schema":"https://opencode.ai/config.json","model":"{env:HARNESS_MODEL}","small_model":"{env:HARNESS_MODEL}","provider":{"openrouter":{"options":{"apiKey":"{env:OPENROUTER_API_KEY}"}}}}' \
-    > /root/.config/opencode/opencode.json
+#
+# The value MUST match openRouterAutoDefaultModel (internal/config) — it is
+# what an OpenRouter-only deploy actually runs, since the model-resolution
+# cascade reads HARNESS_MODEL for the open_code runtime (and ONLY for
+# open_code: claude_code / codex deployments resolve their own runtime
+# defaults and never see this variable).
+ENV HARNESS_MODEL=openrouter/deepseek/deepseek-v4-flash-0731
+RUN mkdir -p /root/.config/opencode
+COPY opencode.json /root/.config/opencode/opencode.json
 
 # Git identity — env vars take highest precedence and are inherited by all
 # subprocesses (including the CLIs the harness spawns).

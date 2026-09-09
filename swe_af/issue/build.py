@@ -29,6 +29,7 @@ from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.schemas import DAGState, ExecutionConfig, IssueOutcome
 from swe_af.issue import git_ops, issue_router
 from swe_af.issue.schemas import IssueBuildConfig, IssueBuildResult, IssueSpec
+from swe_af.surface import TAG_ENTRYPOINT
 
 _COMPLETED_OUTCOMES = ("completed", "completed_with_debt")
 
@@ -362,7 +363,7 @@ async def _implement_issue_impl(
 
 
 @issue_router.reasoner(
-    tags=["entrypoint"],
+    tags=[TAG_ENTRYPOINT],
     description=(
         "Issue-level build (sub-harness entry): implements ONE fully-scoped issue "
         "on an isolated branch of a local repo — no planning agents, ~4-8 LLM "
