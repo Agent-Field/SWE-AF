@@ -11,7 +11,6 @@ import asyncio
 import contextvars
 import functools
 import inspect
-import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -35,22 +34,14 @@ class ChildToolActivity:
     A pending harness coroutine is not enough to justify a heartbeat: the
     subprocess may already have died while its parent is unwinding.  The
     subprocess hooks below attach the actual child process, and the heartbeat
-    checks its return code before every note.  ``last_output_at`` is retained as
-    an additional observable signal for diagnostics and tests; output is not
-    required for every interval because coding tools can legitimately spend a
-    long interval in a silent tool call while their process remains alive.
+    checks its return code before every note.
     """
 
     _processes: list[Any] = field(default_factory=list)
-    last_output_at: float | None = None
 
     def attach_process(self, process: Any) -> None:
         """Record a subprocess created by the active harness call."""
         self._processes.append(process)
-
-    def record_output(self) -> None:
-        """Record fresh output from the active harness child."""
-        self.last_output_at = time.monotonic()
 
     def is_alive(self) -> bool:
         """Return whether at least one observed child still has no exit code."""
@@ -82,17 +73,17 @@ def install_subprocess_activity_hooks() -> None:
     result API intentionally does not expose a child handle, so the SWE-AF
     runtime adds a context-local observer at the two existing SDK seams.  The
     wrappers return the SDK's original process/results unchanged; they only
-    record process handles and output timestamps for the heartbeat gate.
+    record process handles for the heartbeat gate.
 
-    This is deliberately best-effort.  If a future SDK removes either private
-    seam, the harness still works and simply emits no heartbeat for that path.
+    This is deliberately best-effort.  If a future SDK removes either seam, the
+    harness still works and simply emits no heartbeat for that path.
     """
     global _subprocess_hooks_installed
     if _subprocess_hooks_installed:
         return
 
     try:
-        from agentfield.harness import _cli as sdk_cli
+        import anyio
     except ImportError:
         return
 
@@ -111,29 +102,17 @@ def install_subprocess_activity_hooks() -> None:
     # the node are not treated as harness activity.
     asyncio.create_subprocess_exec = create_subprocess_exec_with_activity  # type: ignore[assignment]
 
-    original_drain = getattr(sdk_cli, "_drain", None)
-    if original_drain is not None:
+    original_open_process = anyio.open_process
 
-        @functools.wraps(original_drain)
-        async def drain_with_activity(
-            stream: Any, chunks: Any, last_activity: list[float]
-        ) -> None:
-            # Keep the SDK's bounded chunking and idle-clock updates identical,
-            # adding only a context-local output timestamp per received chunk.
-            if stream is None:
-                return
-            while True:
-                chunk = await stream.read(65536)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                last_activity[0] = asyncio.get_event_loop().time()
-                activity = current_child_activity()
-                if activity is not None:
-                    activity.record_output()
+    @functools.wraps(original_open_process)
+    async def open_process_with_activity(*args: Any, **kwargs: Any) -> Any:
+        process = await original_open_process(*args, **kwargs)
+        activity = current_child_activity()
+        if activity is not None:
+            activity.attach_process(process)
+        return process
 
-        sdk_cli._drain = drain_with_activity
-
+    anyio.open_process = open_process_with_activity  # type: ignore[assignment]
     _subprocess_hooks_installed = True
 
 
