@@ -154,15 +154,16 @@ def _assign_sequence_numbers(issues: list[dict], levels: list[list[str]]) -> lis
     return list(issue_by_name.values())
 
 
-# Bounded retries when a planning role's structured output does not parse or
-# validate. The SDK already retries schema failures inside a single harness()
-# call; this is a second, outer bound that re-issues the whole call with the
-# validation error fed back into the task prompt (issue #146). Keep it small —
-# each attempt is a full planner run over the PRD and architecture, so the
-# worst case triples planner time and cost. The bound is a constant rather
-# than a parameter: nothing calls this with a different value, and the issue
-# only asks for a small sensible default.
-DEFAULT_PLANNING_SCHEMA_RETRIES = 2
+# Per-stage bounds on the extra schema-bound harness calls a planning role gets
+# when its structured output does not parse or validate. The SDK already retries
+# schema failures inside a single harness() call; these are second, outer bounds
+# that re-issue the whole call with the validation error fed back into the task
+# prompt (issue #146). Keep them small — each attempt is a full stage run over
+# the PRD and architecture, and the architect's architecture object is by far
+# the largest response in the pipeline. The bounds are internal constants, not
+# user-facing knobs: nothing has ever passed a different value.
+PLANNING_ROLE_SCHEMA_RETRIES = 1
+SPRINT_PLANNER_SCHEMA_RETRIES = 2
 
 # Cap on how much of one failed attempt's raw completion is written to the
 # retry log. The first and last halves are kept — output-limit truncation is
@@ -291,6 +292,7 @@ async def _run_planning_call_with_schema_retries(
     model: str,
     schema,
     raw_response_path: str,
+    max_schema_retries: int,
 ):
     """Run one schema-bound planning call, retrying parse/validation failures.
 
@@ -298,12 +300,13 @@ async def _run_planning_call_with_schema_retries(
     (``None`` on the first attempt) and returns a HarnessResult-like object.
     Fatal API errors and empty completions fail immediately; only a response
     that was produced but did not parse/validate is retried, up to
-    ``DEFAULT_PLANNING_SCHEMA_RETRIES`` extra attempts. Every failed attempt is
-    appended to *raw_response_path* along with a terminal outcome line, and a
-    failure to write that diagnostic is noted but never replaces the schema
-    failure.
+    *max_schema_retries* extra attempts (callers pass the per-stage
+    ``PLANNING_ROLE_SCHEMA_RETRIES`` / ``SPRINT_PLANNER_SCHEMA_RETRIES``
+    constants). Every failed attempt is appended to *raw_response_path* along
+    with a terminal outcome line, and a failure to write that diagnostic is
+    noted but never replaces the schema failure.
     """
-    attempts = max(0, DEFAULT_PLANNING_SCHEMA_RETRIES) + 1
+    attempts = max(0, max_schema_retries) + 1
     last_error = ""
     persistence_error = ""
     wrote_attempt = False
@@ -421,23 +424,34 @@ async def run_product_manager(
             workspace_manifest=ws_manifest,
             prior_user_responses=prior_user_responses,
         )
-        result = await router.harness(
-            prompt=task_prompt,
-            schema=PRD,
+
+        async def _invoke(previous_error: str | None):
+            prompt = task_prompt
+            if previous_error:
+                prompt = f"{task_prompt}\n\n{_schema_retry_context(previous_error)}"
+            return await router.harness(
+                prompt=prompt,
+                schema=PRD,
+                provider=provider,
+                model=model,
+                max_turns=max_turns,
+                tools=["Read", "Write", "Glob", "Grep", "Bash"],
+                permission_mode=permission_mode or None,
+                system_prompt=system_prompt,
+                cwd=repo_path,
+            )
+
+        result = await _run_planning_call_with_schema_retries(
+            _invoke,
+            stage="PM",
+            failure_label="Product manager failed to produce a valid PRD",
             provider=provider,
             model=model,
-            max_turns=max_turns,
-            tools=["Read", "Write", "Glob", "Grep", "Bash"],
-            permission_mode=permission_mode or None,
-            system_prompt=system_prompt,
-            cwd=repo_path,
-        )
-        check_fatal_harness_error(result)
-        # An empty completion here (no parsed output, no text) is a
-        # provider/model mismatch, not a schema-quality problem — surface it
-        # distinctly with provider+model instead of the generic PRD message.
-        check_empty_harness_completion(
-            result, role="PM", provider=provider, model=model
+            schema=PRD,
+            raw_response_path=os.path.join(
+                base, "plan", "product_manager_raw_response.txt"
+            ),
+            max_schema_retries=PLANNING_ROLE_SCHEMA_RETRIES,
         )
         return result.parsed
 
@@ -453,9 +467,9 @@ async def run_product_manager(
     )
 
     if parsed is None:
-        # Reached only when the harness produced non-empty but unparseable
-        # output (empty completions are raised distinctly above). Name the
-        # provider+model so the failure is diagnosable.
+        # Defensive: _invoke_pm raises through the retry helper on schema
+        # failures, so this is only reachable if the ask-user wrapper returns
+        # no result. Name the provider+model so the failure is diagnosable.
         raise RuntimeError(
             f"Product manager failed to produce a valid PRD "
             f"(provider={provider}, model={model})"
@@ -623,26 +637,33 @@ async def run_architect(
         workspace_manifest=ws_manifest,
     )
     provider = runtime_to_harness_adapter(ai_provider)
-    result = await router.harness(
-        prompt=task_prompt,
-        schema=Architecture,
+
+    async def _invoke(previous_error: str | None):
+        prompt = task_prompt
+        if previous_error:
+            prompt = f"{task_prompt}\n\n{_schema_retry_context(previous_error)}"
+        return await router.harness(
+            prompt=prompt,
+            schema=Architecture,
+            provider=provider,
+            model=model,
+            max_turns=max_turns,
+            tools=["Read", "Write", "Glob", "Grep", "Bash"],
+            permission_mode=permission_mode or None,
+            system_prompt=system_prompt,
+            cwd=repo_path,
+        )
+
+    result = await _run_planning_call_with_schema_retries(
+        _invoke,
+        stage="Architect",
+        failure_label="Architect failed to produce a valid architecture",
         provider=provider,
         model=model,
-        max_turns=max_turns,
-        tools=["Read", "Write", "Glob", "Grep", "Bash"],
-        permission_mode=permission_mode or None,
-        system_prompt=system_prompt,
-        cwd=repo_path,
+        schema=Architecture,
+        raw_response_path=os.path.join(base, "plan", "architect_raw_response.txt"),
+        max_schema_retries=PLANNING_ROLE_SCHEMA_RETRIES,
     )
-    check_fatal_harness_error(result)
-    check_empty_harness_completion(
-        result, role="Architect", provider=provider, model=model
-    )
-    if result.parsed is None:
-        raise RuntimeError(
-            f"Architect failed to produce a valid architecture "
-            f"(provider={provider}, model={model})"
-        )
 
     router.note("Architect complete", tags=["architect", "complete"])
     return result.parsed.model_dump()
@@ -684,26 +705,33 @@ async def run_tech_lead(
         workspace_manifest=ws_manifest,
     )
     provider = runtime_to_harness_adapter(ai_provider)
-    result = await router.harness(
-        prompt=task_prompt,
-        schema=ReviewResult,
+
+    async def _invoke(previous_error: str | None):
+        prompt = task_prompt
+        if previous_error:
+            prompt = f"{task_prompt}\n\n{_schema_retry_context(previous_error)}"
+        return await router.harness(
+            prompt=prompt,
+            schema=ReviewResult,
+            provider=provider,
+            model=model,
+            max_turns=max_turns,
+            tools=["Read", "Write", "Glob", "Grep"],
+            permission_mode=permission_mode or None,
+            system_prompt=system_prompt,
+            cwd=repo_path,
+        )
+
+    result = await _run_planning_call_with_schema_retries(
+        _invoke,
+        stage="Tech lead",
+        failure_label="Tech lead failed to produce a valid review",
         provider=provider,
         model=model,
-        max_turns=max_turns,
-        tools=["Read", "Write", "Glob", "Grep"],
-        permission_mode=permission_mode or None,
-        system_prompt=system_prompt,
-        cwd=repo_path,
+        schema=ReviewResult,
+        raw_response_path=os.path.join(base, "plan", "tech_lead_raw_response.txt"),
+        max_schema_retries=PLANNING_ROLE_SCHEMA_RETRIES,
     )
-    check_fatal_harness_error(result)
-    check_empty_harness_completion(
-        result, role="Tech lead", provider=provider, model=model
-    )
-    if result.parsed is None:
-        raise RuntimeError(
-            f"Tech lead failed to produce a valid review "
-            f"(provider={provider}, model={model})"
-        )
 
     review = result.parsed.model_dump()
     review_json_path = os.path.join(base, "plan", "review.json")
@@ -731,7 +759,7 @@ async def run_sprint_planner(
     Returns a dict with ``issues`` (list of issue dicts) and ``rationale`` (str).
 
     A response that does not parse/validate is retried up to
-    ``DEFAULT_PLANNING_SCHEMA_RETRIES`` times, each retry feeding the validation
+    ``SPRINT_PLANNER_SCHEMA_RETRIES`` times, each retry feeding the validation
     error back into the task prompt. Every failed attempt and the terminal
     outcome are appended to ``plan/sprint_planner_raw_response.txt``.
     """
@@ -797,6 +825,7 @@ async def run_sprint_planner(
         model=model,
         schema=SprintPlanOutput,
         raw_response_path=os.path.join(base, "plan", "sprint_planner_raw_response.txt"),
+        max_schema_retries=SPRINT_PLANNER_SCHEMA_RETRIES,
     )
 
     router.note("Sprint Planner complete", tags=["sprint_planner", "complete"])

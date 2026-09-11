@@ -93,7 +93,7 @@ func RunProductManager(ctx context.Context, deps *Deps, input map[string]any) (a
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 	initialPrior := getPriorResponses(input)
 
-	_, paths, err := ensurePaths(repoPath, artifactsDir)
+	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -135,14 +135,16 @@ func RunProductManager(ctx context.Context, deps *Deps, input map[string]any) (a
 			SystemPrompt:   systemPrompt,
 			Cwd:            repoPath,
 		}.ToOptions()
-		parsed, res, err := harnessx.Run[schemas.PRD](ctx, deps.Harness, taskPrompt, opts)
+		parsed, err := runSchemaBoundRole[schemas.PRD](
+			ctx, deps, opts, taskPrompt,
+			filepath.Join(base, "plan", "product_manager_raw_response.txt"),
+			"PM",
+			"Product manager failed to produce a valid PRD",
+			provider, model,
+			planningRoleSchemaRetries,
+		)
 		if err != nil {
 			return nil, err
-		}
-		if res == nil || res.Parsed == nil {
-			// Parse failure: Python's _invoke_pm returns None. Signal that to
-			// the wrapper with a nil map (run_with_ask_user then returns nil).
-			return nil, nil
 		}
 		return toMap(parsed)
 	}
@@ -309,7 +311,7 @@ func RunArchitect(ctx context.Context, deps *Deps, input map[string]any) (any, e
 	permissionMode := getString(input, "permission_mode", "")
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 
-	_, paths, err := ensurePaths(repoPath, artifactsDir)
+	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -352,12 +354,16 @@ func RunArchitect(ctx context.Context, deps *Deps, input map[string]any) (any, e
 		SystemPrompt:   systemPrompt,
 		Cwd:            repoPath,
 	}.ToOptions()
-	parsed, res, err := harnessx.Run[schemas.Architecture](ctx, deps.Harness, taskPrompt, opts)
+	parsed, err := runSchemaBoundRole[schemas.Architecture](
+		ctx, deps, opts, taskPrompt,
+		filepath.Join(base, "plan", "architect_raw_response.txt"),
+		"Architect",
+		"Architect failed to produce a valid architecture",
+		provider, model,
+		planningRoleSchemaRetries,
+	)
 	if err != nil {
 		return nil, err
-	}
-	if res == nil || res.Parsed == nil {
-		return nil, errors.New("Architect failed to produce a valid architecture")
 	}
 
 	deps.App.Note(ctx, "Architect complete", "architect", "complete")
@@ -416,12 +422,16 @@ func RunTechLead(ctx context.Context, deps *Deps, input map[string]any) (any, er
 		SystemPrompt:   systemPrompt,
 		Cwd:            repoPath,
 	}.ToOptions()
-	parsed, res, err := harnessx.Run[schemas.ReviewResult](ctx, deps.Harness, taskPrompt, opts)
+	parsed, err := runSchemaBoundRole[schemas.ReviewResult](
+		ctx, deps, opts, taskPrompt,
+		filepath.Join(base, "plan", "tech_lead_raw_response.txt"),
+		"Tech lead",
+		"Tech lead failed to produce a valid review",
+		provider, model,
+		planningRoleSchemaRetries,
+	)
 	if err != nil {
 		return nil, err
-	}
-	if res == nil || res.Parsed == nil {
-		return nil, errors.New("Tech lead failed to produce a valid review")
 	}
 
 	review, err := toMap(parsed)
@@ -452,13 +462,20 @@ type sprintPlanOutput struct {
 	Rationale string                 `json:"rationale"`
 }
 
-// defaultPlanningSchemaRetries bounds the extra harness calls the sprint
-// planner makes when its structured output does not parse/validate. Small on
-// purpose: each attempt is a full planner run, so the worst case triples
-// planner time and cost. Mirrors Python's DEFAULT_PLANNING_SCHEMA_RETRIES
-// (swe_af/reasoners/pipeline.py, #146). It is a constant rather than a handler
-// input because nothing passes a different value.
-const defaultPlanningSchemaRetries = 2
+// planningRoleSchemaRetries is the number of extra schema-bound harness calls
+// the product manager, architect and tech lead get when their structured output
+// does not parse/validate. Kept small on purpose: each attempt is a full stage
+// run over the PRD and architecture.
+const planningRoleSchemaRetries = 1
+
+// sprintPlannerSchemaRetries is the extra-call bound for the sprint planner.
+// Its response is a large issue set that feeds every downstream issue, and the
+// SDK already retries schema failures inside a single harness() call, so one
+// extra attempt than the other stages is enough. Mirrors Python's
+// PLANNING_ROLE_SCHEMA_RETRIES / SPRINT_PLANNER_SCHEMA_RETRIES
+// (swe_af/reasoners/pipeline.py, #146). These are internal constants rather
+// than handler inputs because nothing passes a different value.
+const sprintPlannerSchemaRetries = 2
 
 // maxRawResponseChars caps one failed attempt's raw text in the retry log. The
 // first and last halves are kept — output-limit truncation shows at the tail,
@@ -581,6 +598,96 @@ func recordRetryOutcome(path, outcome string) error {
 	return appendArtifact(path, "===== outcome: "+outcome+" =====")
 }
 
+// recordOutcomeBestEffort records a terminal retry outcome without ever failing
+// the stage.
+func recordOutcomeBestEffort(ctx context.Context, deps *Deps, stage, path, outcome string) {
+	if err := recordRetryOutcome(path, outcome); err != nil {
+		deps.App.Note(ctx, fmt.Sprintf(
+			"%s could not write the retry outcome to %s: %v",
+			stage, path, err), "planning", "schema_retry", "artifact_error")
+	}
+}
+
+// runSchemaBoundRole drives the bounded schema-retry loop shared by the four
+// planning stages (PM, architect, tech lead, sprint planner). It re-issues the
+// harness call with the validation error fed back into the prompt when the
+// output does not parse/validate, appends every failed attempt and the terminal
+// outcome to rawResponsePath, and never lets a diagnostic write mask the real
+// failure. maxSchemaRetries is set per call site from
+// planningRoleSchemaRetries / sprintPlannerSchemaRetries.
+func runSchemaBoundRole[T any](
+	ctx context.Context,
+	deps *Deps,
+	opts harness.Options,
+	taskPrompt string,
+	rawResponsePath string,
+	stage string,
+	failureLabel string,
+	provider string,
+	model string,
+	maxSchemaRetries int,
+) (*T, error) {
+	attempts := maxSchemaRetries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	lastFailure := ""
+	persistenceError := ""
+	wroteAttempt := false
+	for attempt := 1; attempt <= attempts; attempt++ {
+		prompt := taskPrompt
+		if lastFailure != "" {
+			prompt += "\n\n" + fmt.Sprintf(schemaRetryContext, lastFailure)
+		}
+		parsed, res, err := harnessx.Run[T](ctx, deps.Harness, prompt, opts)
+		if err != nil {
+			return nil, err
+		}
+		if res != nil && res.Parsed != nil {
+			// Only log a recovery when this run actually wrote a failed
+			// attempt: a first-attempt success leaves no artifact at all, and
+			// a stale log from an earlier run is never touched.
+			if wroteAttempt {
+				recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath,
+					fmt.Sprintf("succeeded on attempt %d/%d", attempt, attempts))
+			}
+			return parsed, nil
+		}
+		if isEmptyCompletion(res) {
+			return nil, fmt.Errorf(
+				"%s harness returned an empty completion "+
+					"(provider=%s, model=%s) — check provider auth/model compatibility",
+				stage, provider, model,
+			)
+		}
+		var zero T
+		lastFailure = describeSchemaFailure(res, &zero)
+		if err := persistRawResponse(rawResponsePath, res, attempt, attempts, lastFailure); err != nil {
+			persistenceError = err.Error()
+			deps.App.Note(ctx, fmt.Sprintf(
+				"%s could not write the raw response to %s: %v",
+				stage, rawResponsePath, err), "planning", "schema_retry", "artifact_error")
+		} else {
+			wroteAttempt = true
+		}
+		if attempt < attempts {
+			deps.App.Note(ctx, fmt.Sprintf(
+				"%s structured output invalid on attempt %d/%d — retrying with the validation error",
+				stage, attempt, attempts), "planning", "schema_retry")
+		}
+	}
+	recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath,
+		fmt.Sprintf("FAILED after %d attempt(s): %s", attempts, lastFailure))
+	persistenceDetail := ""
+	if persistenceError != "" {
+		persistenceDetail = "; raw response could not be written: " + persistenceError
+	}
+	return nil, fmt.Errorf(
+		"%s after %d attempt(s) (provider=%s, model=%s; raw response: %s) — %s%s",
+		failureLabel, attempts, provider, model, rawResponsePath, lastFailure, persistenceDetail,
+	)
+}
+
 // RunSprintPlanner decomposes the work into executable issues. Ports
 // pipeline.py:477-549. Returns {"issues": [...], "rationale": "..."}. The pure
 // level/conflict/sequence helpers (_compute_levels, _validate_file_conflicts,
@@ -588,7 +695,7 @@ func recordRetryOutcome(path, outcome string) error {
 // reasoner only surfaces the raw issues + rationale.
 //
 // A response that does not parse/validate is retried up to
-// defaultPlanningSchemaRetries times, each retry feeding the validation error
+// sprintPlannerSchemaRetries times, each retry feeding the validation error
 // back into the task prompt. Every failed attempt and the terminal outcome are
 // appended to plan/sprint_planner_raw_response.txt.
 func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
@@ -658,78 +765,16 @@ func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (an
 		SystemPrompt:   systemPrompt,
 		Cwd:            repoPath,
 	}.ToOptions()
-	attempts := defaultPlanningSchemaRetries + 1
-	rawResponsePath := filepath.Join(base, "plan", "sprint_planner_raw_response.txt")
-
-	var parsed *sprintPlanOutput
-	succeeded := false
-	lastFailure := ""
-	persistenceError := ""
-	wroteAttempt := false
-	for attempt := 1; attempt <= attempts; attempt++ {
-		prompt := taskPrompt
-		if lastFailure != "" {
-			prompt += "\n\n" + fmt.Sprintf(schemaRetryContext, lastFailure)
-		}
-		var res *harness.Result
-		var runErr error
-		parsed, res, runErr = harnessx.Run[sprintPlanOutput](ctx, deps.Harness, prompt, opts)
-		if runErr != nil {
-			return nil, runErr
-		}
-		if res != nil && res.Parsed != nil {
-			// Only log a recovery when this run actually wrote a failed
-			// attempt: a first-attempt success leaves no artifact at all, and
-			// a stale log from an earlier run is never touched.
-			if wroteAttempt {
-				if err := recordRetryOutcome(rawResponsePath,
-					fmt.Sprintf("succeeded on attempt %d/%d", attempt, attempts)); err != nil {
-					deps.App.Note(ctx, fmt.Sprintf(
-						"Sprint planner could not write the retry outcome to %s: %v",
-						rawResponsePath, err), "planning", "schema_retry", "artifact_error")
-				}
-			}
-			succeeded = true
-			break
-		}
-		if isEmptyCompletion(res) {
-			return nil, fmt.Errorf(
-				"Sprint planner harness returned an empty completion "+
-					"(provider=%s, model=%s) — check provider auth/model compatibility",
-				provider, model,
-			)
-		}
-		lastFailure = describeSchemaFailure(res, &sprintPlanOutput{})
-		if err := persistRawResponse(rawResponsePath, res, attempt, attempts, lastFailure); err != nil {
-			persistenceError = err.Error()
-			deps.App.Note(ctx, fmt.Sprintf(
-				"Sprint planner could not write the raw response to %s: %v",
-				rawResponsePath, err), "planning", "schema_retry", "artifact_error")
-		} else {
-			wroteAttempt = true
-		}
-		if attempt < attempts {
-			deps.App.Note(ctx, fmt.Sprintf(
-				"Sprint planner structured output invalid on attempt %d/%d — retrying with the validation error",
-				attempt, attempts), "planning", "schema_retry")
-		}
-	}
-	if !succeeded {
-		if err := recordRetryOutcome(rawResponsePath,
-			fmt.Sprintf("FAILED after %d attempt(s): %s", attempts, lastFailure)); err != nil {
-			deps.App.Note(ctx, fmt.Sprintf(
-				"Sprint planner could not write the retry outcome to %s: %v",
-				rawResponsePath, err), "planning", "schema_retry", "artifact_error")
-		}
-		persistenceDetail := ""
-		if persistenceError != "" {
-			persistenceDetail = "; raw response could not be written: " + persistenceError
-		}
-		return nil, fmt.Errorf(
-			"Sprint planner failed to produce valid issues after %d attempt(s) "+
-				"(provider=%s, model=%s; raw response: %s) — %s%s",
-			attempts, provider, model, rawResponsePath, lastFailure, persistenceDetail,
-		)
+	parsed, err := runSchemaBoundRole[sprintPlanOutput](
+		ctx, deps, opts, taskPrompt,
+		filepath.Join(base, "plan", "sprint_planner_raw_response.txt"),
+		"Sprint planner",
+		"Sprint planner failed to produce valid issues",
+		provider, model,
+		sprintPlannerSchemaRetries,
+	)
+	if err != nil {
+		return nil, err
 	}
 	issues := make([]any, 0, len(parsed.Issues))
 	for i := range parsed.Issues {
