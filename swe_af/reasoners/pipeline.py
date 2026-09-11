@@ -158,8 +158,18 @@ def _assign_sequence_numbers(issues: list[dict], levels: list[list[str]]) -> lis
 # validate. The SDK already retries schema failures inside a single harness()
 # call; this is a second, outer bound that re-issues the whole call with the
 # validation error fed back into the task prompt (issue #146). Keep it small —
-# each attempt is a full planner run over the PRD and architecture.
+# each attempt is a full planner run over the PRD and architecture, so the
+# worst case triples planner time and cost. The bound is a constant rather
+# than a parameter: nothing calls this with a different value, and the issue
+# only asks for a small sensible default.
 DEFAULT_PLANNING_SCHEMA_RETRIES = 2
+
+# Cap on how much of one failed attempt's raw completion is written to the
+# retry log. The first and last halves are kept — output-limit truncation is
+# visible at the tail, malformed-JSON evidence usually at the head — and the
+# middle is elided, so the default three attempts cannot grow the log without
+# bound.
+_MAX_RAW_RESPONSE_CHARS = 200_000
 
 
 def _raw_completion_text(result) -> str:
@@ -207,21 +217,57 @@ def _describe_schema_failure(result, schema) -> str:
     return "the harness returned no parsed result and no error detail"
 
 
-def _persist_raw_response(path: str, result, *, attempt: int, error: str) -> None:
-    """Write a failed attempt's raw completion next to the stage's artifacts."""
-    raw = _raw_completion_text(result)
-    header = (
-        f"# attempt {attempt}: unparseable structured output\n"
-        f"# error: {error}\n"
-        "# raw completion text follows\n"
+def _truncate_raw_response(raw: str) -> str:
+    """Keep the head and tail of an oversized raw response."""
+    if len(raw) <= _MAX_RAW_RESPONSE_CHARS:
+        return raw
+    half = _MAX_RAW_RESPONSE_CHARS // 2
+    omitted = len(raw) - _MAX_RAW_RESPONSE_CHARS
+    return (
+        f"{raw[:half]}\n\n"
+        f"# ... {omitted} characters omitted (full response was {len(raw)} chars)"
+        f" ...\n\n{raw[-half:]}"
     )
-    body = raw if raw.strip() else "(the harness returned no raw completion text)"
+
+
+def _append_artifact(path: str, text: str) -> None:
+    """Append *text* to a run artifact, creating its parent directory."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(header)
-        fh.write(body)
-        if not body.endswith("\n"):
-            fh.write("\n")
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(text if text.endswith("\n") else f"{text}\n")
+
+
+def _persist_raw_response(
+    path: str, result, *, attempt: int, attempts: int, error: str
+) -> None:
+    """Append one failed attempt's raw completion to the stage's retry log."""
+    raw = _raw_completion_text(result)
+    body = (
+        _truncate_raw_response(raw)
+        if raw.strip()
+        else "(the harness returned no raw completion text)"
+    )
+    _append_artifact(
+        path,
+        f"===== attempt {attempt}/{attempts} failed: {error} =====\n"
+        f"# raw completion text follows\n{body}",
+    )
+
+
+def _record_retry_outcome(path: str, outcome: str) -> None:
+    """Append the terminal retry outcome to the stage's retry log."""
+    _append_artifact(path, f"===== outcome: {outcome} =====")
+
+
+def _record_outcome_best_effort(stage: str, path: str, outcome: str) -> None:
+    """Record a terminal retry outcome without ever failing the stage."""
+    try:
+        _record_retry_outcome(path, outcome)
+    except Exception as exc:  # diagnostics must never mask the real outcome
+        router.note(
+            f"{stage} could not write the retry outcome to {path}: {exc}",
+            tags=["planning", "schema_retry", "artifact_error"],
+        )
 
 
 def _schema_retry_context(error: str) -> str:
@@ -245,7 +291,6 @@ async def _run_planning_call_with_schema_retries(
     model: str,
     schema,
     raw_response_path: str,
-    max_schema_retries: int,
 ):
     """Run one schema-bound planning call, retrying parse/validation failures.
 
@@ -253,11 +298,15 @@ async def _run_planning_call_with_schema_retries(
     (``None`` on the first attempt) and returns a HarnessResult-like object.
     Fatal API errors and empty completions fail immediately; only a response
     that was produced but did not parse/validate is retried, up to
-    ``max_schema_retries`` extra attempts. The raw response from every failed
-    attempt is persisted to *raw_response_path* so the failure stays readable.
+    ``DEFAULT_PLANNING_SCHEMA_RETRIES`` extra attempts. Every failed attempt is
+    appended to *raw_response_path* along with a terminal outcome line, and a
+    failure to write that diagnostic is noted but never replaces the schema
+    failure.
     """
-    attempts = max(0, max_schema_retries) + 1
+    attempts = max(0, DEFAULT_PLANNING_SCHEMA_RETRIES) + 1
     last_error = ""
+    persistence_error = ""
+    wrote_attempt = False
     for attempt in range(1, attempts + 1):
         result = await invoke(last_error or None)
         check_fatal_harness_error(result)
@@ -265,12 +314,34 @@ async def _run_planning_call_with_schema_retries(
             result, role=stage, provider=provider, model=model
         )
         if result.parsed is not None:
+            # Only log a recovery when this run actually wrote a failed
+            # attempt: a first-attempt success leaves no artifact at all, and
+            # a stale log from an earlier run is never touched.
+            if wrote_attempt:
+                _record_outcome_best_effort(
+                    stage,
+                    raw_response_path,
+                    f"succeeded on attempt {attempt}/{attempts}",
+                )
             return result
 
         last_error = _describe_schema_failure(result, schema)
-        _persist_raw_response(
-            raw_response_path, result, attempt=attempt, error=last_error
-        )
+        try:
+            _persist_raw_response(
+                raw_response_path,
+                result,
+                attempt=attempt,
+                attempts=attempts,
+                error=last_error,
+            )
+            wrote_attempt = True
+        except Exception as exc:  # diagnostics must never mask the real failure
+            persistence_error = str(exc)
+            router.note(
+                f"{stage} could not write the raw response to "
+                f"{raw_response_path}: {exc}",
+                tags=["planning", "schema_retry", "artifact_error"],
+            )
         if attempt < attempts:
             router.note(
                 f"{stage} structured output invalid on attempt "
@@ -278,10 +349,20 @@ async def _run_planning_call_with_schema_retries(
                 tags=["planning", "schema_retry"],
             )
 
+    _record_outcome_best_effort(
+        stage,
+        raw_response_path,
+        f"FAILED after {attempts} attempt(s): {last_error}",
+    )
+    detail = (
+        f"; raw response could not be written: {persistence_error}"
+        if persistence_error
+        else ""
+    )
     raise RuntimeError(
         f"{failure_label} after {attempts} attempt(s) "
         f"(provider={provider}, model={model}; "
-        f"raw response: {raw_response_path}) — {last_error}"
+        f"raw response: {raw_response_path}) — {last_error}{detail}"
     )
 
 
@@ -644,16 +725,15 @@ async def run_sprint_planner(
     permission_mode: str = "",
     ai_provider: str = "claude",
     workspace_manifest: dict | None = None,
-    max_schema_retries: int = DEFAULT_PLANNING_SCHEMA_RETRIES,
 ) -> dict:
     """Run the sprint planner to decompose work into executable issues.
 
     Returns a dict with ``issues`` (list of issue dicts) and ``rationale`` (str).
 
-    ``max_schema_retries`` bounds how many extra harness calls are made when the
-    planner responds with output that does not parse/validate; each retry feeds
-    the validation error back into the task prompt and the raw response is
-    written to ``plan/sprint_planner_raw_response.txt``.
+    A response that does not parse/validate is retried up to
+    ``DEFAULT_PLANNING_SCHEMA_RETRIES`` times, each retry feeding the validation
+    error back into the task prompt. Every failed attempt and the terminal
+    outcome are appended to ``plan/sprint_planner_raw_response.txt``.
     """
     router.note("Sprint Planner starting", tags=["sprint_planner", "start"])
 
@@ -717,7 +797,6 @@ async def run_sprint_planner(
         model=model,
         schema=SprintPlanOutput,
         raw_response_path=os.path.join(base, "plan", "sprint_planner_raw_response.txt"),
-        max_schema_retries=max_schema_retries,
     )
 
     router.note("Sprint Planner complete", tags=["sprint_planner", "complete"])
