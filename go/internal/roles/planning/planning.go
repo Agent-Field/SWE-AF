@@ -24,8 +24,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
+	"github.com/Agent-Field/agentfield/sdk/go/harness"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/dagutil"
@@ -450,11 +452,99 @@ type sprintPlanOutput struct {
 	Rationale string                 `json:"rationale"`
 }
 
+// defaultPlanningSchemaRetries bounds the extra harness calls the sprint
+// planner makes when its structured output does not parse/validate. Small on
+// purpose: each attempt is a full planner run. Mirrors Python's
+// DEFAULT_PLANNING_SCHEMA_RETRIES (swe_af/reasoners/pipeline.py, #146).
+const defaultPlanningSchemaRetries = 2
+
+// schemaRetryContext feeds a failed attempt's parse/validation error back into
+// the retry prompt. Mirrors pipeline._schema_retry_context.
+const schemaRetryContext = "## Retry Context\n" +
+	"Your previous response could not be parsed into the required " +
+	"structured output. The validation error was:\n\n%s\n\n" +
+	"Produce the complete structured output again, correcting that error. " +
+	"Include every required field."
+
+// isEmptyCompletion reports whether a schema-bound harness call returned with
+// neither a parsed object nor any raw text. Python's
+// check_empty_harness_completion classifies that shape as a provider/model
+// mismatch rather than a schema-quality failure, so it must fail fast instead
+// of burning the retry bound. A terminal failure_type=schema is exempt: the
+// agent did produce output that failed validation, the raw text just was not
+// surfaced on the result.
+func isEmptyCompletion(result *harness.Result) bool {
+	if result == nil {
+		return true
+	}
+	if result.Parsed != nil {
+		return false
+	}
+	if strings.TrimSpace(result.Result) != "" {
+		return false
+	}
+	return result.FailureType != harness.FailureSchema
+}
+
+// describeSchemaFailure names the parser error or the failing fields for a
+// schema-bound call that produced no parsed result. Re-decoding the raw text
+// into dst makes the decode error name the offending field; the harness's own
+// ErrorMessage is appended when present. Mirrors
+// pipeline._describe_schema_failure.
+func describeSchemaFailure(result *harness.Result, dst any) string {
+	raw := ""
+	detail := ""
+	if result != nil {
+		raw = result.Result
+		detail = strings.TrimSpace(result.ErrorMessage)
+	}
+	if strings.TrimSpace(raw) == "" {
+		if detail != "" {
+			return detail
+		}
+		return "the harness returned no parsed result and no error detail"
+	}
+	failure := "the harness returned no parsed result"
+	if err := json.Unmarshal([]byte(raw), dst); err != nil {
+		failure = fmt.Sprintf("raw response failed schema validation (%v)", err)
+	}
+	if detail != "" {
+		return fmt.Sprintf("%s; harness reported: %s", failure, detail)
+	}
+	return failure
+}
+
+// persistRawResponse writes a failed attempt's raw completion next to the
+// stage's artifacts. Mirrors pipeline._persist_raw_response.
+func persistRawResponse(path string, result *harness.Result, attempt int, failure string) error {
+	raw := ""
+	if result != nil {
+		raw = result.Result
+	}
+	body := strings.TrimSpace(raw)
+	if body == "" {
+		body = "(the harness returned no raw completion text)"
+	}
+	content := fmt.Sprintf(
+		"# attempt %d: unparseable structured output\n# error: %s\n# raw completion text follows\n%s\n",
+		attempt, failure, body,
+	)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
 // RunSprintPlanner decomposes the work into executable issues. Ports
 // pipeline.py:477-549. Returns {"issues": [...], "rationale": "..."}. The pure
 // level/conflict/sequence helpers (_compute_levels, _validate_file_conflicts,
 // _assign_sequence_numbers) are applied by the plan orchestrator, NOT here — the
 // reasoner only surfaces the raw issues + rationale.
+//
+// input["max_schema_retries"] bounds how many extra harness calls are made
+// when the planner responds with output that does not parse/validate; each
+// retry feeds the validation error back into the task prompt and the raw
+// response is written to plan/sprint_planner_raw_response.txt.
 func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	deps.App.Note(ctx, "Sprint Planner starting", "sprint_planner", "start")
 
@@ -465,7 +555,7 @@ func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (an
 	permissionMode := getString(input, "permission_mode", "")
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 
-	_, paths, err := ensurePaths(repoPath, artifactsDir)
+	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -522,14 +612,55 @@ func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (an
 		SystemPrompt:   systemPrompt,
 		Cwd:            repoPath,
 	}.ToOptions()
-	parsed, res, err := harnessx.Run[sprintPlanOutput](ctx, deps.Harness, taskPrompt, opts)
-	if err != nil {
-		return nil, err
+	maxSchemaRetries := getInt(input, "max_schema_retries", defaultPlanningSchemaRetries)
+	if maxSchemaRetries < 0 {
+		maxSchemaRetries = 0
 	}
-	if res == nil || res.Parsed == nil {
-		return nil, errors.New("Sprint planner failed to produce valid issues")
-	}
+	attempts := maxSchemaRetries + 1
+	rawResponsePath := filepath.Join(base, "plan", "sprint_planner_raw_response.txt")
 
+	var parsed *sprintPlanOutput
+	succeeded := false
+	lastFailure := ""
+	for attempt := 1; attempt <= attempts; attempt++ {
+		prompt := taskPrompt
+		if lastFailure != "" {
+			prompt += "\n\n" + fmt.Sprintf(schemaRetryContext, lastFailure)
+		}
+		var res *harness.Result
+		var runErr error
+		parsed, res, runErr = harnessx.Run[sprintPlanOutput](ctx, deps.Harness, prompt, opts)
+		if runErr != nil {
+			return nil, runErr
+		}
+		if res != nil && res.Parsed != nil {
+			succeeded = true
+			break
+		}
+		if isEmptyCompletion(res) {
+			return nil, fmt.Errorf(
+				"Sprint planner harness returned an empty completion "+
+					"(provider=%s, model=%s) — check provider auth/model compatibility",
+				provider, model,
+			)
+		}
+		lastFailure = describeSchemaFailure(res, &sprintPlanOutput{})
+		if err := persistRawResponse(rawResponsePath, res, attempt, lastFailure); err != nil {
+			return nil, err
+		}
+		if attempt < attempts {
+			deps.App.Note(ctx, fmt.Sprintf(
+				"Sprint planner structured output invalid on attempt %d/%d — retrying with the validation error",
+				attempt, attempts), "planning", "schema_retry")
+		}
+	}
+	if !succeeded {
+		return nil, fmt.Errorf(
+			"Sprint planner failed to produce valid issues after %d attempt(s) "+
+				"(provider=%s, model=%s; raw response: %s) — %s",
+			attempts, provider, model, rawResponsePath, lastFailure,
+		)
+	}
 	issues := make([]any, 0, len(parsed.Issues))
 	for i := range parsed.Issues {
 		m, err := toMap(&parsed.Issues[i])

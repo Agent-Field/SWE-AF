@@ -505,15 +505,97 @@ func TestSprintPlannerSuccess(t *testing.T) {
 		"files_to_modify", "testing_strategy", "sequence_number", "guidance", "target_repo")
 }
 
-// Contract: parse failure raises.
+// Contract: parse failure raises after the bounded retries, naming the stage
+// and the failing field, and retaining the raw response next to the artifacts.
 func TestSprintPlannerParseFailureRaises(t *testing.T) {
+	repo := t.TempDir()
+	raw := `{"issues": "not-a-list", "rationale": 7}`
+	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		return &harness.Result{
+			IsError:      true,
+			Parsed:       nil,
+			Result:       raw,
+			FailureType:  harness.FailureSchema,
+			ErrorMessage: "Schema validation failed after retries.",
+		}, nil
+	}}
+	deps, _ := newDeps(h)
+	_, err := RunSprintPlanner(context.Background(), deps, map[string]any{
+		"repo_path":          repo,
+		"max_schema_retries": float64(1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "Sprint planner failed to produce valid issues after 2 attempt(s)") {
+		t.Fatalf("expected sprint planner failure error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "issues") {
+		t.Fatalf("expected the failing field named in the error, got %v", err)
+	}
+	if h.calls != 2 {
+		t.Fatalf("expected 2 attempts (1 retry), got %d", h.calls)
+	}
+	rawPath := filepath.Join(repo, ".artifacts", "plan", "sprint_planner_raw_response.txt")
+	blob, readErr := os.ReadFile(rawPath)
+	if readErr != nil {
+		t.Fatalf("expected raw response retained at %s: %v", rawPath, readErr)
+	}
+	if !strings.Contains(string(blob), raw) {
+		t.Fatalf("raw response not retained; got %q", string(blob))
+	}
+}
+
+// Contract: a failed attempt is retried with the validation error fed back into
+// the prompt, and the stage succeeds when a later attempt parses.
+func TestSprintPlannerRetriesWithValidationError(t *testing.T) {
+	h := &fakeHarness{fn: func(call int, _ string, dest any, _ harness.Options) (*harness.Result, error) {
+		if call == 1 {
+			return &harness.Result{
+				IsError:      true,
+				Parsed:       nil,
+				Result:       `{"issues": "not-a-list", "rationale": 7}`,
+				FailureType:  harness.FailureSchema,
+				ErrorMessage: "bad output",
+			}, nil
+		}
+		s := dest.(*sprintPlanOutput)
+		s.Rationale = "split by layer"
+		s.Issues = []schemas.PlannedIssue{{Name: "issue-a", Title: "A"}}
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	deps, _ := newDeps(h)
+	out, err := RunSprintPlanner(context.Background(), deps, map[string]any{
+		"prd":          map[string]any{"validated_description": "x"},
+		"architecture": map[string]any{"summary": "y"},
+		"repo_path":    t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if h.calls != 2 {
+		t.Fatalf("expected 2 harness calls, got %d", h.calls)
+	}
+	if !strings.Contains(h.prompts[1], "Retry Context") || !strings.Contains(h.prompts[1], "issues") {
+		t.Fatalf("expected validation error fed back into retry prompt, got %q", h.prompts[1])
+	}
+	m := out.(map[string]any)
+	issues := m["issues"].([]any)
+	if len(issues) != 1 || issues[0].(map[string]any)["name"] != "issue-a" {
+		t.Fatalf("unexpected issues: %v", issues)
+	}
+}
+
+// Contract: an empty completion (no parsed object, no raw text) is the
+// provider/model mismatch shape and fails fast without burning retries.
+func TestSprintPlannerEmptyCompletionFailsFast(t *testing.T) {
 	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
 		return &harness.Result{IsError: true, Parsed: nil}, nil
 	}}
 	deps, _ := newDeps(h)
 	_, err := RunSprintPlanner(context.Background(), deps, map[string]any{"repo_path": t.TempDir()})
-	if err == nil || !strings.Contains(err.Error(), "Sprint planner failed to produce valid issues") {
-		t.Fatalf("expected sprint planner failure error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "empty completion") {
+		t.Fatalf("expected empty-completion error, got %v", err)
+	}
+	if h.calls != 1 {
+		t.Fatalf("empty completion must not be retried, got %d calls", h.calls)
 	}
 }
 
