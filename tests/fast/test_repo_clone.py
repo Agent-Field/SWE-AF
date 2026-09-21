@@ -434,3 +434,55 @@ def test_vci_credentials_are_redacted_but_raw_url_is_passed_to_git(
     assert "SECRET" not in emitted
     assert "x-access-token" not in emitted
     assert "https://***@host/o/r.git" in emitted
+
+
+@pytest.mark.asyncio
+async def test_vcj_stale_derived_workspace_without_git_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    local_remote: Path,
+) -> None:
+    """VC-J: leftovers in a derived workspace that is not a repo do not block the clone."""
+    import swe_af.fast.app as fast_app
+
+    workspace = tmp_path / "workspace"
+    stale = workspace / "remote"
+    stale.mkdir(parents=True)
+    (stale / "leftover.txt").write_text("from a build that died\n", encoding="utf-8")
+    monkeypatch.setenv("SWE_WORKSPACE_ROOT", str(workspace))
+    stub = BuildStub()
+
+    await _build(fast_app, stub, repo_url=str(local_remote))
+
+    assert not (stale / "leftover.txt").exists()
+    assert stub.git_init_observations == [
+        {
+            "git_exists": True,
+            "tracked_exists": True,
+            "remote_url": str(local_remote),
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_vck_populated_caller_path_is_never_cleared(
+    tmp_path: Path,
+    local_remote: Path,
+) -> None:
+    """VC-K: a caller's non-empty directory is never deleted to make room for a clone."""
+    import swe_af.fast.app as fast_app
+
+    theirs = tmp_path / "theirs"
+    theirs.mkdir()
+    (theirs / "keep.txt").write_text("caller's work\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await _build(
+            fast_app,
+            BuildStub(),
+            repo_path=str(theirs),
+            repo_url=str(local_remote),
+        )
+
+    assert "git clone failed (exit" in str(exc_info.value)
+    assert (theirs / "keep.txt").read_text(encoding="utf-8") == "caller's work\n"

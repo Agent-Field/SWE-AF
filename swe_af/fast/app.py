@@ -118,6 +118,16 @@ def _prepare_repo(
     """Clone or reset a remote repository, or create a local-only workspace."""
     git_dir = os.path.join(repo_path, ".git")
     if repo_url and not os.path.exists(git_dir):
+        # Leftovers the node itself made — a workspace from a build that died
+        # before git init, or from before this node cloned at all — would make
+        # `git clone` refuse a non-empty destination. Derived paths are ours to
+        # clear; a path the caller chose is not (the clone then fails loudly).
+        if path_was_derived and os.path.isdir(repo_path) and os.listdir(repo_path):
+            app.note(
+                f"Clearing stale workspace at {repo_path} (no git repo) before cloning",
+                tags=["fast_build", "clone", "reclone"],
+            )
+            shutil.rmtree(repo_path, ignore_errors=True)
         app.note(
             f"Cloning {_redact_credentials(repo_url, repo_url)} → {repo_path}",
             tags=["fast_build", "clone"],

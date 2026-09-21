@@ -229,6 +229,16 @@ func prepareRepo(
 	gitDir := filepath.Join(repoPath, ".git")
 	switch {
 	case repoURL != "" && !pathExists(gitDir):
+		// Leftovers the node itself made — a workspace from a build that died
+		// before git init, or from before this node cloned at all — would make
+		// `git clone` refuse a non-empty destination. Derived paths are ours to
+		// clear; a path the caller chose is not (the clone then fails loudly).
+		if pathWasDerived && isNonEmptyDir(repoPath) {
+			deps.note(ctx, fmt.Sprintf(
+				"Clearing stale workspace at %s (no git repo) before cloning", repoPath),
+				"fast_build", "clone", "reclone")
+			_ = os.RemoveAll(repoPath)
+		}
 		deps.note(ctx, fmt.Sprintf("Cloning %s → %s", redactCredentials(repoURL, repoURL), repoPath),
 			"fast_build", "clone")
 		return cloneRepo(ctx, deps, repoURL, repoPath, false)
@@ -293,6 +303,11 @@ func pathExists(path string) bool {
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+func isNonEmptyDir(path string) bool {
+	entries, err := os.ReadDir(path)
+	return err == nil && len(entries) > 0
 }
 
 // Build ports fast/app.py::build — the speed-optimized end-to-end pipeline:

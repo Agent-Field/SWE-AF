@@ -311,3 +311,56 @@ func TestBuildClone_VCE_CallerSuppliedGitRepoIsNotMutated(t *testing.T) {
 		t.Fatalf("untracked file = %q, %v", got, err)
 	}
 }
+
+// VC-J: leftovers in a derived workspace that is not a repo do not block the clone.
+func TestBuildClone_VCJ_StaleDerivedWorkspaceWithoutGit(t *testing.T) {
+	remote := makeLocalRemote(t)
+	workspaceRoot := t.TempDir()
+	stale := filepath.Join(workspaceRoot, "remote")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "leftover.txt"),
+		[]byte("from a build that died\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SWE_WORKSPACE_ROOT", workspaceRoot)
+	deps, _ := cloneBuildDeps(t, "tracked.txt")
+
+	if _, err := Build(context.Background(), deps, map[string]any{
+		"goal": "test stale workspace", "repo_url": remote,
+	}); err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(stale, "leftover.txt")); !os.IsNotExist(err) {
+		t.Fatalf("leftover survived the re-clone: %v", err)
+	}
+	if got := gitOutput(t, stale, "remote", "get-url", "origin"); got != remote {
+		t.Fatalf("origin = %q, want %q", got, remote)
+	}
+}
+
+// VC-K: a caller's non-empty directory is never deleted to make room for a clone.
+func TestBuildClone_VCK_PopulatedCallerPathIsNeverCleared(t *testing.T) {
+	remote := makeLocalRemote(t)
+	theirs := filepath.Join(t.TempDir(), "theirs")
+	if err := os.MkdirAll(theirs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(theirs, "keep.txt")
+	if err := os.WriteFile(keep, []byte("caller's work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deps, _ := cloneBuildDeps(t, "")
+
+	_, err := Build(context.Background(), deps, map[string]any{
+		"goal": "test caller path", "repo_path": theirs, "repo_url": remote,
+	})
+	if err == nil || !strings.Contains(err.Error(), "git clone failed (exit") {
+		t.Fatalf("err = %v, want a git clone failure", err)
+	}
+	if got, readErr := os.ReadFile(keep); readErr != nil || string(got) != "caller's work\n" {
+		t.Fatalf("caller file = %q, %v", got, readErr)
+	}
+}
