@@ -101,6 +101,39 @@ The previous architecture was reviewed and needs revision:
 Address these concerns directly.
 """
 
+    if feedback:
+        mission = f"""## Your Mission
+
+The architecture document already exists at: {architecture_path}. Read it first,
+then revise it to address every finding in the review above.
+Keep everything the review did not challenge. Do not redesign the architecture
+from scratch.
+
+Re-read only the parts of the codebase the findings actually touch. The first
+pass already studied it.
+
+Write the revised architecture document back to: {architecture_path}
+
+The bar remains the same: this document is the single source of truth. Every
+interface you define will be copied verbatim into code. Every type signature
+becomes a real type. Every component boundary becomes a real module. Two engineers
+working independently from this document should produce code that integrates on
+the first try.
+"""
+    else:
+        mission = f"""## Your Mission
+
+Design the technical architecture. Read the codebase deeply first — your design
+should feel like a natural extension of what already exists.
+
+Write your architecture document to: {architecture_path}
+
+The bar: this document is the single source of truth. Every interface you define
+will be copied verbatim into code. Every type signature becomes a real type. Every
+component boundary becomes a real module. Two engineers working independently from
+this document should produce code that integrates on the first try.
+"""
+
     task = f"""\
 ## Product Requirements
 {prd.validated_description}
@@ -119,18 +152,7 @@ Address these concerns directly.
 
 The full PRD is at: {prd_path}
 {feedback_block}
-## Your Mission
-
-Design the technical architecture. Read the codebase deeply first — your design
-should feel like a natural extension of what already exists.
-
-Write your architecture document to: {architecture_path}
-
-The bar: this document is the single source of truth. Every interface you define
-will be copied verbatim into code. Every type signature becomes a real type. Every
-component boundary becomes a real module. Two engineers working independently from
-this document should produce code that integrates on the first try.
-"""
+{mission}"""
     return SYSTEM_PROMPT, task
 
 
