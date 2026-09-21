@@ -418,23 +418,24 @@ class TestBuildEdgeCases:
             asyncio.run(fast_app.build(goal="Do something"))
 
     @pytest.mark.asyncio
-    async def test_repo_url_without_repo_path_auto_derives_repo_path(self, tmp_path) -> None:
-        """repo_url without repo_path auto-derives repo_path from URL."""
+    async def test_repo_url_without_repo_path_auto_derives_repo_path(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """repo_url without repo_path auto-derives repo_path from URL and clones into it."""
         import swe_af.fast.app as fast_app  # noqa: PLC0415
+
+        # A local repo stands in for the remote: the clone is real, and offline.
+        remote = tmp_path / "my-project.git"
+        subprocess.run(
+            ["git", "init", "--bare", str(remote)],
+            capture_output=True, text=True, check=True,
+        )
+        workspace_root = tmp_path / "workspaces"
+        monkeypatch.setenv("SWE_WORKSPACE_ROOT", str(workspace_root))
 
         # Track which repo_path gets used when calling
         called_with_repo_path: list[str] = []
         git_init_result = _make_git_init_result()
-
-        # Track makedirs calls to see derived path
-        derived_paths: list[str] = []
-        original_makedirs = os.makedirs
-
-        def capture_makedirs(path, exist_ok=False, **kwargs):
-            derived_paths.append(str(path))
-            # Don't create /workspaces/ paths
-            if not str(path).startswith("/workspaces/"):
-                original_makedirs(path, exist_ok=exist_ok, **kwargs)
 
         plan_result = _make_plan_result()
         execution_result = _make_execution_result()
@@ -464,18 +465,23 @@ class TestBuildEdgeCases:
             patch.object(fast_app.app, "call", side_effect=mock_call),
             patch.object(fast_app.app, "note", return_value=None),
             patch("swe_af.fast.app._unwrap", side_effect=mock_unwrap),
-            patch("swe_af.fast.app.os.makedirs", side_effect=capture_makedirs),
         ):
             result = await fast_app.build(
                 goal="Do something",
-                repo_url="https://github.com/user/my-project.git",
+                repo_url=str(remote),
             )
 
-        # repo_path should have been derived from the URL
-        all_paths = derived_paths + called_with_repo_path
-        assert any("my-project" in p for p in all_paths), (
-            f"Expected 'my-project' in derived paths {all_paths}"
+        # repo_path should have been derived from the URL, and the repo cloned there
+        clone = workspace_root / "my-project"
+        assert called_with_repo_path == [str(clone)], (
+            f"Expected run_git_init on {clone}, got {called_with_repo_path}"
         )
+        assert (clone / ".git").is_dir()
+        origin = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=clone, capture_output=True, text=True,
+        )
+        assert origin.stdout.strip() == str(remote)
 
     def test_repo_name_from_url_helper(self) -> None:
         """_repo_name_from_url extracts name correctly from various URL formats."""
