@@ -76,6 +76,42 @@ async def test_anyio_spawned_child_drives_activity_heartbeat() -> None:
 
 
 @pytest.mark.asyncio
+async def test_asyncio_spawned_child_drives_activity_heartbeat() -> None:
+    """The CLI providers (codex/open_code/gemini/aforge) go through
+    agentfield.harness._cli.run_cli, which resolves
+    asyncio.create_subprocess_exec at call time."""
+    install_subprocess_activity_hooks()
+    activity = ChildToolActivity()
+    notes: list[str] = []
+
+    async def run_short_lived_child() -> int:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "import time; time.sleep(0.7)",
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            return await process.wait()
+        finally:
+            if process.returncode is None:
+                process.terminate()
+                await process.wait()
+
+    result = await run_with_activity_heartbeat(
+        run_short_lived_child(),
+        note_fn=lambda message, **_: notes.append(message),
+        activity=activity,
+        interval_seconds=0.1,
+    )
+
+    assert result == 0
+    assert notes
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_task_is_cancelled_on_terminal_resolution(monkeypatch) -> None:
     created_tasks = []
     real_create_task = asyncio.create_task
@@ -116,6 +152,49 @@ async def test_heartbeat_task_is_cancelled_on_terminal_resolution(monkeypatch) -
     assert len(created_tasks) == 1
     assert created_tasks[0].cancel_calls == 1
     assert created_tasks[0].cancelled()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_heartbeat_teardown_is_not_swallowed(
+    monkeypatch,
+) -> None:
+    """A cancel that lands while the heartbeat task is torn down must still
+    cancel the wrapper, even though the child wait already resolved."""
+    activity = ChildToolActivity()
+    wrapper_task: asyncio.Task[str] | None = None
+    real_create_task = asyncio.create_task
+
+    def create_task_with_teardown_cancel(coro, *args, **kwargs):
+        task = real_create_task(coro, *args, **kwargs)
+
+        def _cancel_wrapper_when_heartbeat_finishes(_done: asyncio.Task) -> None:
+            # The heartbeat only finishes because the wrapper cancels it in
+            # the finally block, i.e. after the child already returned.
+            if wrapper_task is not None:
+                wrapper_task.cancel()
+
+        task.add_done_callback(_cancel_wrapper_when_heartbeat_finishes)
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", create_task_with_teardown_cancel)
+
+    async def child_wait() -> str:
+        await asyncio.sleep(0.02)
+        return "child-result"
+
+    async def run_wrapper() -> str:
+        return await run_with_activity_heartbeat(
+            child_wait(),
+            note_fn=lambda *_args, **_kwargs: None,
+            activity=activity,
+            interval_seconds=30.0,
+        )
+
+    wrapper_task = real_create_task(run_wrapper())
+    with pytest.raises(asyncio.CancelledError):
+        await wrapper_task
+
+    assert wrapper_task.cancelled()
 
 
 @pytest.mark.asyncio

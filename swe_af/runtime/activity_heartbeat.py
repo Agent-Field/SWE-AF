@@ -176,11 +176,23 @@ async def run_with_activity_heartbeat(
         return await child_task
     finally:
         heartbeat_task.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
             await heartbeat_task
+        except asyncio.CancelledError:
+            # Cancelling the heartbeat task makes this await raise even when
+            # *this* task was never cancelled; swallow only that case.  If an
+            # outer cancellation (e.g. asyncio.wait_for timing out) landed
+            # while the heartbeat was being torn down, re-raise it so the
+            # wrapper does not report success after being cancelled.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
 
-        # If the caller cancels this wrapper, do not leave the harness process
-        # running detached from the reasoner that owns it.
+        # Best-effort only: if the awaited harness coroutine is somehow still
+        # pending once the wait unwinds, cancel it so no asyncio task is left
+        # behind.  This does not terminate an OS child the provider already
+        # spawned — process lifecycle stays with the provider, so a cancelled
+        # call may still leave an orphan (pre-existing, not handled here).
         if not child_task.done():
             child_task.cancel()
             with suppress(asyncio.CancelledError):
