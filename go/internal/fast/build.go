@@ -12,11 +12,13 @@
 package fast
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -147,6 +149,152 @@ func runtimeToProvider(runtime string) string {
 	}
 }
 
+type gitResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+func runGit(ctx context.Context, dir string, args ...string) gitResult {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+			if stderr.Len() == 0 {
+				stderr.WriteString(err.Error())
+			}
+		}
+	}
+	return gitResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
+}
+
+var credentialURLRe = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)([^/@\s]+)@`)
+
+func redactCredentials(text, repoURL string) string {
+	safeURL := credentialURLRe.ReplaceAllString(repoURL, `${1}***@`)
+	if repoURL != "" {
+		text = strings.ReplaceAll(text, repoURL, safeURL)
+	}
+
+	// Git normally repeats the full URL in diagnostics. Also redact a password
+	// if a transport happens to report that component separately.
+	if match := credentialURLRe.FindStringSubmatch(repoURL); len(match) == 3 {
+		if _, password, ok := strings.Cut(match[2], ":"); ok && password != "" {
+			text = strings.ReplaceAll(text, password, "***")
+		}
+	}
+	return credentialURLRe.ReplaceAllString(text, `${1}***@`)
+}
+
+func normalizedRemote(remote string) string {
+	return strings.TrimSuffix(strings.TrimRight(remote, "/"), ".git")
+}
+
+func cloneRepo(ctx context.Context, deps *Deps, repoURL, repoPath string, reclone bool) error {
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+		return err
+	}
+	clone := runGit(ctx, "", "clone", repoURL, repoPath)
+	if clone.exitCode == 0 {
+		return nil
+	}
+
+	errMsg := redactCredentials(strings.TrimSpace(clone.stderr), repoURL)
+	if reclone {
+		return fmt.Errorf("git re-clone failed: %s", errMsg)
+	}
+	deps.note(ctx, fmt.Sprintf("Clone failed (exit %d): %s", clone.exitCode, errMsg),
+		"fast_build", "clone", "error")
+	return fmt.Errorf("git clone failed (exit %d): %s", clone.exitCode, errMsg)
+}
+
+// prepareRepo clones a remote repository before git_init, resets an existing
+// clone to a clean remote baseline, or creates a local-only workspace.
+func prepareRepo(
+	ctx context.Context,
+	deps *Deps,
+	repoURL, repoPath, defaultBranch string,
+	pathWasDerived bool,
+) error {
+	gitDir := filepath.Join(repoPath, ".git")
+	switch {
+	case repoURL != "" && !pathExists(gitDir):
+		deps.note(ctx, fmt.Sprintf("Cloning %s → %s", redactCredentials(repoURL, repoURL), repoPath),
+			"fast_build", "clone")
+		return cloneRepo(ctx, deps, repoURL, repoPath, false)
+	case repoURL != "" && pathExists(gitDir):
+		// A caller-supplied checkout may deliberately be a fork, have local-only
+		// branches, or contain untracked work. Repository preparation must not
+		// mutate it; the build pipeline receives it exactly as supplied.
+		if !pathWasDerived {
+			return nil
+		}
+
+		origin := runGit(ctx, repoPath, "remote", "get-url", "origin")
+		sameRemote := origin.exitCode == 0 &&
+			normalizedRemote(strings.TrimSpace(origin.stdout)) == normalizedRemote(repoURL)
+		if !sameRemote {
+			// Derived paths are keyed on the repo name alone, so two repos with
+			// the same name (different orgs) land here. Never build on the other
+			// repo's clone — it would edit and open a PR against the wrong one.
+			deps.note(ctx, fmt.Sprintf(
+				"Workspace at %s is a clone of a different remote — re-cloning", repoPath),
+				"fast_build", "clone", "reclone")
+			_ = os.RemoveAll(repoPath)
+			return cloneRepo(ctx, deps, repoURL, repoPath, true)
+		}
+
+		deps.note(ctx, fmt.Sprintf("Repo already exists at %s — resetting to origin/%s",
+			repoPath, defaultBranch), "fast_build", "clone", "reset")
+
+		worktreesDir := filepath.Join(repoPath, ".worktrees")
+		if isDir(worktreesDir) {
+			_ = os.RemoveAll(worktreesDir)
+		}
+		runGit(ctx, repoPath, "worktree", "prune")
+
+		if fetch := runGit(ctx, repoPath, "fetch", "origin"); fetch.exitCode != 0 {
+			deps.note(ctx, fmt.Sprintf("git fetch failed: %s",
+				redactCredentials(strings.TrimSpace(fetch.stderr), repoURL)),
+				"fast_build", "clone", "error")
+		}
+
+		runGit(ctx, repoPath, "checkout", "-f", defaultBranch)
+		reset := runGit(ctx, repoPath, "reset", "--hard", "origin/"+defaultBranch)
+		if reset.exitCode != 0 {
+			deps.note(ctx, fmt.Sprintf("Reset to origin/%s failed — re-cloning", defaultBranch),
+				"fast_build", "clone", "reclone")
+			_ = os.RemoveAll(repoPath)
+			return cloneRepo(ctx, deps, repoURL, repoPath, true)
+		}
+	default:
+		if err := os.MkdirAll(repoPath, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
 // Build ports fast/app.py::build — the speed-optimized end-to-end pipeline:
 // git_init → fast_plan_tasks → fast_execute_tasks → fast_verify → repo_finalize
 // → github_pr, every stage invoked via CallFn (app.call parity).
@@ -168,6 +316,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	}
 
 	repoPath := in.RepoPath
+	pathWasDerived := repoPath == ""
 	// Auto-derive repo_path from repo_url when not specified.
 	if effectiveRepoURL != "" && repoPath == "" {
 		repoPath = filepath.Join(workspace.Root(), repoNameFromURL(effectiveRepoURL))
@@ -176,7 +325,11 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		return nil, errors.New("Either repo_path or repo_url must be provided")
 	}
 
-	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+	defaultBranch := cfg.GithubPRBase
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+	if err := prepareRepo(ctx, deps, effectiveRepoURL, repoPath, defaultBranch, pathWasDerived); err != nil {
 		return nil, err
 	}
 
