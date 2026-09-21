@@ -7,9 +7,11 @@ FastAPI endpoints, workflow DAG tracking, and observability via router.note().
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
@@ -154,10 +156,12 @@ def _assign_sequence_numbers(issues: list[dict], levels: list[list[str]]) -> lis
     return list(issue_by_name.values())
 
 
-# Per-stage bounds on the extra schema-bound harness calls a planning role gets
-# when its structured output does not parse or validate. The SDK already retries
-# schema failures inside a single harness() call; these are second, outer bounds
-# that re-issue the whole call with the validation error fed back into the task
+# Per-stage bounds on the extra *outer* schema-bound harness calls a planning
+# role gets when its structured output does not parse or validate. These count
+# router.harness() calls, not model runs: the SDK already retries schema
+# failures inside one harness() call (DEFAULT_SCHEMA_RETRIES = 2), so a single
+# outer attempt can itself be up to three subprocess runs. The outer bounds
+# re-issue the whole call with the validation error fed back into the task
 # prompt (issue #146). Keep them small — each attempt is a full stage run over
 # the PRD and architecture, and the architect's architecture object is by far
 # the largest response in the pipeline. The bounds are internal constants, not
@@ -179,6 +183,49 @@ def _raw_completion_text(result) -> str:
     if not raw:
         raw = getattr(result, "text", None)
     return raw or ""
+
+
+def _planning_run_id() -> str:
+    """Identifier of the build this planning call belongs to.
+
+    Used for the retry log's per-run header (so a log appended to across builds
+    stays self-describing) and to find the credentials the scout negotiated for
+    this run. Falls back to a stable placeholder when no context is attached
+    (tests, direct invocation).
+    """
+    ctx = getattr(router, "ctx", None)
+    run_id = (
+        getattr(ctx, "run_id", None)
+        or getattr(ctx, "root_workflow_id", None)
+        or ""
+    )
+    return str(run_id) if run_id else "unknown-run"
+
+
+def _redact_scoped_credentials(text: str) -> str:
+    """Replace any run-scoped credential value with a marker.
+
+    The harness subprocess inherits the scout's scoped credentials, so a
+    response that echoes one can otherwise land in the archived retry log. The
+    values are replaced longest-first so a shorter value cannot split a longer
+    one.
+    """
+    if not text:
+        return text
+    try:
+        from swe_af.hitl.credentials_store import get_scoped_credentials  # noqa: PLC0415
+    except Exception:  # pragma: no cover - diagnostics must never fail a stage
+        return text
+    try:
+        creds = get_scoped_credentials(_planning_run_id())
+    except Exception:  # pragma: no cover - diagnostics must never fail a stage
+        return text
+    for name, value in sorted(
+        creds.items(), key=lambda item: len(item[1]), reverse=True
+    ):
+        if value:
+            text = text.replace(value, f"[REDACTED:{name}]")
+    return text
 
 
 def _describe_schema_failure(result, schema) -> str:
@@ -243,21 +290,24 @@ def _persist_raw_response(
 ) -> None:
     """Append one failed attempt's raw completion to the stage's retry log."""
     raw = _raw_completion_text(result)
+    redacted = _redact_scoped_credentials(raw)
     body = (
-        _truncate_raw_response(raw)
+        _truncate_raw_response(redacted)
         if raw.strip()
         else "(the harness returned no raw completion text)"
     )
-    _append_artifact(
-        path,
+    block = (
         f"===== attempt {attempt}/{attempts} failed: {error} =====\n"
-        f"# raw completion text follows\n{body}",
+        f"# raw completion text follows\n{body}"
     )
+    _append_artifact(path, _redact_scoped_credentials(block))
 
 
 def _record_retry_outcome(path: str, outcome: str) -> None:
     """Append the terminal retry outcome to the stage's retry log."""
-    _append_artifact(path, f"===== outcome: {outcome} =====")
+    _append_artifact(
+        path, _redact_scoped_credentials(f"===== outcome: {outcome} =====")
+    )
 
 
 def _record_outcome_best_effort(stage: str, path: str, outcome: str) -> None:
@@ -267,6 +317,27 @@ def _record_outcome_best_effort(stage: str, path: str, outcome: str) -> None:
     except Exception as exc:  # diagnostics must never mask the real outcome
         router.note(
             f"{stage} could not write the retry outcome to {path}: {exc}",
+            tags=["planning", "schema_retry", "artifact_error"],
+        )
+
+
+def _record_run_header_best_effort(stage: str, path: str) -> None:
+    """Start a self-describing section for this invocation of the retry log.
+
+    The log is append-only and keyed by repo path, so a second build against
+    the same path appends after the first. The header makes each build's
+    section identifiable without a reader having to guess which outcome is
+    current.
+    """
+    try:
+        _append_artifact(
+            path,
+            f"===== run {_planning_run_id()} | {stage} | started "
+            f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} =====",
+        )
+    except Exception as exc:  # diagnostics must never fail the stage
+        router.note(
+            f"{stage} could not write the retry-log header to {path}: {exc}",
             tags=["planning", "schema_retry", "artifact_error"],
         )
 
@@ -302,30 +373,40 @@ async def _run_planning_call_with_schema_retries(
     that was produced but did not parse/validate is retried, up to
     *max_schema_retries* extra attempts (callers pass the per-stage
     ``PLANNING_ROLE_SCHEMA_RETRIES`` / ``SPRINT_PLANNER_SCHEMA_RETRIES``
-    constants). Every failed attempt is appended to *raw_response_path* along
-    with a terminal outcome line, and a failure to write that diagnostic is
-    noted but never replaces the schema failure.
+    constants). Each invocation starts a self-describing run section, every
+    failed attempt is appended, and the section always ends with a terminal
+    outcome line, including when a fatal API error or an empty completion ends
+    the loop early, so the log never trails off mid-sequence. A failure to
+    write any of that is noted but never replaces the schema failure. Run-scoped
+    credential values are redacted before anything reaches the log.
     """
     attempts = max(0, max_schema_retries) + 1
     last_error = ""
     persistence_error = ""
-    wrote_attempt = False
+    _record_run_header_best_effort(stage, raw_response_path)
     for attempt in range(1, attempts + 1):
-        result = await invoke(last_error or None)
-        check_fatal_harness_error(result)
-        check_empty_harness_completion(
-            result, role=stage, provider=provider, model=model
-        )
+        try:
+            result = await invoke(last_error or None)
+            check_fatal_harness_error(result)
+            check_empty_harness_completion(
+                result, role=stage, provider=provider, model=model
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            # A fatal API error or an empty completion can arrive on any
+            # attempt, including a retry. Record a terminal outcome before
+            # re-raising so the log never ends mid-sequence.
+            _record_outcome_best_effort(
+                stage,
+                raw_response_path,
+                f"FAILED after attempt {attempt}/{attempts}: {exc}",
+            )
+            raise
         if result.parsed is not None:
-            # Only log a recovery when this run actually wrote a failed
-            # attempt: a first-attempt success leaves no artifact at all, and
-            # a stale log from an earlier run is never touched.
-            if wrote_attempt:
-                _record_outcome_best_effort(
-                    stage,
-                    raw_response_path,
-                    f"succeeded on attempt {attempt}/{attempts}",
-                )
+            _record_outcome_best_effort(
+                stage,
+                raw_response_path,
+                f"succeeded on attempt {attempt}/{attempts}",
+            )
             return result
 
         last_error = _describe_schema_failure(result, schema)
@@ -337,7 +418,6 @@ async def _run_planning_call_with_schema_retries(
                 attempts=attempts,
                 error=last_error,
             )
-            wrote_attempt = True
         except Exception as exc:  # diagnostics must never mask the real failure
             persistence_error = str(exc)
             router.note(
@@ -365,7 +445,8 @@ async def _run_planning_call_with_schema_retries(
     raise RuntimeError(
         f"{failure_label} after {attempts} attempt(s) "
         f"(provider={provider}, model={model}; "
-        f"raw response: {raw_response_path}) — {last_error}{detail}"
+        f"raw response: {raw_response_path}) — "
+        f"{_redact_scoped_credentials(last_error)}{detail}"
     )
 
 

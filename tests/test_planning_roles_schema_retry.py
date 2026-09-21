@@ -7,8 +7,11 @@ manager, architect, tech lead, sprint planner):
 
 - retries a bounded number of times, feeding the validation error back into the
   retry prompt,
-- appends every failed attempt and the terminal outcome to its own retry log
-  next to the plan artifacts, so a reader can tell recovery from death,
+- appends a self-describing run header per invocation, every failed attempt,
+  and a terminal outcome line on every exit (recovery, bound exhaustion, or a
+  fatal/empty result on a retry) to its own retry log next to the plan
+  artifacts, so a reader can tell recovery from death,
+- redacts run-scoped credential values before anything reaches that log,
 - names the stage, the schema error, the failing fields, and the log path once
   the bound is exhausted, and
 - treats an unwritable retry log as a diagnostic problem, never as the failure.
@@ -19,13 +22,17 @@ Ref: https://github.com/Agent-Field/SWE-AF/issues/146
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from swe_af.execution.fatal_error import EmptyHarnessCompletionError
+from swe_af.execution.fatal_error import (
+    EmptyHarnessCompletionError,
+    FatalHarnessError,
+)
 from swe_af.reasoners.schemas import (
     Architecture,
     PRD,
@@ -169,11 +176,23 @@ def _empty_result() -> SimpleNamespace:
     )
 
 
+def _fatal_result() -> SimpleNamespace:
+    return SimpleNamespace(
+        parsed=None,
+        result="",
+        text="",
+        error_message="Credit balance is too low. Add funds.",
+        is_error=True,
+        failure_type="api_error",
+    )
+
+
 def _make_router(results: list) -> MagicMock:
     mock_router = MagicMock()
     mock_router.harness = AsyncMock(side_effect=list(results))
     mock_router.note = MagicMock()
     mock_router.agentfield_server = "http://localhost:9999"
+    mock_router.ctx.run_id = "run-test-1"
     return mock_router
 
 
@@ -229,6 +248,7 @@ def test_retries_unparseable_output_and_records_recovery(tmp_path, case) -> None
 
     log = _log_path(tmp_path, case).read_text(encoding="utf-8")
     assert case.bad_raw in log
+    assert f"===== run run-test-1 | {case.role} | started " in log
     assert f"attempt 1/{attempts} failed" in log
     assert f"outcome: succeeded on attempt {attempts}/{attempts}" in log
 
@@ -265,6 +285,7 @@ def test_empty_completion_is_not_retried(tmp_path, case) -> None:
     """An empty completion (no parsed object and no raw text at all) is the
     provider/model-mismatch signature, not a schema-quality problem: it must
     fail on the first call at every stage rather than burn the retry bound.
+    The log still ends with a terminal outcome line.
     """
     mock_router = _make_router([_empty_result()])
 
@@ -274,6 +295,105 @@ def test_empty_completion_is_not_retried(tmp_path, case) -> None:
     assert mock_router.harness.await_count == 1
     assert case.role in str(excinfo.value)
     assert "empty completion" in str(excinfo.value)
+    log = _log_path(tmp_path, case).read_text(encoding="utf-8")
+    assert "outcome: FAILED after attempt 1/" in log
+
+
+@pytest.mark.parametrize("case", _ALL_STAGES, ids=lambda c: c.key)
+def test_fatal_on_retry_records_terminal_outcome(tmp_path, case) -> None:
+    """A fatal API error arriving on a retry must not leave the log ending on
+    'attempt 1/N failed': the terminal outcome is recorded before the fatal
+    error propagates.
+    """
+    attempts = case.retries + 1
+    mock_router = _make_router([_bad_result(case), _fatal_result()])
+
+    with pytest.raises(FatalHarnessError):
+        asyncio.run(_invoke_stage(case, tmp_path, mock_router))
+
+    assert mock_router.harness.await_count == 2
+    log = _log_path(tmp_path, case).read_text(encoding="utf-8")
+    assert f"attempt 1/{attempts} failed" in log
+    last_line = log.rstrip().splitlines()[-1]
+    assert last_line.startswith(
+        f"===== outcome: FAILED after attempt 2/{attempts}:"
+    )
+    assert "credit balance is too low" in last_line.lower()
+
+
+@pytest.mark.parametrize("case", _ALL_STAGES, ids=lambda c: c.key)
+def test_empty_on_retry_records_terminal_outcome(tmp_path, case) -> None:
+    """An empty completion arriving on a retry gets the same terminal outcome
+    treatment as any other early exit.
+    """
+    attempts = case.retries + 1
+    mock_router = _make_router([_bad_result(case), _empty_result()])
+
+    with pytest.raises(EmptyHarnessCompletionError):
+        asyncio.run(_invoke_stage(case, tmp_path, mock_router))
+
+    assert mock_router.harness.await_count == 2
+    log = _log_path(tmp_path, case).read_text(encoding="utf-8")
+    last_line = log.rstrip().splitlines()[-1]
+    assert last_line.startswith(
+        f"===== outcome: FAILED after attempt 2/{attempts}:"
+    )
+    assert "empty completion" in last_line
+
+
+def test_second_run_outcome_supersedes_first_run(tmp_path) -> None:
+    """A second build against the same repo path appends a new run section; its
+    outcome must be the last line, not the first build's FAILED outcome.
+    """
+    case = _SPRINT_PLANNER
+    attempts = case.retries + 1
+
+    first = _make_router([_bad_result(case) for _ in range(attempts)])
+    with pytest.raises(RuntimeError):
+        asyncio.run(_invoke_stage(case, tmp_path, first))
+
+    second = _make_router([_ok_result(case)])
+    asyncio.run(_invoke_stage(case, tmp_path, second))
+
+    log = _log_path(tmp_path, case).read_text(encoding="utf-8")
+    assert f"outcome: FAILED after {attempts} attempt(s)" in log  # retained
+    assert log.count("===== run run-test-1 | ") == 2
+    assert log.rstrip().splitlines()[-1] == (
+        f"===== outcome: succeeded on attempt 1/{attempts} ====="
+    )
+
+
+def test_scoped_credentials_are_redacted_from_the_log(tmp_path) -> None:
+    """The harness subprocess inherits the scout's scoped credentials, so an
+    echoed value must not land in the archived retry log or the raised error.
+    """
+    from swe_af.hitl.credentials_store import (  # noqa: PLC0415
+        clear_scoped_credentials,
+        store_scoped_credentials,
+    )
+
+    case = _PM
+    secret = "deploy-token-9f3a2b7c"
+    store_scoped_credentials("run-test-1", {"DEPLOY_TOKEN": secret})
+    bad = SimpleNamespace(
+        parsed=None,
+        result=json.dumps({"validated_description": secret}),
+        text="",
+        error_message="Schema validation failed.",
+        is_error=True,
+        failure_type="schema",
+    )
+    mock_router = _make_router([bad, bad])
+    try:
+        with pytest.raises(RuntimeError) as excinfo:
+            asyncio.run(_invoke_stage(case, tmp_path, mock_router))
+    finally:
+        clear_scoped_credentials("run-test-1")
+
+    log = _log_path(tmp_path, case).read_text(encoding="utf-8")
+    assert secret not in log
+    assert "[REDACTED:DEPLOY_TOKEN]" in log
+    assert secret not in str(excinfo.value)
 
 
 def test_unwritable_log_does_not_abort_a_recovering_run(tmp_path) -> None:

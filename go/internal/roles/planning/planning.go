@@ -24,7 +24,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
@@ -462,16 +464,19 @@ type sprintPlanOutput struct {
 	Rationale string                 `json:"rationale"`
 }
 
-// planningRoleSchemaRetries is the number of extra schema-bound harness calls
-// the product manager, architect and tech lead get when their structured output
-// does not parse/validate. Kept small on purpose: each attempt is a full stage
-// run over the PRD and architecture.
+// planningRoleSchemaRetries is the number of extra *outer* schema-bound harness
+// calls the product manager, architect and tech lead get when their structured
+// output does not parse/validate. These count harness() calls, not model runs:
+// the SDK retries schema failures inside one call (DEFAULT_SCHEMA_RETRIES = 2),
+// so one outer attempt can be up to three subprocess runs. Kept small on
+// purpose: each attempt is a full stage run over the PRD and architecture.
 const planningRoleSchemaRetries = 1
 
-// sprintPlannerSchemaRetries is the extra-call bound for the sprint planner.
-// Its response is a large issue set that feeds every downstream issue, and the
-// SDK already retries schema failures inside a single harness() call, so one
-// extra attempt than the other stages is enough. Mirrors Python's
+// sprintPlannerSchemaRetries is the outer-call bound for the sprint planner.
+// Its response is a large issue set that feeds every downstream issue, and one
+// extra outer attempt than the other stages is enough; each outer attempt is
+// itself up to three subprocess runs via the SDK's in-call schema retries, so
+// the subprocess ceiling is three times these constants. Mirrors Python's
 // PLANNING_ROLE_SCHEMA_RETRIES / SPRINT_PLANNER_SCHEMA_RETRIES
 // (swe_af/reasoners/pipeline.py, #146). These are internal constants rather
 // than handler inputs because nothing passes a different value.
@@ -573,37 +578,86 @@ func appendArtifact(path, text string) error {
 	return f.Close()
 }
 
+// redactScopedCredentials replaces any negotiated credential value with a
+// marker so a response that echoes one cannot land in the archived retry log.
+// Values are replaced longest-first so a shorter value cannot split a longer
+// one. Mirrors pipeline._redact_scoped_credentials.
+func redactScopedCredentials(runID, text string) string {
+	if text == "" || runID == "" {
+		return text
+	}
+	creds := hitl.GetScopedCredentials(runID)
+	if len(creds) == 0 {
+		return text
+	}
+	names := make([]string, 0, len(creds))
+	for name := range creds {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return len(creds[names[i]]) > len(creds[names[j]])
+	})
+	for _, name := range names {
+		if value := creds[name]; value != "" {
+			text = strings.ReplaceAll(text, value, "[REDACTED:"+name+"]")
+		}
+	}
+	return text
+}
+
 // persistRawResponse appends one failed attempt's raw completion to the
 // stage's retry log. Mirrors pipeline._persist_raw_response.
-func persistRawResponse(path string, result *harness.Result, attempt, attempts int, failure string) error {
+func persistRawResponse(path, runID string, result *harness.Result, attempt, attempts int, failure string) error {
 	raw := ""
 	if result != nil {
 		raw = result.Result
 	}
-	body := strings.TrimSpace(raw)
+	redacted := redactScopedCredentials(runID, raw)
+	body := strings.TrimSpace(redacted)
 	if body != "" {
-		body = truncateRawResponse(raw)
+		body = truncateRawResponse(redacted)
 	} else {
 		body = "(the harness returned no raw completion text)"
 	}
-	return appendArtifact(path, fmt.Sprintf(
+	block := fmt.Sprintf(
 		"===== attempt %d/%d failed: %s =====\n# raw completion text follows\n%s",
-		attempt, attempts, failure, body,
-	))
+		attempt, attempts, redactScopedCredentials(runID, failure), body,
+	)
+	return appendArtifact(path, redactScopedCredentials(runID, block))
 }
 
 // recordRetryOutcome appends the terminal retry outcome to the stage's retry
 // log.
-func recordRetryOutcome(path, outcome string) error {
-	return appendArtifact(path, "===== outcome: "+outcome+" =====")
+func recordRetryOutcome(path, runID, outcome string) error {
+	return appendArtifact(path, redactScopedCredentials(runID,
+		"===== outcome: "+outcome+" ====="))
 }
 
 // recordOutcomeBestEffort records a terminal retry outcome without ever failing
 // the stage.
-func recordOutcomeBestEffort(ctx context.Context, deps *Deps, stage, path, outcome string) {
-	if err := recordRetryOutcome(path, outcome); err != nil {
+func recordOutcomeBestEffort(ctx context.Context, deps *Deps, stage, path, runID, outcome string) {
+	if err := recordRetryOutcome(path, runID, outcome); err != nil {
 		deps.App.Note(ctx, fmt.Sprintf(
 			"%s could not write the retry outcome to %s: %v",
+			stage, path, err), "planning", "schema_retry", "artifact_error")
+	}
+}
+
+// recordRunHeaderBestEffort starts a self-describing section for this
+// invocation of the retry log. The log is append-only and keyed by repo path,
+// so a second build against the same path appends after the first; the header
+// makes each build's section identifiable without a reader having to guess
+// which outcome is current.
+func recordRunHeaderBestEffort(ctx context.Context, deps *Deps, stage, path, runID string) {
+	label := runID
+	if label == "" {
+		label = "unknown-run"
+	}
+	if err := appendArtifact(path, fmt.Sprintf(
+		"===== run %s | %s | started %s =====",
+		label, stage, time.Now().UTC().Format(time.RFC3339))); err != nil {
+		deps.App.Note(ctx, fmt.Sprintf(
+			"%s could not write the retry-log header to %s: %v",
 			stage, path, err), "planning", "schema_retry", "artifact_error")
 	}
 }
@@ -611,9 +665,11 @@ func recordOutcomeBestEffort(ctx context.Context, deps *Deps, stage, path, outco
 // runSchemaBoundRole drives the bounded schema-retry loop shared by the four
 // planning stages (PM, architect, tech lead, sprint planner). It re-issues the
 // harness call with the validation error fed back into the prompt when the
-// output does not parse/validate, appends every failed attempt and the terminal
-// outcome to rawResponsePath, and never lets a diagnostic write mask the real
-// failure. maxSchemaRetries is set per call site from
+// output does not parse/validate. Each invocation starts a self-describing run
+// section and always ends it with a terminal outcome line, including when a
+// fatal API error or an empty completion ends the loop early, so the log never
+// trails off mid-sequence. Run-scoped credential values are redacted before
+// anything reaches the log. maxSchemaRetries is set per call site from
 // planningRoleSchemaRetries / sprintPlannerSchemaRetries.
 func runSchemaBoundRole[T any](
 	ctx context.Context,
@@ -631,9 +687,10 @@ func runSchemaBoundRole[T any](
 	if attempts < 1 {
 		attempts = 1
 	}
+	runID := executionContextFrom(ctx).RunID
 	lastFailure := ""
 	persistenceError := ""
-	wroteAttempt := false
+	recordRunHeaderBestEffort(ctx, deps, stage, rawResponsePath, runID)
 	for attempt := 1; attempt <= attempts; attempt++ {
 		prompt := taskPrompt
 		if lastFailure != "" {
@@ -641,19 +698,19 @@ func runSchemaBoundRole[T any](
 		}
 		parsed, res, err := harnessx.Run[T](ctx, deps.Harness, prompt, opts)
 		if err != nil {
+			recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath, runID,
+				fmt.Sprintf("FAILED after attempt %d/%d: %v", attempt, attempts, err))
 			return nil, err
 		}
 		if res != nil && res.Parsed != nil {
-			// Only log a recovery when this run actually wrote a failed
-			// attempt: a first-attempt success leaves no artifact at all, and
-			// a stale log from an earlier run is never touched.
-			if wroteAttempt {
-				recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath,
-					fmt.Sprintf("succeeded on attempt %d/%d", attempt, attempts))
-			}
+			recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath, runID,
+				fmt.Sprintf("succeeded on attempt %d/%d", attempt, attempts))
 			return parsed, nil
 		}
 		if isEmptyCompletion(res) {
+			reason := fmt.Sprintf("empty completion (provider=%s, model=%s)", provider, model)
+			recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath, runID,
+				fmt.Sprintf("FAILED after attempt %d/%d: %s", attempt, attempts, reason))
 			return nil, fmt.Errorf(
 				"%s harness returned an empty completion "+
 					"(provider=%s, model=%s) — check provider auth/model compatibility",
@@ -662,13 +719,11 @@ func runSchemaBoundRole[T any](
 		}
 		var zero T
 		lastFailure = describeSchemaFailure(res, &zero)
-		if err := persistRawResponse(rawResponsePath, res, attempt, attempts, lastFailure); err != nil {
+		if err := persistRawResponse(rawResponsePath, runID, res, attempt, attempts, lastFailure); err != nil {
 			persistenceError = err.Error()
 			deps.App.Note(ctx, fmt.Sprintf(
 				"%s could not write the raw response to %s: %v",
 				stage, rawResponsePath, err), "planning", "schema_retry", "artifact_error")
-		} else {
-			wroteAttempt = true
 		}
 		if attempt < attempts {
 			deps.App.Note(ctx, fmt.Sprintf(
@@ -676,7 +731,7 @@ func runSchemaBoundRole[T any](
 				stage, attempt, attempts), "planning", "schema_retry")
 		}
 	}
-	recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath,
+	recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath, runID,
 		fmt.Sprintf("FAILED after %d attempt(s): %s", attempts, lastFailure))
 	persistenceDetail := ""
 	if persistenceError != "" {
@@ -684,7 +739,8 @@ func runSchemaBoundRole[T any](
 	}
 	return nil, fmt.Errorf(
 		"%s after %d attempt(s) (provider=%s, model=%s; raw response: %s) — %s%s",
-		failureLabel, attempts, provider, model, rawResponsePath, lastFailure, persistenceDetail,
+		failureLabel, attempts, provider, model, rawResponsePath,
+		redactScopedCredentials(runID, lastFailure), persistenceDetail,
 	)
 }
 

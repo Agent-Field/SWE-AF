@@ -118,8 +118,8 @@ func badSchemaResult(raw string) *harness.Result {
 	}
 }
 
-// assertRetryLog checks that an append-only stage retry log contains the wanted
-// snippets and its terminal outcome line.
+// assertRetryLog checks that an append-only stage retry log carries a run
+// header and contains the wanted snippets and its terminal outcome line.
 func assertRetryLog(t *testing.T, path string, want []string, outcome string) {
 	t.Helper()
 	blob, err := os.ReadFile(path)
@@ -127,6 +127,9 @@ func assertRetryLog(t *testing.T, path string, want []string, outcome string) {
 		t.Fatalf("expected retry log at %s: %v", path, err)
 	}
 	log := string(blob)
+	if !strings.Contains(log, "===== run ") || !strings.Contains(log, " | started ") {
+		t.Fatalf("retry log missing run header:\n%s", log)
+	}
 	for _, snippet := range want {
 		if !strings.Contains(log, snippet) {
 			t.Fatalf("retry log missing %q:\n%s", snippet, log)
@@ -632,23 +635,199 @@ func TestPlanningStagesRetryWithValidationError(t *testing.T) {
 }
 
 // Contract: each newly covered planning stage fails fast on an empty
-// completion instead of burning its retry bound.
+// completion instead of burning its retry bound, and the log still ends with a
+// terminal outcome line.
 func TestPlanningStagesEmptyCompletionFailsFast(t *testing.T) {
 	for _, tc := range newPlanningStageCases() {
 		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
 			h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
 				return &harness.Result{IsError: true, Parsed: nil}, nil
 			}}
 			deps, _ := newDeps(h)
-			_, err := tc.run(deps, t.TempDir())
+			_, err := tc.run(deps, repo)
 			if err == nil || !strings.Contains(err.Error(), tc.role+" harness returned an empty completion") {
 				t.Fatalf("expected empty-completion error naming %s, got %v", tc.role, err)
 			}
 			if h.calls != 1 {
 				t.Fatalf("empty completion must not be retried, got %d calls", h.calls)
 			}
+			log := readRetryLog(t, repo, tc.artifact)
+			if !strings.Contains(log, "outcome: FAILED after attempt 1/2:") {
+				t.Fatalf("empty completion must record a terminal outcome:\n%s", log)
+			}
 		})
 	}
+}
+
+// Contract: a fatal API error arriving on a retry records a terminal outcome
+// before it propagates, so the log never ends on "attempt 1/N failed".
+func TestPlanningStagesFatalOnRetryRecordsOutcome(t *testing.T) {
+	for _, tc := range newPlanningStageCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			h := &fakeHarness{fn: func(call int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+				if call == 1 {
+					return badSchemaResult(tc.badRaw), nil
+				}
+				return &harness.Result{
+					IsError:      true,
+					Parsed:       nil,
+					ErrorMessage: "Credit balance is too low. Add funds.",
+				}, nil
+			}}
+			deps, _ := newDeps(h)
+			_, err := tc.run(deps, repo)
+			if err == nil || !strings.Contains(err.Error(), "Fatal API error") {
+				t.Fatalf("expected fatal harness error, got %v", err)
+			}
+			if h.calls != 2 {
+				t.Fatalf("expected 2 harness calls, got %d", h.calls)
+			}
+			log := readRetryLog(t, repo, tc.artifact)
+			if !strings.Contains(log, "attempt 1/2 failed") {
+				t.Fatalf("failed first attempt not retained:\n%s", log)
+			}
+			lastLine := lastLogLine(log)
+			if !strings.HasPrefix(lastLine, "===== outcome: FAILED after attempt 2/2:") {
+				t.Fatalf("expected terminal outcome as the last line, got %q", lastLine)
+			}
+			if !strings.Contains(strings.ToLower(lastLine), "credit balance is too low") {
+				t.Fatalf("outcome must carry the fatal reason, got %q", lastLine)
+			}
+		})
+	}
+}
+
+// Contract: an empty completion arriving on a retry gets the same terminal
+// outcome treatment as any other early exit.
+func TestPlanningStagesEmptyOnRetryRecordsOutcome(t *testing.T) {
+	for _, tc := range newPlanningStageCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			h := &fakeHarness{fn: func(call int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+				if call == 1 {
+					return badSchemaResult(tc.badRaw), nil
+				}
+				return &harness.Result{IsError: true, Parsed: nil}, nil
+			}}
+			deps, _ := newDeps(h)
+			_, err := tc.run(deps, repo)
+			if err == nil || !strings.Contains(err.Error(), "empty completion") {
+				t.Fatalf("expected empty-completion error, got %v", err)
+			}
+			if h.calls != 2 {
+				t.Fatalf("expected 2 harness calls, got %d", h.calls)
+			}
+			lastLine := lastLogLine(readRetryLog(t, repo, tc.artifact))
+			if !strings.HasPrefix(lastLine, "===== outcome: FAILED after attempt 2/2:") || !strings.Contains(lastLine, "empty completion") {
+				t.Fatalf("expected empty-completion outcome as the last line, got %q", lastLine)
+			}
+		})
+	}
+}
+
+// Contract: a second build against the same repo path appends a new run
+// section whose outcome is the last line, not the first build's FAILED outcome.
+func TestRetryLogSeparatesBuilds(t *testing.T) {
+	repo := t.TempDir()
+	rawPath := filepath.Join(repo, ".artifacts", "plan", "sprint_planner_raw_response.txt")
+
+	first := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		return badSchemaResult(`{"issues": "not-a-list", "rationale": 7}`), nil
+	}}
+	deps1, _ := newDeps(first)
+	if _, err := RunSprintPlanner(context.Background(), deps1, map[string]any{
+		"prd":          map[string]any{"validated_description": "x"},
+		"architecture": map[string]any{"summary": "y"},
+		"repo_path":    repo,
+	}); err == nil {
+		t.Fatalf("expected build 1 to exhaust its bound")
+	}
+
+	second := &fakeHarness{fn: func(_ int, _ string, dest any, _ harness.Options) (*harness.Result, error) {
+		s := dest.(*sprintPlanOutput)
+		s.Rationale = "recovered"
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	deps2, _ := newDeps(second)
+	if _, err := RunSprintPlanner(context.Background(), deps2, map[string]any{
+		"prd":          map[string]any{"validated_description": "x"},
+		"architecture": map[string]any{"summary": "y"},
+		"repo_path":    repo,
+	}); err != nil {
+		t.Fatalf("build 2 should succeed: %v", err)
+	}
+
+	blob, err := os.ReadFile(rawPath)
+	if err != nil {
+		t.Fatalf("expected retry log at %s: %v", rawPath, err)
+	}
+	log := string(blob)
+	if !strings.Contains(log, "outcome: FAILED after 3 attempt(s)") {
+		t.Fatalf("build 1's outcome must be retained:\n%s", log)
+	}
+	if strings.Count(log, "===== run ") != 2 {
+		t.Fatalf("expected one run header per build:\n%s", log)
+	}
+	if lastLine := lastLogLine(log); lastLine != "===== outcome: succeeded on attempt 1/3 =====" {
+		t.Fatalf("expected build 2's outcome as the last line, got %q", lastLine)
+	}
+}
+
+// Contract: run-scoped credentials echoed into a response cannot land in the
+// archived retry log or the raised error.
+func TestScopedCredentialsRedactedFromRetryLog(t *testing.T) {
+	repo := t.TempDir()
+	oldContext := executionContextFrom
+	executionContextFrom = func(context.Context) agent.ExecutionContext {
+		return agent.ExecutionContext{RunID: "run-redact"}
+	}
+	defer func() { executionContextFrom = oldContext }()
+
+	secret := "deploy-token-9f3a2b7c"
+	hitl.StoreScopedCredentials("run-redact", map[string]string{"DEPLOY_TOKEN": secret})
+	defer hitl.ClearScopedCredentials("run-redact")
+
+	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		return badSchemaResult(`{"issues": "` + secret + `", "rationale": 7}`), nil
+	}}
+	deps, _ := newDeps(h)
+	_, err := RunSprintPlanner(context.Background(), deps, map[string]any{"repo_path": repo})
+	if err == nil {
+		t.Fatalf("expected the schema failure to surface")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("secret leaked into the raised error: %v", err)
+	}
+	log := readRetryLog(t, repo, "sprint_planner_raw_response.txt")
+	if strings.Contains(log, secret) {
+		t.Fatalf("secret leaked into the retry log:\n%s", log)
+	}
+	if !strings.Contains(log, "[REDACTED:DEPLOY_TOKEN]") {
+		t.Fatalf("expected the redaction marker in the log:\n%s", log)
+	}
+}
+
+// readRetryLog reads a stage retry log and fails the test when it is missing.
+func readRetryLog(t *testing.T, repo, artifact string) string {
+	t.Helper()
+	blob, err := os.ReadFile(filepath.Join(repo, ".artifacts", "plan", artifact))
+	if err != nil {
+		t.Fatalf("expected retry log for %s: %v", artifact, err)
+	}
+	return string(blob)
+}
+
+// lastLogLine returns the final non-empty line of a retry log.
+func lastLogLine(log string) string {
+	lines := strings.Split(strings.TrimRight(log, "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return lines[i]
+		}
+	}
+	return ""
 }
 
 // --- run_sprint_planner -----------------------------------------------------
