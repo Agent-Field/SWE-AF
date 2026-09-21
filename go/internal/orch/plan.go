@@ -3,6 +3,7 @@ package orch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/dagutil"
+	"github.com/Agent-Field/SWE-AF/go/internal/fatal"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
@@ -129,6 +131,8 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 
 	// 3. Tech Lead review loop (bounded: max_review_iterations + 1 passes).
 	var review map[string]any
+	revisionErr := ""
+	revisionFailed := false
 	for i := 0; i <= in.MaxReviewIterations; i++ {
 		deps.Note(ctx, fmt.Sprintf("Phase 3: Tech Lead review (iteration %d)", i),
 			"pipeline", "tech_lead")
@@ -151,7 +155,7 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		if i < in.MaxReviewIterations {
 			deps.Note(ctx, fmt.Sprintf("Architecture revision %d", i+1),
 				"pipeline", "revision")
-			arch, err = deps.Call(ctx, "run_architect", map[string]any{
+			revised, rerr := deps.Call(ctx, "run_architect", map[string]any{
 				"prd":                prd,
 				"repo_path":          in.RepoPath,
 				"artifacts_dir":      in.ArtifactsDir,
@@ -161,9 +165,24 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 				"ai_provider":        aiProvider,
 				"workspace_manifest": in.WorkspaceManifest,
 			}, "run_architect (revision)")
-			if err != nil {
-				return nil, err
+			if rerr != nil {
+				var fatalErr *fatal.FatalHarnessError
+				if errors.As(rerr, &fatalErr) {
+					return nil, rerr
+				}
+				rawRevisionErr := rerr.Error()
+				revisionErr = truncateRevisionError(rawRevisionErr)
+				revisionFailed = true
+				noteTags := []string{"pipeline", "revision", "degraded"}
+				if fatal.IsTimeoutError(rawRevisionErr) {
+					noteTags = append(noteTags, "timeout")
+				}
+				deps.Note(ctx,
+					"Architecture revision did not complete; keeping the last completed architecture: "+revisionErr,
+					noteTags...)
+				break
 			}
+			arch = revised
 		}
 	}
 
@@ -171,7 +190,16 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	if review == nil {
 		return nil, fmt.Errorf("plan: tech lead review is nil")
 	}
-	if !asBool(review["approved"]) {
+	if revisionFailed {
+		review = map[string]any{
+			"approved":              true,
+			"feedback":              mapGet(review, "feedback", ""),
+			"scope_issues":          any0(review["scope_issues"]),
+			"complexity_assessment": mapStr(review, "complexity_assessment", "appropriate"),
+			"summary": mapStr(review, "summary", "") +
+				" [auto-approved: architecture revision did not complete: " + revisionErr + "]",
+		}
+	} else if !asBool(review["approved"]) {
 		review = map[string]any{
 			"approved":              true,
 			"feedback":              mapGet(review, "feedback", ""),
@@ -304,6 +332,14 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func truncateRevisionError(message string) string {
+	runes := []rune(message)
+	if len(runes) > 500 {
+		return string(runes[:500])
+	}
+	return message
 }
 
 // buildPlanResult coerces the collected reasoner dicts into the typed
