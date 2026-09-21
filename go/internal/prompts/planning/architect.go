@@ -99,6 +99,39 @@ Address these concerns directly.
 `, o.Feedback)
 	}
 
+	mission := fmt.Sprintf(`## Your Mission
+
+Design the technical architecture. Read the codebase deeply first — your design
+should feel like a natural extension of what already exists.
+
+Write your architecture document to: %s
+
+The bar: this document is the single source of truth. Every interface you define
+will be copied verbatim into code. Every type signature becomes a real type. Every
+component boundary becomes a real module. Two engineers working independently from
+this document should produce code that integrates on the first try.
+`, o.ArchitecturePath)
+	if o.Feedback != "" {
+		mission = fmt.Sprintf(`## Your Mission
+
+The architecture document already exists at: %s. Read it first,
+then revise it to address every finding in the review above.
+Keep everything the review did not challenge. Do not redesign the architecture
+from scratch.
+
+Re-read only the parts of the codebase the findings actually touch. The first
+pass already studied it.
+
+Write the revised architecture document back to: %s
+
+The bar remains the same: this document is the single source of truth. Every
+interface you define will be copied verbatim into code. Every type signature
+becomes a real type. Every component boundary becomes a real module. Two engineers
+working independently from this document should produce code that integrates on
+the first try.
+`, o.ArchitecturePath, o.ArchitecturePath)
+	}
+
 	task = fmt.Sprintf(`## Product Requirements
 %s
 
@@ -116,18 +149,7 @@ Address these concerns directly.
 
 The full PRD is at: %s
 %s
-## Your Mission
-
-Design the technical architecture. Read the codebase deeply first — your design
-should feel like a natural extension of what already exists.
-
-Write your architecture document to: %s
-
-The bar: this document is the single source of truth. Every interface you define
-will be copied verbatim into code. Every type signature becomes a real type. Every
-component boundary becomes a real module. Two engineers working independently from
-this document should produce code that integrates on the first try.
-`, o.PRD.ValidatedDescription, acFormatted, mustHave, outOfScope, o.RepoPath, o.PRDPath, feedbackBlock, o.ArchitecturePath)
+%s`, o.PRD.ValidatedDescription, acFormatted, mustHave, outOfScope, o.RepoPath, o.PRDPath, feedbackBlock, mission)
 	return ArchitectSystemPrompt, task
 }
 

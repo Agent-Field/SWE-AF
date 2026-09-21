@@ -39,6 +39,16 @@ except ImportError:  # pragma: no cover - exercised only on older agentfield SDK
             self.result = result
             self.error_details = error_details
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
+from swe_af.execution.fatal_error import FatalHarnessError
+
+try:
+    from agentfield.exceptions import ExecutionCancelledError
+except ImportError:  # pragma: no cover - older agentfield SDK
+    class ExecutionCancelledError(Exception):  # type: ignore[no-redef]
+        pass
+
+# asyncio.CancelledError derives from BaseException, so the degradation
+# handlers' ``except Exception`` clauses already let task cancellation escape.
 from swe_af.execution.schemas import (
     BuildConfig,
     BuildResult,
@@ -95,6 +105,77 @@ async def _harness_with_scoped_credentials(*args, env=None, **kwargs):
 
 
 app.harness = _harness_with_scoped_credentials
+
+
+def _architecture_artifact_path(repo_path: str, artifacts_dir: str) -> str:
+    """Return the single architecture artifact path used by all plan stages."""
+    return os.path.join(
+        os.path.abspath(repo_path), artifacts_dir, "plan", "architecture.md"
+    )
+
+
+def _note_architecture_revision_degradation(message: str) -> None:
+    """Emit a best-effort revision note without affecting degradation."""
+    try:
+        app.note(message, tags=["pipeline", "revision", "degraded"])
+    except Exception:
+        pass
+
+
+def _snapshot_architecture_before_revision(
+    architecture_path: str,
+) -> tuple[bool, bytes] | None:
+    """Best-effort snapshot of architecture.md immediately before a revision."""
+    try:
+        with open(architecture_path, "rb") as architecture_file:
+            return True, architecture_file.read()
+    except FileNotFoundError:
+        return False, b""
+    except Exception as exc:
+        _note_architecture_revision_degradation(
+            "Could not snapshot plan/architecture.md before revision: "
+            f"{str(exc)[:500]}"
+        )
+        return None
+
+
+def _restore_architecture_after_failed_revision(
+    architecture_path: str,
+    snapshot: tuple[bool, bytes] | None,
+) -> None:
+    """Best-effort restore of architecture.md after a non-fatal revision error."""
+    if snapshot is None:
+        return
+
+    existed, previous_bytes = snapshot
+    try:
+        restored = False
+        if existed:
+            try:
+                with open(architecture_path, "rb") as architecture_file:
+                    current_bytes = architecture_file.read()
+            except FileNotFoundError:
+                current_bytes = None
+            if current_bytes != previous_bytes:
+                with open(architecture_path, "wb") as architecture_file:
+                    architecture_file.write(previous_bytes)
+                restored = True
+        else:
+            try:
+                os.remove(architecture_path)
+                restored = True
+            except FileNotFoundError:
+                pass
+
+        if restored:
+            _note_architecture_revision_degradation(
+                "Restored plan/architecture.md to the last completed revision"
+            )
+    except Exception as exc:
+        _note_architecture_revision_degradation(
+            "Could not restore plan/architecture.md after failed revision: "
+            f"{str(exc)[:500]}"
+        )
 
 
 async def _clone_repos(
@@ -751,6 +832,7 @@ async def build(
 
         # Unwrap plan result (should have been set on first attempt)
         plan_result = _unwrap(raw_plan, "plan")
+        architecture_path = _architecture_artifact_path(repo_path, artifacts_dir)
 
         git_config = None
         if git_init.get("success"):
@@ -902,47 +984,107 @@ async def build(
 
                     # Re-plan with the reviewer feedback. Skip PM (PRD/scope is fixed)
                     # and re-run Architect → Tech Lead loop → Sprint Planner.
-                    arch = _unwrap(await app.call(
-                        f"{NODE_ID}.run_architect",
-                        prd=plan_result.get("prd", {}),
-                        repo_path=repo_path,
-                        artifacts_dir=artifacts_dir,
-                        feedback=approval_result.feedback,
-                        model=resolved["architect_model"],
-                        permission_mode=cfg.permission_mode,
-                        ai_provider=cfg.ai_provider,
-                        workspace_manifest=manifest.model_dump() if manifest else None,
-                    ), "run_architect (human revision)")
-
-                    review = None
-                    for tl_iter in range(cfg.max_review_iterations + 1):
-                        review = _unwrap(await app.call(
-                            f"{NODE_ID}.run_tech_lead",
+                    arch = plan_result.get("architecture", {})
+                    review = plan_result.get("review")
+                    revision_error: str | None = None
+                    architecture_snapshot = _snapshot_architecture_before_revision(
+                        architecture_path
+                    )
+                    try:
+                        revised_arch = _unwrap(await app.call(
+                            f"{NODE_ID}.run_architect",
                             prd=plan_result.get("prd", {}),
                             repo_path=repo_path,
                             artifacts_dir=artifacts_dir,
-                            revision_number=tl_iter,
-                            model=resolved["tech_lead_model"],
+                            feedback=approval_result.feedback,
+                            model=resolved["architect_model"],
                             permission_mode=cfg.permission_mode,
                             ai_provider=cfg.ai_provider,
                             workspace_manifest=manifest.model_dump() if manifest else None,
-                        ), "run_tech_lead")
-                        if review["approved"]:
-                            break
-                        if tl_iter < cfg.max_review_iterations:
-                            arch = _unwrap(await app.call(
-                                f"{NODE_ID}.run_architect",
+                        ), "run_architect (human revision)")
+                    except (FatalHarnessError, ExecutionCancelledError):
+                        raise
+                    except Exception as exc:
+                        _restore_architecture_after_failed_revision(
+                            architecture_path, architecture_snapshot
+                        )
+                        revision_error = str(exc)[:500]
+                        app.note(
+                            "Architecture revision did not complete; keeping the "
+                            f"last completed architecture: {revision_error}",
+                            tags=["pipeline", "revision", "degraded"],
+                        )
+                    else:
+                        arch = revised_arch
+                        review = None
+
+                    if revision_error is None:
+                        for tl_iter in range(cfg.max_review_iterations + 1):
+                            review = _unwrap(await app.call(
+                                f"{NODE_ID}.run_tech_lead",
                                 prd=plan_result.get("prd", {}),
                                 repo_path=repo_path,
                                 artifacts_dir=artifacts_dir,
-                                feedback=review["feedback"],
-                                model=resolved["architect_model"],
+                                revision_number=tl_iter,
+                                model=resolved["tech_lead_model"],
                                 permission_mode=cfg.permission_mode,
                                 ai_provider=cfg.ai_provider,
                                 workspace_manifest=manifest.model_dump() if manifest else None,
-                            ), "run_architect (tech lead revision)")
+                            ), "run_tech_lead")
+                            if review["approved"]:
+                                break
+                            if tl_iter < cfg.max_review_iterations:
+                                architecture_snapshot = (
+                                    _snapshot_architecture_before_revision(
+                                        architecture_path
+                                    )
+                                )
+                                try:
+                                    revised_arch = _unwrap(await app.call(
+                                        f"{NODE_ID}.run_architect",
+                                        prd=plan_result.get("prd", {}),
+                                        repo_path=repo_path,
+                                        artifacts_dir=artifacts_dir,
+                                        feedback=review["feedback"],
+                                        model=resolved["architect_model"],
+                                        permission_mode=cfg.permission_mode,
+                                        ai_provider=cfg.ai_provider,
+                                        workspace_manifest=manifest.model_dump() if manifest else None,
+                                    ), "run_architect (tech lead revision)")
+                                except (FatalHarnessError, ExecutionCancelledError):
+                                    raise
+                                except Exception as exc:
+                                    _restore_architecture_after_failed_revision(
+                                        architecture_path, architecture_snapshot
+                                    )
+                                    revision_error = str(exc)[:500]
+                                    app.note(
+                                        "Architecture revision did not complete; keeping the "
+                                        f"last completed architecture: {revision_error}",
+                                        tags=["pipeline", "revision", "degraded"],
+                                    )
+                                    break
+                                else:
+                                    arch = revised_arch
 
-                    if review and not review["approved"]:
+                    if revision_error is not None:
+                        # The human asked for changes and the architect could not
+                        # deliver them. Keep the last completed architecture and
+                        # say so in the review, then put the plan back in front of
+                        # the reviewer (below) rather than building past their gate.
+                        review = review or {}
+                        review = ReviewResult(
+                            approved=True,
+                            feedback=review.get("feedback", ""),
+                            scope_issues=review.get("scope_issues", []),
+                            complexity_assessment=review.get("complexity_assessment", "appropriate"),
+                            summary=(
+                                review.get("summary", "")
+                                + " [auto-approved: architecture revision did not "
+                                f"complete: {revision_error}]"
+                            ),
+                        ).model_dump()
+                    elif review and not review["approved"]:
                         review = ReviewResult(
                             approved=True,
                             feedback=review["feedback"],
@@ -970,6 +1112,17 @@ async def build(
                         "issues": sprint_result["issues"],
                         "rationale": sprint_result["rationale"],
                     }
+                    if revision_error is not None:
+                        # Carry the reason into the next approval request so the
+                        # reviewer can see why the plan came back unchanged.
+                        if revision_history:
+                            revision_history[-1]["revision_error"] = revision_error
+                        app.note(
+                            "Architecture revision did not complete — re-submitting "
+                            "the last completed plan for review rather than building "
+                            "past the approval gate",
+                            tags=["build", "approval", "revision", "degraded"],
+                        )
                     continue
 
                 # Terminal: rejected, expired, or error
@@ -1473,6 +1626,9 @@ async def plan(
     sprint_planner_model = sprint_planner_model or default_model
     issue_writer_model = issue_writer_model or default_model
 
+    base = os.path.join(os.path.abspath(repo_path), artifacts_dir)
+    architecture_path = _architecture_artifact_path(repo_path, artifacts_dir)
+
     app.note("Pipeline starting", tags=["pipeline", "start"])
 
     # 1. PM scopes the goal into a PRD
@@ -1523,6 +1679,7 @@ async def plan(
 
     # 3. Tech Lead review loop
     review = None
+    revision_error: str | None = None
     for i in range(max_review_iterations + 1):
         app.note(f"Phase 3: Tech Lead review (iteration {i})", tags=["pipeline", "tech_lead"])
         review = _unwrap(await app.call(
@@ -1540,21 +1697,52 @@ async def plan(
             break
         if i < max_review_iterations:
             app.note(f"Architecture revision {i + 1}", tags=["pipeline", "revision"])
-            arch = _unwrap(await app.call(
-                f"{NODE_ID}.run_architect",
-                prd=prd,
-                repo_path=repo_path,
-                artifacts_dir=artifacts_dir,
-                feedback=review["feedback"],
-                model=architect_model,
-                permission_mode=permission_mode,
-                ai_provider=ai_provider,
-                workspace_manifest=workspace_manifest,
-            ), "run_architect (revision)")
+            architecture_snapshot = _snapshot_architecture_before_revision(
+                architecture_path
+            )
+            try:
+                revised_arch = _unwrap(await app.call(
+                    f"{NODE_ID}.run_architect",
+                    prd=prd,
+                    repo_path=repo_path,
+                    artifacts_dir=artifacts_dir,
+                    feedback=review["feedback"],
+                    model=architect_model,
+                    permission_mode=permission_mode,
+                    ai_provider=ai_provider,
+                    workspace_manifest=workspace_manifest,
+                ), "run_architect (revision)")
+            except (FatalHarnessError, ExecutionCancelledError):
+                raise
+            except Exception as exc:
+                _restore_architecture_after_failed_revision(
+                    architecture_path, architecture_snapshot
+                )
+                revision_error = str(exc)[:500]
+                app.note(
+                    "Architecture revision did not complete; keeping the last "
+                    f"completed architecture: {revision_error}",
+                    tags=["pipeline", "revision", "degraded"],
+                )
+                break
+            else:
+                arch = revised_arch
 
     # Force-approve if we exhausted iterations
     assert review is not None
-    if not review["approved"]:
+    if revision_error is not None:
+        review = ReviewResult(
+            approved=True,
+            feedback=review["feedback"],
+            scope_issues=review.get("scope_issues", []),
+            complexity_assessment=review.get("complexity_assessment", "appropriate"),
+            summary=(
+                review["summary"]
+                + " [auto-approved: architecture revision did not complete: "
+                f"{revision_error}]"
+            ),
+        ).model_dump()
+    elif not review["approved"]:
         review = ReviewResult(
             approved=True,
             feedback=review["feedback"],
@@ -1585,10 +1773,8 @@ async def plan(
     file_conflicts = _validate_file_conflicts(issues, levels)
 
     # 4b. Parallel issue writing (issues now have sequence_number set)
-    base = os.path.join(os.path.abspath(repo_path), artifacts_dir)
     issues_dir = os.path.join(base, "plan", "issues")
     prd_path = os.path.join(base, "plan", "prd.md")
-    architecture_path = os.path.join(base, "plan", "architecture.md")
     os.makedirs(issues_dir, exist_ok=True)
 
     prd_summary_str = prd.get("validated_description", "")

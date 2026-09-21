@@ -14,6 +14,7 @@ package fatal
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 )
@@ -42,6 +43,19 @@ var fatalPatterns = compilePatterns(
 	`requires a newer version of codex`,
 )
 
+// timeoutPatterns mirrors _TIMEOUT_PATTERNS in fatal_error.py. They are only
+// used for empty harness results and match actual timeout events rather than
+// configuration errors that merely mention the word "timeout".
+var timeoutPatterns = compilePatterns(
+	`cli command timed out after`,
+	`cli command made no progress for`,
+	`timed out`,
+	`made no progress for`,
+	`timeout exceeded`,
+	`timeout after`,
+	`deadline exceeded`,
+)
+
 // compilePatterns compiles each pattern once with the case-insensitive flag.
 func compilePatterns(patterns ...string) []*regexp.Regexp {
 	compiled := make([]*regexp.Regexp, len(patterns))
@@ -63,6 +77,33 @@ type FatalHarnessError struct {
 	OriginalMessage string
 }
 
+// HarnessTimeoutError reports that a role exhausted its overall or idle
+// harness time budget before producing output.
+type HarnessTimeoutError struct {
+	Role            string
+	Provider        string
+	Model           string
+	OriginalMessage string
+}
+
+// Error returns the same message as Python's HarnessTimeoutError.
+func (e *HarnessTimeoutError) Error() string {
+	message := fmt.Sprintf(
+		"%s harness timed out (provider=%s, model=%s) — the stage exceeded its harness time budget and was killed before writing any output",
+		e.Role, e.Provider, e.Model,
+	)
+	if detail := e.OriginalMessage; detail != "" {
+		// Provider messages usually already end in a period; drop that one so
+		// the sentence that follows does not read as "..". An ellipsis is left
+		// alone.
+		if strings.HasSuffix(detail, ".") && !strings.HasSuffix(detail, "..") {
+			detail = detail[:len(detail)-1]
+		}
+		message += ": " + detail
+	}
+	return message + ". Raise AGENTFIELD_HARNESS_TIMEOUT_SECONDS / AGENTFIELD_HARNESS_IDLE_SECONDS, or reduce the stage's scope."
+}
+
 // Error returns the wrapped message, byte-identical to the Python exception's
 // str() form.
 func (e *FatalHarnessError) Error() string {
@@ -77,6 +118,20 @@ func IsFatalError(errorMessage string) bool {
 	}
 	for _, p := range fatalPatterns {
 		if p.MatchString(errorMessage) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTimeoutError reports whether msg matches a harness timeout or idle-kill
+// message. An empty string is never a timeout.
+func IsTimeoutError(msg string) bool {
+	if msg == "" {
+		return false
+	}
+	for _, p := range timeoutPatterns {
+		if p.MatchString(msg) {
 			return true
 		}
 	}
@@ -100,4 +155,25 @@ func CheckFatalHarnessError(result *harness.Result) error {
 		return &FatalHarnessError{OriginalMessage: msg}
 	}
 	return nil
+}
+
+// CheckHarnessTimeout returns a typed timeout error for an empty harness
+// result carrying either failure_type=timeout or recognized timeout wording.
+// Parsed output, raw text, and schema failures remain the caller's concern.
+func CheckHarnessTimeout(result *harness.Result, role, provider, model string) error {
+	if result == nil || result.Parsed != nil || strings.TrimSpace(result.Result) != "" {
+		return nil
+	}
+	if result.FailureType == harness.FailureSchema {
+		return nil
+	}
+	if result.FailureType != harness.FailureTimeout && !IsTimeoutError(result.ErrorMessage) {
+		return nil
+	}
+	return &HarnessTimeoutError{
+		Role:            role,
+		Provider:        provider,
+		Model:           model,
+		OriginalMessage: strings.TrimSpace(result.ErrorMessage),
+	}
 }
