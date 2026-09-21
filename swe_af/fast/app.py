@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
+import subprocess
 
 from dotenv import load_dotenv
 
@@ -62,6 +64,162 @@ def _runtime_to_provider(runtime: str) -> str:
     return "opencode"
 
 
+_CREDENTIAL_URL_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
+
+
+def _redact_credentials(text: str, repo_url: str) -> str:
+    """Remove URL userinfo from text without changing the URL passed to git."""
+    safe_url = _CREDENTIAL_URL_RE.sub(r"\1***@", repo_url)
+    redacted = text.replace(repo_url, safe_url) if repo_url else text
+
+    # Git normally repeats the full URL in diagnostics. Also redact a password
+    # if a transport happens to report that component separately.
+    userinfo = _CREDENTIAL_URL_RE.search(repo_url)
+    if userinfo:
+        raw_userinfo = repo_url[len(userinfo.group(1)) : repo_url.find("@")]
+        if ":" in raw_userinfo:
+            password = raw_userinfo.split(":", 1)[1]
+            if password:
+                redacted = redacted.replace(password, "***")
+    return _CREDENTIAL_URL_RE.sub(r"\1***@", redacted)
+
+
+def _normalized_remote(url: str) -> str:
+    """Normalize only the suffixes the repository-preparation contract allows."""
+    return url.rstrip("/").removesuffix(".git")
+
+
+def _clone_repo(repo_url: str, repo_path: str, *, reclone: bool = False) -> None:
+    os.makedirs(os.path.dirname(repo_path) or ".", exist_ok=True)
+    clone_result = subprocess.run(
+        ["git", "clone", repo_url, repo_path],
+        capture_output=True,
+        text=True,
+    )
+    if clone_result.returncode == 0:
+        return
+
+    err = _redact_credentials(clone_result.stderr.strip(), repo_url)
+    if reclone:
+        raise RuntimeError(f"git re-clone failed: {err}")
+    app.note(
+        f"Clone failed (exit {clone_result.returncode}): {err}",
+        tags=["fast_build", "clone", "error"],
+    )
+    raise RuntimeError(f"git clone failed (exit {clone_result.returncode}): {err}")
+
+
+def _prepare_repo(
+    repo_url: str,
+    repo_path: str,
+    default_branch: str,
+    path_was_derived: bool,
+) -> None:
+    """Clone or reset a remote repository, or create a local-only workspace."""
+    git_dir = os.path.join(repo_path, ".git")
+    if repo_url and not os.path.exists(git_dir):
+        # Leftovers the node itself made — a workspace from a build that died
+        # before git init, or from before this node cloned at all — would make
+        # `git clone` refuse a non-empty destination. Derived paths are ours to
+        # clear; a path the caller chose is not (the clone then fails loudly).
+        if path_was_derived and os.path.isdir(repo_path) and os.listdir(repo_path):
+            app.note(
+                f"Clearing stale workspace at {repo_path} (no git repo) before cloning",
+                tags=["fast_build", "clone", "reclone"],
+            )
+            shutil.rmtree(repo_path, ignore_errors=True)
+        app.note(
+            f"Cloning {_redact_credentials(repo_url, repo_url)} → {repo_path}",
+            tags=["fast_build", "clone"],
+        )
+        # Create only the parent; git clone creates the leaf itself.
+        # Pre-creating the leaf makes git refuse it as "already exists and is
+        # not an empty directory" on Windows (issue #107).
+        _clone_repo(repo_url, repo_path)
+    elif repo_url and os.path.exists(git_dir):
+        # A caller-supplied checkout may deliberately be a fork, have local-only
+        # branches, or contain untracked work. Repository preparation must not
+        # mutate it; the build pipeline receives it exactly as supplied.
+        if not path_was_derived:
+            return
+
+        origin = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        same_remote = origin.returncode == 0 and _normalized_remote(
+            origin.stdout.strip()
+        ) == _normalized_remote(repo_url)
+        if not same_remote:
+            # Derived paths are keyed on the repo name alone, so two repos with
+            # the same name (different orgs) land here. Never build on the other
+            # repo's clone — it would edit and open a PR against the wrong one.
+            app.note(
+                f"Workspace at {repo_path} is a clone of a different remote — "
+                f"re-cloning",
+                tags=["fast_build", "clone", "reclone"],
+            )
+            shutil.rmtree(repo_path, ignore_errors=True)
+            _clone_repo(repo_url, repo_path, reclone=True)
+            return
+
+        app.note(
+            f"Repo already exists at {repo_path} — resetting to "
+            f"origin/{default_branch}",
+            tags=["fast_build", "clone", "reset"],
+        )
+
+        # Remove stale worktrees on disk before touching branches.
+        worktrees_dir = os.path.join(repo_path, ".worktrees")
+        if os.path.isdir(worktrees_dir):
+            shutil.rmtree(worktrees_dir, ignore_errors=True)
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+
+        # Fetch latest remote state. A fetch failure is noted but reset decides
+        # whether the existing clone can still provide a valid baseline.
+        fetch = subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        if fetch.returncode != 0:
+            app.note(
+                f"git fetch failed: "
+                f"{_redact_credentials(fetch.stderr.strip(), repo_url)}",
+                tags=["fast_build", "clone", "error"],
+            )
+
+        subprocess.run(
+            ["git", "checkout", "-f", default_branch],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        reset = subprocess.run(
+            ["git", "reset", "--hard", f"origin/{default_branch}"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        if reset.returncode != 0:
+            app.note(
+                f"Reset to origin/{default_branch} failed — re-cloning",
+                tags=["fast_build", "clone", "reclone"],
+            )
+            shutil.rmtree(repo_path, ignore_errors=True)
+            _clone_repo(repo_url, repo_path, reclone=True)
+    else:
+        os.makedirs(repo_path, exist_ok=True)
+
+
 @app.reasoner(
     tags=[TAG_ENTRYPOINT],
     description=(
@@ -91,6 +249,7 @@ async def build(
     effective_repo_url = repo_url or cfg.repo_url
 
     # Auto-derive repo_path from repo_url when not specified
+    path_was_derived = not repo_path
     if effective_repo_url and not repo_path:
         repo_path = os.path.join(
             _workspace_root(), _repo_name_from_url(effective_repo_url)
@@ -98,7 +257,13 @@ async def build(
     if not repo_path:
         raise ValueError("Either repo_path or repo_url must be provided")
 
-    os.makedirs(repo_path, exist_ok=True)
+    await asyncio.to_thread(
+        _prepare_repo,
+        effective_repo_url,
+        repo_path,
+        cfg.github_pr_base or "main",
+        path_was_derived,
+    )
 
     resolved = fast_resolve_models(cfg)
     ai_provider = _runtime_to_provider(cfg.runtime)
