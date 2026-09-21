@@ -116,14 +116,22 @@ func TestIsTimeoutError(t *testing.T) {
 	cases := []string{
 		"CLI command timed out after 5400s: opencode run ...",
 		"CLI command made no progress for 300.0s: opencode run ...",
-		"request timeout while waiting for CLI",
+		"request timed out while waiting for CLI",
+		"request timeout exceeded while waiting for CLI",
+		"request timeout after 30 seconds",
+		"request deadline exceeded",
 	}
 	for _, msg := range cases {
 		if !IsTimeoutError(msg) {
 			t.Errorf("IsTimeoutError(%q) = false, want true", msg)
 		}
 	}
-	for _, msg := range []string{"", "temporary network failure"} {
+	for _, msg := range []string{
+		"",
+		"temporary network failure",
+		"invalid timeout value",
+		"timeout must be a positive integer",
+	} {
 		if IsTimeoutError(msg) {
 			t.Errorf("IsTimeoutError(%q) = true, want false", msg)
 		}
@@ -175,6 +183,20 @@ func TestCheckHarnessTimeout(t *testing.T) {
 				IsError: true, ErrorMessage: "CLI command timed out after 5s",
 			},
 			wantErr: true,
+		},
+		{
+			name: "ambiguous text with timeout token",
+			result: &harness.Result{
+				IsError: true, FailureType: harness.FailureTimeout,
+				ErrorMessage: "invalid timeout value",
+			},
+			wantErr: true,
+		},
+		{
+			name: "ambiguous text without timeout token",
+			result: &harness.Result{
+				IsError: true, ErrorMessage: "invalid timeout value",
+			},
 		},
 		{
 			name: "raw text defers to schema path",

@@ -44,14 +44,16 @@ var fatalPatterns = compilePatterns(
 )
 
 // timeoutPatterns mirrors _TIMEOUT_PATTERNS in fatal_error.py. They are only
-// used for empty harness results, so provider messages that contain "timeout"
-// are intentionally classified as timeouts on this path.
+// used for empty harness results and match actual timeout events rather than
+// configuration errors that merely mention the word "timeout".
 var timeoutPatterns = compilePatterns(
 	`cli command timed out after`,
 	`cli command made no progress for`,
-	`timed out after \d`,
+	`timed out`,
 	`made no progress for`,
-	`\btimeout\b`,
+	`timeout exceeded`,
+	`timeout after`,
+	`deadline exceeded`,
 )
 
 // compilePatterns compiles each pattern once with the case-insensitive flag.

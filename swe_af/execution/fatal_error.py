@@ -51,9 +51,11 @@ _TIMEOUT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     for p in (
         r"cli command timed out after",
         r"cli command made no progress for",
-        r"timed out after \d",
+        r"timed out",
         r"made no progress for",
-        r"\btimeout\b",
+        r"timeout exceeded",
+        r"timeout after",
+        r"deadline exceeded",
     )
 )
 

@@ -246,11 +246,41 @@ class TestCheckEmptyHarnessCompletionTimeout:
         [
             "CLI command timed out after 5s",
             "CLI command made no progress for 300.0s",
-            "request timeout while waiting for CLI",
+            "request timed out while waiting for CLI",
+            "request timeout exceeded while waiting for CLI",
+            "request timeout after 30 seconds",
+            "request deadline exceeded",
         ],
     )
     def test_timeout_text_patterns(self, message: str) -> None:
         assert is_timeout_error(message)
+
+    @pytest.mark.parametrize(
+        "message",
+        ["", "invalid timeout value", "timeout must be a positive integer"],
+    )
+    def test_non_event_timeout_text_does_not_match(self, message: str) -> None:
+        assert not is_timeout_error(message)
+
+    def test_failure_type_remains_primary_for_ambiguous_timeout_text(self) -> None:
+        result = FakeResult(
+            is_error=True,
+            error_message="invalid timeout value",
+            failure_type="timeout",
+        )
+
+        with pytest.raises(HarnessTimeoutError):
+            check_empty_harness_completion(
+                result, role="Architect", provider="opencode", model="model-x"
+            )
+
+    def test_invalid_timeout_value_without_failure_type_is_empty_completion(self) -> None:
+        result = FakeResult(is_error=True, error_message="invalid timeout value")
+
+        with pytest.raises(EmptyHarnessCompletionError):
+            check_empty_harness_completion(
+                result, role="Architect", provider="opencode", model="model-x"
+            )
 
     def test_empty_timeout_text_does_not_match(self) -> None:
         assert not is_timeout_error("")
