@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from agentfield.client import ApprovalResult
+from agentfield.exceptions import ExecutionCancelledError
+from agentfield.harness import HarnessResult
+from agentfield.harness._result import FailureType
 
 from swe_af.execution.fatal_error import (
     FatalHarnessError,
@@ -165,6 +168,141 @@ async def test_fatal_revision_failure_still_aborts(mock_agent_ai, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cancelled_plan_revision_aborts(mock_agent_ai, tmp_path):
+    """VC-R3: explicit user cancellation never becomes a degraded plan."""
+    calls: list[str] = []
+    cancelled = ExecutionCancelledError("cancelled by user")
+    mock_agent_ai.side_effect = _plan_side_effect(
+        revision_response=cancelled,
+        calls=calls,
+    )
+
+    with pytest.raises(ExecutionCancelledError, match="cancelled by user"):
+        await _call_plan(str(tmp_path), max_review_iterations=1)
+
+    assert "run_sprint_planner" not in calls
+
+
+@pytest.mark.asyncio
+async def test_failed_plan_revision_restores_architecture_file(
+    mock_agent_ai, tmp_path
+):
+    """VC-R1a: a partial revision cannot leak into downstream artifacts."""
+    architecture_path = tmp_path / ".artifacts" / "plan" / "architecture.md"
+    original_bytes = b"# Complete architecture\n\xff\x00"
+    damaged_bytes = b"# Half-written revision\n"
+    calls: list[str] = []
+
+    async def fake_call(target: str, **kwargs):
+        name = target.rsplit(".", 1)[-1]
+        calls.append(name)
+        if name == "run_product_manager":
+            return _make_prd_dict()
+        if name == "run_architect":
+            architecture_path.parent.mkdir(parents=True, exist_ok=True)
+            if kwargs.get("feedback"):
+                architecture_path.write_bytes(damaged_bytes)
+                return _failed_envelope("architect subprocess crashed")
+            architecture_path.write_bytes(original_bytes)
+            return _make_architecture_dict()
+        if name == "run_tech_lead":
+            return _make_review_rejected_dict()
+        if name == "run_sprint_planner":
+            assert architecture_path.read_bytes() == original_bytes
+            return _make_sprint_result_dict()
+        if name == "run_issue_writer":
+            return _make_issue_writer_result_dict()
+        raise AssertionError(f"unexpected call: {name}")
+
+    mock_agent_ai.side_effect = fake_call
+    result = await _call_plan(str(tmp_path), max_review_iterations=1)
+
+    assert architecture_path.read_bytes() == original_bytes
+    assert result["architecture"] == _make_architecture_dict()
+    assert "run_sprint_planner" in calls
+
+
+@pytest.mark.asyncio
+async def test_successful_plan_revision_keeps_new_architecture_file(
+    mock_agent_ai, tmp_path
+):
+    """VC-R1b: a successful revision is never rolled back."""
+    architecture_path = tmp_path / ".artifacts" / "plan" / "architecture.md"
+    original_bytes = b"# Original architecture\n"
+    revised_bytes = b"# Revised architecture\n"
+    revised_architecture = {**_make_architecture_dict(), "summary": "Revised."}
+    tech_lead_calls = 0
+
+    async def fake_call(target: str, **kwargs):
+        nonlocal tech_lead_calls
+        name = target.rsplit(".", 1)[-1]
+        if name == "run_product_manager":
+            return _make_prd_dict()
+        if name == "run_architect":
+            architecture_path.parent.mkdir(parents=True, exist_ok=True)
+            if kwargs.get("feedback"):
+                architecture_path.write_bytes(revised_bytes)
+                return revised_architecture
+            architecture_path.write_bytes(original_bytes)
+            return _make_architecture_dict()
+        if name == "run_tech_lead":
+            tech_lead_calls += 1
+            return (
+                _make_review_rejected_dict()
+                if tech_lead_calls == 1
+                else _make_review_approved_dict()
+            )
+        if name == "run_sprint_planner":
+            return _make_sprint_result_dict()
+        if name == "run_issue_writer":
+            return _make_issue_writer_result_dict()
+        raise AssertionError(f"unexpected call: {name}")
+
+    mock_agent_ai.side_effect = fake_call
+    result = await _call_plan(str(tmp_path), max_review_iterations=1)
+
+    assert architecture_path.read_bytes() == revised_bytes
+    assert result["architecture"] == revised_architecture
+
+
+@pytest.mark.asyncio
+async def test_plan_restore_failure_does_not_mask_revision_failure(
+    mock_agent_ai, tmp_path
+):
+    """VC-R1c: a restore error does not stop degraded planning."""
+    architecture_path = tmp_path / ".artifacts" / "plan" / "architecture.md"
+
+    async def fake_call(target: str, **kwargs):
+        name = target.rsplit(".", 1)[-1]
+        if name == "run_product_manager":
+            return _make_prd_dict()
+        if name == "run_architect":
+            architecture_path.parent.mkdir(parents=True, exist_ok=True)
+            if kwargs.get("feedback"):
+                architecture_path.write_bytes(b"damaged")
+                architecture_path.chmod(0o444)
+                return _failed_envelope("architect subprocess crashed")
+            architecture_path.write_bytes(b"complete")
+            return _make_architecture_dict()
+        if name == "run_tech_lead":
+            return _make_review_rejected_dict()
+        if name == "run_sprint_planner":
+            return _make_sprint_result_dict()
+        if name == "run_issue_writer":
+            return _make_issue_writer_result_dict()
+        raise AssertionError(f"unexpected call: {name}")
+
+    mock_agent_ai.side_effect = fake_call
+    try:
+        result = await _call_plan(str(tmp_path), max_review_iterations=1)
+    finally:
+        if architecture_path.exists():
+            architecture_path.chmod(0o644)
+
+    assert result["architecture"] == _make_architecture_dict()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("first_pass_message", [TIMEOUT_MESSAGE, EMPTY_MESSAGE])
 async def test_first_pass_architect_failure_still_aborts(
     mock_agent_ai, tmp_path, first_pass_message
@@ -182,6 +320,51 @@ async def test_first_pass_architect_failure_still_aborts(
     if first_pass_message == TIMEOUT_MESSAGE:
         assert "AGENTFIELD_HARNESS_TIMEOUT_SECONDS" in str(exc_info.value)
         assert "AGENTFIELD_HARNESS_IDLE_SECONDS" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_run_architect_real_harness_timeout_result_is_actionable(tmp_path):
+    """VC-R5: the reasoner and real SDK timeout result meet end to end."""
+    import swe_af.reasoners.pipeline as pipeline
+
+    timeout_result = HarnessResult(
+        result=None,
+        parsed=None,
+        is_error=True,
+        failure_type=FailureType.TIMEOUT,
+        error_message=TIMEOUT_TEXT,
+    )
+    run_architect = getattr(
+        pipeline.run_architect,
+        "_original_func",
+        pipeline.run_architect,
+    )
+
+    with (
+        patch.object(
+            pipeline.router,
+            "harness",
+            AsyncMock(return_value=timeout_result),
+        ),
+        patch.object(pipeline.router, "note"),
+        pytest.raises(HarnessTimeoutError) as exc_info,
+    ):
+        await run_architect(
+            prd=_make_prd_dict(),
+            repo_path=str(tmp_path),
+            model="openrouter/example-model",
+            ai_provider="open_code",
+        )
+
+    message = str(exc_info.value)
+    for expected in (
+        "Architect",
+        "opencode",
+        "openrouter/example-model",
+        "AGENTFIELD_HARNESS_TIMEOUT_SECONDS",
+        "AGENTFIELD_HARNESS_IDLE_SECONDS",
+    ):
+        assert expected in message
 
 
 def _build_plan_result(tmp_path: Path) -> dict[str, Any]:
@@ -204,6 +387,7 @@ async def _call_build_with_revision_failure(
     *,
     failure_at: str,
     fatal: bool,
+    cancelled: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     import swe_af.app as app_module
 
@@ -211,6 +395,15 @@ async def _call_build_with_revision_failure(
     revised_arch = {**_make_architecture_dict(), "summary": "Human revision."}
     captured: dict[str, Any] = {"calls": []}
     failure_message = "Credit balance is too low" if fatal else TIMEOUT_MESSAGE
+    architecture_path = tmp_path / ".artifacts" / "plan" / "architecture.md"
+    original_bytes = b"# Initial completed architecture\n"
+    revised_bytes = b"# Human revision\n"
+    damaged_bytes = b"# Partial failed revision\n"
+    architecture_path.parent.mkdir(parents=True, exist_ok=True)
+    architecture_path.write_bytes(original_bytes)
+    captured["architecture_path"] = architecture_path
+    captured["original_architecture_bytes"] = original_bytes
+    captured["revised_architecture_bytes"] = revised_bytes
 
     async def fake_call(target: str, **kwargs):
         name = target.rsplit(".", 1)[-1]
@@ -227,7 +420,11 @@ async def _call_build_with_revision_failure(
                 failure_at == "tech_lead" and not is_human
             )
             if should_fail:
+                architecture_path.write_bytes(damaged_bytes)
+                if cancelled:
+                    raise ExecutionCancelledError("cancelled by user")
                 return _failed_envelope(failure_message)
+            architecture_path.write_bytes(revised_bytes)
             return revised_arch
         if name == "run_tech_lead":
             return _make_review_rejected_dict()
@@ -325,6 +522,10 @@ async def test_build_revision_failure_degrades_and_continues(
     assert result["success"] is True
     assert captured["sprint_architecture"] == expected_arch
     assert captured["executed_plan"]["architecture"] == expected_arch
+    expected_bytes = captured["original_architecture_bytes"]
+    if failure_at == "tech_lead":
+        expected_bytes = captured["revised_architecture_bytes"]
+    assert captured["architecture_path"].read_bytes() == expected_bytes
     assert captured["executed_plan"]["review"]["approved"] is True
     assert "architecture revision did not complete" in (
         captured["executed_plan"]["review"]["summary"]
@@ -343,6 +544,22 @@ async def test_build_fatal_revision_failure_aborts(
             tmp_path,
             failure_at=failure_at,
             fatal=True,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_at", ["human", "tech_lead"])
+async def test_build_cancelled_revision_aborts(
+    mock_agent_ai, tmp_path, failure_at
+):
+    """VC-R3: both HITL revision sites preserve explicit cancellation."""
+    with pytest.raises(ExecutionCancelledError, match="cancelled by user"):
+        await _call_build_with_revision_failure(
+            mock_agent_ai,
+            tmp_path,
+            failure_at=failure_at,
+            fatal=False,
+            cancelled=True,
         )
 
 

@@ -362,6 +362,202 @@ func TestPlanArchitectRevisionFatalErrorAborts(t *testing.T) {
 	}
 }
 
+func TestPlanArchitectRevisionCancellationAborts(t *testing.T) {
+	for _, cancellationErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(cancellationErr.Error(), func(t *testing.T) {
+			deps, m := planApp(sprintResult(issue("my-issue", nil, []any{"thing.py"})))
+			architectCalls := 0
+			m.responses["run_architect"] = func(map[string]any) (map[string]any, error) {
+				architectCalls++
+				if architectCalls == 1 {
+					return validArch(), nil
+				}
+				return nil, cancellationErr
+			}
+			m.responses["run_tech_lead"] = constResp(rejectedReview())
+
+			_, err := runPlan(t, deps, t.TempDir(), map[string]any{"max_review_iterations": 1})
+			if !errors.Is(err, cancellationErr) {
+				t.Fatalf("Plan error = %v, want %v", err, cancellationErr)
+			}
+			if got := len(m.callsFor("run_sprint_planner")); got != 0 {
+				t.Errorf("sprint planner called %d times after cancellation, want 0", got)
+			}
+		})
+	}
+}
+
+func TestPlanFailedRevisionRestoresArchitectureArtifact(t *testing.T) {
+	repoPath := t.TempDir()
+	architecturePath := architectureArtifactPath(repoPath, ".artifacts")
+	if err := os.MkdirAll(filepath.Dir(architecturePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalBytes := []byte("# Complete architecture\n\x00\xff")
+	damagedBytes := []byte("# Half-written revision\n")
+	originalArch := validArch()
+
+	deps, m := planApp(sprintResult(issue("my-issue", nil, []any{"thing.py"})))
+	architectCalls := 0
+	m.responses["run_architect"] = func(map[string]any) (map[string]any, error) {
+		architectCalls++
+		if architectCalls == 1 {
+			if err := os.WriteFile(architecturePath, originalBytes, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return originalArch, nil
+		}
+		if err := os.WriteFile(architecturePath, damagedBytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return nil, errors.New("architect subprocess crashed")
+	}
+	m.responses["run_tech_lead"] = constResp(rejectedReview())
+	m.responses["run_sprint_planner"] = func(map[string]any) (map[string]any, error) {
+		got, err := os.ReadFile(architecturePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, originalBytes) {
+			t.Fatalf("sprint planner saw architecture bytes %q, want %q", got, originalBytes)
+		}
+		return sprintResult(issue("my-issue", nil, []any{"thing.py"})), nil
+	}
+
+	res, err := runPlan(t, deps, repoPath, map[string]any{"max_review_iterations": 1})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	got, err := os.ReadFile(architecturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, originalBytes) {
+		t.Errorf("architecture bytes = %q, want %q", got, originalBytes)
+	}
+	if !reflect.DeepEqual(res["architecture"], originalArch) {
+		t.Errorf("architecture result = %#v, want %#v", res["architecture"], originalArch)
+	}
+	foundRestoreNote := false
+	for _, note := range m.notes {
+		if note.message == "Restored plan/architecture.md to the last completed revision" {
+			foundRestoreNote = reflect.DeepEqual(note.tags, []string{"pipeline", "revision", "degraded"})
+		}
+	}
+	if !foundRestoreNote {
+		t.Error("restore note with pipeline/revision/degraded tags was not emitted")
+	}
+}
+
+func TestPlanSuccessfulRevisionKeepsArchitectureArtifact(t *testing.T) {
+	repoPath := t.TempDir()
+	architecturePath := architectureArtifactPath(repoPath, ".artifacts")
+	if err := os.MkdirAll(filepath.Dir(architecturePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalBytes := []byte("# Original architecture\n")
+	revisedBytes := []byte("# Revised architecture\n")
+	revisedArch := validArch()
+	revisedArch["summary"] = "Revised architecture."
+
+	deps, m := planApp(sprintResult(issue("my-issue", nil, []any{"thing.py"})))
+	architectCalls := 0
+	m.responses["run_architect"] = func(map[string]any) (map[string]any, error) {
+		architectCalls++
+		if architectCalls == 1 {
+			if err := os.WriteFile(architecturePath, originalBytes, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return validArch(), nil
+		}
+		if err := os.WriteFile(architecturePath, revisedBytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return revisedArch, nil
+	}
+	techLeadCalls := 0
+	m.responses["run_tech_lead"] = func(map[string]any) (map[string]any, error) {
+		techLeadCalls++
+		if techLeadCalls == 1 {
+			return rejectedReview(), nil
+		}
+		return approvedReview(), nil
+	}
+
+	res, err := runPlan(t, deps, repoPath, map[string]any{"max_review_iterations": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(architecturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, revisedBytes) {
+		t.Errorf("architecture bytes = %q, want %q", got, revisedBytes)
+	}
+	if !reflect.DeepEqual(res["architecture"], revisedArch) {
+		t.Errorf("architecture result = %#v, want %#v", res["architecture"], revisedArch)
+	}
+}
+
+func TestPlanRestoreFailureStillDegrades(t *testing.T) {
+	repoPath := t.TempDir()
+	architecturePath := architectureArtifactPath(repoPath, ".artifacts")
+	if err := os.MkdirAll(filepath.Dir(architecturePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(architecturePath, []byte("complete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(architecturePath, 0o644) }()
+
+	deps, m := planApp(sprintResult(issue("my-issue", nil, []any{"thing.py"})))
+	architectCalls := 0
+	m.responses["run_architect"] = func(map[string]any) (map[string]any, error) {
+		architectCalls++
+		if architectCalls == 1 {
+			return validArch(), nil
+		}
+		if err := os.WriteFile(architecturePath, []byte("damaged"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(architecturePath, 0o444); err != nil {
+			t.Fatal(err)
+		}
+		return nil, errors.New("architect subprocess crashed")
+	}
+	m.responses["run_tech_lead"] = constResp(rejectedReview())
+
+	res, err := runPlan(t, deps, repoPath, map[string]any{"max_review_iterations": 1})
+	if err != nil {
+		t.Fatalf("restore failure masked degraded plan: %v", err)
+	}
+	if !reflect.DeepEqual(res["architecture"], validArch()) {
+		t.Errorf("architecture result = %#v, want last completed architecture", res["architecture"])
+	}
+}
+
+func TestRestoreArchitectureArtifactRemovesFileCreatedByFailedRevision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "architecture.md")
+	snapshot, err := snapshotArchitectureArtifact(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := restoreArchitectureArtifact(path, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored {
+		t.Fatal("created artifact was not removed")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("created artifact still exists: %v", err)
+	}
+}
+
 // --- Contract: levels computed; independent issues share level 0 -----------
 
 func TestPlanLevelsParallelIndependentIssues(t *testing.T) {

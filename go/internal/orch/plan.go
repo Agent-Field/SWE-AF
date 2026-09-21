@@ -1,6 +1,7 @@
 package orch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,92 @@ var PlanHandler Handler = Plan
 // (alongside orch.Handlers()) so build.go need not be edited to reference Plan.
 func RegisterPlan(m map[string]Handler) {
 	m["plan"] = PlanHandler
+}
+
+type architectureArtifactSnapshot struct {
+	existed  bool
+	contents []byte
+}
+
+func architectureArtifactPath(repoPath, artifactsDir string) string {
+	absRepo, err := filepath.Abs(repoPath)
+	if err != nil {
+		absRepo = repoPath
+	}
+	return filepath.Join(absRepo, artifactsDir, "plan", "architecture.md")
+}
+
+func snapshotArchitectureArtifact(path string) (*architectureArtifactSnapshot, error) {
+	contents, err := os.ReadFile(path)
+	if err == nil {
+		return &architectureArtifactSnapshot{existed: true, contents: contents}, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return &architectureArtifactSnapshot{}, nil
+	}
+	return nil, err
+}
+
+func restoreArchitectureArtifact(path string, snapshot *architectureArtifactSnapshot) (bool, error) {
+	if snapshot == nil {
+		return false, nil
+	}
+	if snapshot.existed {
+		current, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		if err == nil && bytes.Equal(current, snapshot.contents) {
+			return false, nil
+		}
+		if err := os.WriteFile(path, snapshot.contents, 0o644); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func snapshotArchitectureBeforeRevision(
+	ctx context.Context, deps *Deps, path string,
+) *architectureArtifactSnapshot {
+	snapshot, err := snapshotArchitectureArtifact(path)
+	if err != nil {
+		deps.Note(ctx, "Could not snapshot plan/architecture.md before revision: "+err.Error(),
+			"pipeline", "revision", "degraded")
+		return nil
+	}
+	return snapshot
+}
+
+func restoreArchitectureAfterFailedRevision(
+	ctx context.Context, deps *Deps, path string, snapshot *architectureArtifactSnapshot,
+) {
+	restored, err := restoreArchitectureArtifact(path, snapshot)
+	if err != nil {
+		deps.Note(ctx, "Could not restore plan/architecture.md after failed revision: "+err.Error(),
+			"pipeline", "revision", "degraded")
+		return
+	}
+	if restored {
+		deps.Note(ctx, "Restored plan/architecture.md to the last completed revision",
+			"pipeline", "revision", "degraded")
+	}
+}
+
+func isNonDegradableRevisionError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var fatalErr *fatal.FatalHarnessError
+	return errors.As(err, &fatalErr)
 }
 
 // planInput mirrors the Python plan() signature (param names + defaults).
@@ -76,6 +163,7 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	techLeadModel := firstNonEmpty(in.TechLeadModel, defaultModel)
 	sprintPlannerModel := firstNonEmpty(in.SprintPlannerModel, defaultModel)
 	issueWriterModel := firstNonEmpty(in.IssueWriterModel, defaultModel)
+	architecturePath := architectureArtifactPath(in.RepoPath, in.ArtifactsDir)
 
 	deps.Note(ctx, "Pipeline starting", "pipeline", "start")
 
@@ -155,6 +243,7 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		if i < in.MaxReviewIterations {
 			deps.Note(ctx, fmt.Sprintf("Architecture revision %d", i+1),
 				"pipeline", "revision")
+			architectureSnapshot := snapshotArchitectureBeforeRevision(ctx, deps, architecturePath)
 			revised, rerr := deps.Call(ctx, "run_architect", map[string]any{
 				"prd":                prd,
 				"repo_path":          in.RepoPath,
@@ -166,10 +255,10 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 				"workspace_manifest": in.WorkspaceManifest,
 			}, "run_architect (revision)")
 			if rerr != nil {
-				var fatalErr *fatal.FatalHarnessError
-				if errors.As(rerr, &fatalErr) {
+				if isNonDegradableRevisionError(rerr) {
 					return nil, rerr
 				}
+				restoreArchitectureAfterFailedRevision(ctx, deps, architecturePath, architectureSnapshot)
 				rawRevisionErr := rerr.Error()
 				revisionErr = truncateRevisionError(rawRevisionErr)
 				revisionFailed = true
@@ -244,7 +333,6 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	base := filepath.Join(absRepo, in.ArtifactsDir)
 	issuesDir := filepath.Join(base, "plan", "issues")
 	prdPath := filepath.Join(base, "plan", "prd.md")
-	architecturePath := filepath.Join(base, "plan", "architecture.md")
 	if err := os.MkdirAll(issuesDir, 0o755); err != nil {
 		return nil, err
 	}
