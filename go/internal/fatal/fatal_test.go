@@ -2,6 +2,7 @@ package fatal
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
@@ -108,4 +109,107 @@ func TestCheckFatalHarnessError(t *testing.T) {
 			t.Errorf("expected nil, got %v", err)
 		}
 	})
+}
+
+func TestIsTimeoutError(t *testing.T) {
+	// VC1/VC9: both overall timeout and idle-kill wording are recognized.
+	cases := []string{
+		"CLI command timed out after 5400s: opencode run ...",
+		"CLI command made no progress for 300.0s: opencode run ...",
+		"request timeout while waiting for CLI",
+	}
+	for _, msg := range cases {
+		if !IsTimeoutError(msg) {
+			t.Errorf("IsTimeoutError(%q) = false, want true", msg)
+		}
+	}
+	for _, msg := range []string{"", "temporary network failure"} {
+		if IsTimeoutError(msg) {
+			t.Errorf("IsTimeoutError(%q) = true, want false", msg)
+		}
+	}
+}
+
+func TestHarnessTimeoutErrorMessage(t *testing.T) {
+	// VC1/VC9: the Go message is byte-identical to the Python timeout message.
+	e := &HarnessTimeoutError{
+		Role:            "Architect",
+		Provider:        "opencode",
+		Model:           "openrouter/example-model",
+		OriginalMessage: "CLI command timed out after 5400s",
+	}
+	want := "Architect harness timed out (provider=opencode, model=openrouter/example-model) — " +
+		"the stage exceeded its harness time budget and was killed before writing any output: " +
+		"CLI command timed out after 5400s. Raise AGENTFIELD_HARNESS_TIMEOUT_SECONDS / " +
+		"AGENTFIELD_HARNESS_IDLE_SECONDS, or reduce the stage's scope."
+	if got := e.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+
+	withoutDetail := (&HarnessTimeoutError{
+		Role: "Architect", Provider: "opencode", Model: "model-x",
+	}).Error()
+	if !strings.Contains(withoutDetail, "writing any output. Raise") ||
+		strings.Contains(withoutDetail, "writing any output:") {
+		t.Errorf("detail-free Error() has bad punctuation: %q", withoutDetail)
+	}
+}
+
+func TestCheckHarnessTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		result  *harness.Result
+		wantErr bool
+	}{
+		{
+			name: "failure token",
+			result: &harness.Result{
+				IsError: true, FailureType: harness.FailureTimeout,
+				ErrorMessage: "worker was killed",
+			},
+			wantErr: true,
+		},
+		{
+			name: "message fallback",
+			result: &harness.Result{
+				IsError: true, ErrorMessage: "CLI command timed out after 5s",
+			},
+			wantErr: true,
+		},
+		{
+			name: "raw text defers to schema path",
+			result: &harness.Result{
+				IsError: true, Result: "invalid JSON", FailureType: harness.FailureTimeout,
+			},
+		},
+		{
+			name: "schema token defers to schema path",
+			result: &harness.Result{
+				IsError: true, FailureType: harness.FailureSchema,
+				ErrorMessage: "CLI command timed out after 5s",
+			},
+		},
+		{
+			name: "parsed result is not empty",
+			result: &harness.Result{
+				Parsed: map[string]any{"ok": true}, FailureType: harness.FailureTimeout,
+			},
+		},
+		{name: "nil", result: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CheckHarnessTimeout(tt.result, "Architect", "opencode", "model-x")
+			var timeoutErr *HarnessTimeoutError
+			if got := errors.As(err, &timeoutErr); got != tt.wantErr {
+				t.Fatalf("errors.As(timeout) = %v, want %v (err=%v)", got, tt.wantErr, err)
+			}
+			if timeoutErr != nil {
+				if timeoutErr.Role != "Architect" || timeoutErr.Provider != "opencode" || timeoutErr.Model != "model-x" {
+					t.Errorf("unexpected timeout metadata: %+v", timeoutErr)
+				}
+			}
+		})
+	}
 }

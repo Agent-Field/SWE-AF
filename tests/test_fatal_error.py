@@ -15,9 +15,13 @@ from typing import Optional
 import pytest
 
 from swe_af.execution.fatal_error import (
+    EmptyHarnessCompletionError,
     FatalHarnessError,
+    HarnessTimeoutError,
+    check_empty_harness_completion,
     check_fatal_harness_error,
     is_fatal_error,
+    is_timeout_error,
 )
 
 
@@ -109,6 +113,10 @@ class TestFatalHarnessError:
 class FakeResult:
     is_error: bool = False
     error_message: Optional[str] = None
+    parsed: object | None = None
+    result: Optional[str] = None
+    text: str = ""
+    failure_type: Optional[str] = None
 
 
 class TestCheckFatalHarnessError:
@@ -137,6 +145,115 @@ class TestCheckFatalHarnessError:
     def test_empty_error_message_passes(self) -> None:
         result = FakeResult(is_error=True, error_message="")
         check_fatal_harness_error(result)  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# Empty harness completion timeout classification
+# ---------------------------------------------------------------------------
+
+
+class TestCheckEmptyHarnessCompletionTimeout:
+    @pytest.mark.parametrize(
+        ("failure_type", "detail"),
+        [
+            ("timeout", "worker was killed"),
+            (None, "CLI command timed out after 5400s: opencode run ..."),
+            (None, "CLI command made no progress for 300.0s: opencode run ..."),
+        ],
+    )
+    def test_timeout_has_actionable_message(
+        self, failure_type: Optional[str], detail: str
+    ) -> None:
+        """VC1: empty timeout results are reported as timeouts, not auth errors."""
+        result = FakeResult(
+            is_error=True,
+            error_message=detail,
+            failure_type=failure_type,
+        )
+
+        with pytest.raises(HarnessTimeoutError) as exc_info:
+            check_empty_harness_completion(
+                result,
+                role="Architect",
+                provider="opencode",
+                model="openrouter/example-model",
+            )
+
+        message = str(exc_info.value)
+        for expected in (
+            "Architect",
+            "opencode",
+            "openrouter/example-model",
+            detail,
+            "AGENTFIELD_HARNESS_TIMEOUT_SECONDS",
+            "AGENTFIELD_HARNESS_IDLE_SECONDS",
+        ):
+            assert expected in message
+        assert "empty completion" not in message
+        assert "check provider auth/model compatibility" not in message
+        assert exc_info.value.original_message == detail
+
+    def test_genuine_empty_completion_message_is_unchanged(self) -> None:
+        """VC2: genuine empty output retains its exact compatibility message."""
+        result = FakeResult(is_error=True, error_message="provider returned nothing")
+
+        with pytest.raises(EmptyHarnessCompletionError) as exc_info:
+            check_empty_harness_completion(
+                result, role="Architect", provider="opencode", model="model-x"
+            )
+
+        assert str(exc_info.value) == (
+            "Architect harness returned an empty completion "
+            "(provider=opencode, model=model-x) — check provider "
+            "auth/model compatibility: provider returned nothing"
+        )
+
+    def test_timeout_without_detail_drops_colon_cleanly(self) -> None:
+        """VC1: a timeout token alone still produces grammatical guidance."""
+        result = FakeResult(is_error=True, failure_type="timeout")
+
+        with pytest.raises(HarnessTimeoutError) as exc_info:
+            check_empty_harness_completion(
+                result, role="Architect", provider="opencode", model="model-x"
+            )
+
+        assert "writing any output. Raise" in str(exc_info.value)
+        assert "writing any output:" not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            FakeResult(
+                is_error=True,
+                error_message="CLI command timed out after 5s",
+                result="schema-invalid raw output",
+            ),
+            FakeResult(
+                is_error=True,
+                error_message="CLI command timed out after 5s",
+                failure_type="schema",
+            ),
+        ],
+    )
+    def test_schema_invalid_result_remains_a_noop(self, result: FakeResult) -> None:
+        """VC3: raw output and schema failures stay on the caller's schema path."""
+        check_empty_harness_completion(
+            result, role="Architect", provider="opencode", model="model-x"
+        )
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "CLI command timed out after 5s",
+            "CLI command made no progress for 300.0s",
+            "request timeout while waiting for CLI",
+        ],
+    )
+    def test_timeout_text_patterns(self, message: str) -> None:
+        assert is_timeout_error(message)
+
+    def test_empty_timeout_text_does_not_match(self) -> None:
+        assert not is_timeout_error("")
 
 
 # ---------------------------------------------------------------------------
