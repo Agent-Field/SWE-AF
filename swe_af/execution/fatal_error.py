@@ -6,6 +6,8 @@ module provides:
 
 - ``FatalHarnessError`` — a distinct exception type that short-circuits all
   retry layers.
+- ``HarnessTimeoutError`` — an actionable timeout error for harnesses killed
+  before they produce any output.
 - ``check_fatal_harness_error()`` — inspects a HarnessResult's error_message
   and raises ``FatalHarnessError`` immediately on match.
 
@@ -38,6 +40,22 @@ _FATAL_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         # default `-codex` model under ChatGPT-account auth (#82 Gap 3).
         r"not supported when using codex with a chatgpt account",
         r"requires a newer version of codex",
+    )
+)
+
+# Patterns emitted when a harness subprocess is killed by its overall or idle
+# timeout. These are only consulted for results with no parsed value and no raw
+# output, where a timeout signal cannot be confused with useful model output.
+_TIMEOUT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"cli command timed out after",
+        r"cli command made no progress for",
+        r"timed out",
+        r"made no progress for",
+        r"timeout exceeded",
+        r"timeout after",
+        r"deadline exceeded",
     )
 )
 
@@ -86,11 +104,46 @@ class EmptyHarnessCompletionError(RuntimeError):
         self.original_message = detail
 
 
+class HarnessTimeoutError(RuntimeError):
+    """Raised when a harness is killed before producing any output."""
+
+    def __init__(
+        self, *, role: str, provider: str, model: str, detail: str = ""
+    ) -> None:
+        message = (
+            f"{role} harness timed out (provider={provider}, model={model}) — "
+            "the stage exceeded its harness time budget and was killed before "
+            "writing any output"
+        )
+        if detail:
+            # Provider messages usually already end in a period; drop that one
+            # so the sentence that follows does not read as "..". An ellipsis
+            # is left alone.
+            tail = detail[:-1] if detail.endswith(".") and not detail.endswith("..") else detail
+            message = f"{message}: {tail}"
+        message = (
+            f"{message}. Raise AGENTFIELD_HARNESS_TIMEOUT_SECONDS / "
+            "AGENTFIELD_HARNESS_IDLE_SECONDS, or reduce the stage's scope."
+        )
+        super().__init__(message)
+        self.role = role
+        self.provider = provider
+        self.model = model
+        self.original_message = detail
+
+
 def is_fatal_error(error_message: str) -> bool:
     """Return True if *error_message* matches a known fatal API error pattern."""
     if not error_message:
         return False
     return any(p.search(error_message) for p in _FATAL_PATTERNS)
+
+
+def is_timeout_error(error_message: str) -> bool:
+    """Return True if *error_message* matches a harness timeout pattern."""
+    if not error_message:
+        return False
+    return any(p.search(error_message) for p in _TIMEOUT_PATTERNS)
 
 
 def check_fatal_harness_error(result) -> None:
@@ -129,6 +182,7 @@ def check_fatal_harness_error(result) -> None:
 # attribute arrives as an enum member or as a plain string. SDKs predating
 # ``failure_type`` yield ``""`` and keep the previous behavior.
 _SCHEMA_FAILURE_TOKEN = "schema"
+_TIMEOUT_FAILURE_TOKEN = "timeout"
 
 
 def _failure_type_token(result) -> str:
@@ -151,6 +205,14 @@ def _is_schema_failure(result) -> bool:
     return _failure_type_token(result) == _SCHEMA_FAILURE_TOKEN
 
 
+def _is_timeout_failure(result) -> bool:
+    """Whether an empty result carries an explicit or textual timeout signal."""
+    if _failure_type_token(result) == _TIMEOUT_FAILURE_TOKEN:
+        return True
+    detail = getattr(result, "error_message", "") or ""
+    return is_timeout_error(detail)
+
+
 def _harness_output_text(result) -> str:
     """Best-effort raw completion text from a HarnessResult-like object.
 
@@ -166,13 +228,15 @@ def _harness_output_text(result) -> str:
 def check_empty_harness_completion(
     result, *, role: str, provider: str, model: str
 ) -> None:
-    """Raise ``EmptyHarnessCompletionError`` when a harness produced no output.
+    """Raise the appropriate typed error when a harness produced no output.
 
     Call *after* ``check_fatal_harness_error`` and *before* the caller's
     ``parsed is None`` schema-quality check. This fires only for the "empty
     completion" shape — neither a parsed object nor any raw text — which is the
     signature of a provider/model mismatch (a model id meant for a different
-    runtime, or bad auth) rather than a schema-quality problem.
+    runtime, or bad auth) rather than a schema-quality problem. A timeout token
+    or timeout message raises ``HarnessTimeoutError`` instead, because the same
+    empty-output shape also occurs when the harness kills a long-running stage.
 
     It is a no-op — deferring to the caller's generic schema-invalid error,
     which should also name provider+model — when either:
@@ -209,6 +273,13 @@ def check_empty_harness_completion(
         # caller's schema-invalid message.
         return
     detail = (getattr(result, "error_message", "") or "").strip()
+    # A terminal timeout result is always marked as an error by the SDK. Keep
+    # treating synthetic/inconsistent ``is_error=False`` results as ordinary
+    # empty completions for compatibility with older callers.
+    if getattr(result, "is_error", True) and _is_timeout_failure(result):
+        raise HarnessTimeoutError(
+            role=role, provider=provider, model=model, detail=detail
+        )
     raise EmptyHarnessCompletionError(
         role=role, provider=provider, model=model, detail=detail
     )
