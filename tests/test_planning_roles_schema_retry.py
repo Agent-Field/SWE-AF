@@ -401,15 +401,28 @@ _SPECIAL_SECRET = 'ab"cd\\ef /?:+='
 
 
 @pytest.mark.parametrize(
-    "name,render",
+    "name,secret,render",
     [
-        ("json_escaped", lambda s: json.dumps(s, ensure_ascii=False)[1:-1]),
-        ("url_percent", lambda s: quote(s, safe="")),
-        ("url_plus", lambda s: quote_plus(s, safe="")),
+        (
+            "json_escaped",
+            _SPECIAL_SECRET,
+            lambda s: json.dumps(s, ensure_ascii=False)[1:-1],
+        ),
+        ("url_percent", _SPECIAL_SECRET, lambda s: quote(s, safe="")),
+        ("url_plus", _SPECIAL_SECRET, lambda s: quote_plus(s, safe="")),
+        ("url_lower", "ab/cd+ef", lambda _: "ab%2fcd%2bef"),
+        ("url_mixed", "Ab/cD+ef", lambda _: "Ab%2fcD%2Bef"),
+        ("form_mixed", "Ab/cD+ ef", lambda _: "Ab%2FcD%2b+ef"),
+        ("json_go_html", 'ab"cd&ef', lambda _: r'ab\"cd\u0026ef'),
+        (
+            "json_go_html_separators",
+            'ab"\\<>&\u2028\u2029ef',
+            lambda _: r'ab\"\\\u003c\u003e\u0026\u2028\u2029ef',
+        ),
     ],
 )
 def test_encoded_credential_spellings_are_redacted_from_the_log(
-    tmp_path, name, render
+    tmp_path, name, secret, render
 ) -> None:
     """A credential echoed JSON-escaped (quotes/backslashes) or URL-encoded
     does not contain the exact value, so exact matching alone misses it. Every
@@ -421,8 +434,8 @@ def test_encoded_credential_spellings_are_redacted_from_the_log(
     )
 
     case = _PM
-    rendered = render(_SPECIAL_SECRET)
-    store_scoped_credentials("run-test-1", {"DEPLOY_TOKEN": _SPECIAL_SECRET})
+    rendered = render(secret)
+    store_scoped_credentials("run-test-1", {"DEPLOY_TOKEN": secret})
     bad = SimpleNamespace(
         parsed=None,
         # The model wrote the credential in its encoded spelling. For the
@@ -443,7 +456,7 @@ def test_encoded_credential_spellings_are_redacted_from_the_log(
 
     log = _log_path(tmp_path, case).read_text(encoding="utf-8")
     assert rendered not in log, f"{name} spelling survived redaction"
-    assert _SPECIAL_SECRET not in log
+    assert secret not in log
     assert "[REDACTED:DEPLOY_TOKEN]" in log
     assert '"validated_description"' in log  # non-secret text preserved
 

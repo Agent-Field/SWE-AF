@@ -11,6 +11,7 @@ import asyncio
 import itertools
 import json
 import os
+import re
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -222,8 +223,13 @@ def _credential_forms(value: str) -> list[str]:
     """
     forms = [value]
     try:
+        json_body = json.dumps(value, ensure_ascii=False)[1:-1]
+        html_json_body = json_body
+        for char in "<>&\u2028\u2029":
+            html_json_body = html_json_body.replace(char, f"\\u{ord(char):04x}")
         encoded_forms = (
-            json.dumps(value, ensure_ascii=False)[1:-1],
+            json_body,
+            html_json_body,
             quote(value, safe=""),
             quote_plus(value, safe=""),
         )
@@ -264,7 +270,10 @@ def _redact_scoped_credentials(text: str) -> str:
         for form in _credential_forms(value)
     ]
     for form, name in sorted(variants, key=lambda item: len(item[0]), reverse=True):
-        text = text.replace(form, f"[REDACTED:{name}]")
+        pattern = re.sub(
+            r"%[0-9a-fA-F]{2}", lambda match: f"(?i:{match[0]})", re.escape(form)
+        )
+        text = re.sub(pattern, lambda _: f"[REDACTED:{name}]", text)
     return text
 
 

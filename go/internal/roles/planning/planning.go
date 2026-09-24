@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -600,8 +601,10 @@ func appendArtifact(path, text string) error {
 // path can contain. Mirrors pipeline._credential_forms.
 func credentialForms(value string) []string {
 	forms := []string{value}
+	jsonBody, _ := json.Marshal(value)
 	for _, form := range []string{
 		jsonEscapedBody(value),
+		string(jsonBody[1 : len(jsonBody)-1]),
 		percentEncode(value, false),
 		percentEncode(value, true),
 	} {
@@ -615,9 +618,6 @@ func credentialForms(value string) []string {
 // jsonEscapedBody escapes value the way Python's json.dumps(value,
 // ensure_ascii=False)[1:-1] does: quote and backslash escaped, control
 // characters using JSON's short escapes or \u00XX, and non-ASCII text left raw.
-// encoding/json's own encoder is deliberately not used because it also escapes
-// <, > and & to \uXXXX, which Python does not, and that difference would make
-// the two ports redact different spellings.
 func jsonEscapedBody(value string) string {
 	var b strings.Builder
 	for _, r := range value {
@@ -708,8 +708,14 @@ func redactScopedCredentials(scopeID, text string) string {
 	sort.Slice(spellings, func(i, j int) bool {
 		return len(spellings[i].form) > len(spellings[j].form)
 	})
+	percentEscape := regexp.MustCompile(`%[0-9a-fA-F]{2}`)
 	for _, s := range spellings {
-		text = strings.ReplaceAll(text, s.form, "[REDACTED:"+s.name+"]")
+		pattern := percentEscape.ReplaceAllStringFunc(regexp.QuoteMeta(s.form), func(token string) string {
+			return "(?i:" + token + ")"
+		})
+		text = regexp.MustCompile(pattern).ReplaceAllStringFunc(text, func(string) string {
+			return "[REDACTED:" + s.name + "]"
+		})
 	}
 	return text
 }

@@ -880,6 +880,51 @@ func TestRedactScopedCredentialsCoversEncodedSpellings(t *testing.T) {
 	}
 }
 
+func TestEncodedCredentialsRedactedFromRetryLog(t *testing.T) {
+	const scopeID = "run-encoded-log"
+	oldContext := executionContextFrom
+	executionContextFrom = func(context.Context) agent.ExecutionContext {
+		return agent.ExecutionContext{RunID: scopeID}
+	}
+	defer func() { executionContextFrom = oldContext }()
+
+	for _, tc := range []struct{ name, secret, rendered string }{
+		{"url_lower", "ab/cd+ef", "ab%2fcd%2bef"},
+		{"url_mixed", "Ab/cD+ef", "Ab%2fcD%2Bef"},
+		{"form_mixed", "Ab/cD+ ef", "Ab%2FcD%2b+ef"},
+		{"json_go_html", `ab"cd&ef`, ""},
+		{"json_go_html_separators", "ab\"\\<>&\u2028\u2029ef", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			rendered := tc.rendered
+			if rendered == "" {
+				body, err := json.Marshal(tc.secret)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rendered = string(body[1 : len(body)-1])
+			}
+			hitl.StoreScopedCredentials(scopeID, map[string]string{"DEPLOY_TOKEN": tc.secret})
+			defer hitl.ClearScopedCredentials(scopeID)
+			h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+				return badSchemaResult(`{"issues": "` + rendered + `", "rationale": 7}`), nil
+			}}
+			deps, _ := newDeps(h)
+			if _, err := RunSprintPlanner(context.Background(), deps, map[string]any{"repo_path": repo}); err == nil {
+				t.Fatal("expected schema failure")
+			}
+			log := readRetryLog(t, repo, "sprint_planner_raw_response.txt")
+			if strings.Contains(log, tc.secret) || strings.Contains(log, rendered) {
+				t.Fatalf("credential survived in persisted log: %s", log)
+			}
+			if !strings.Contains(log, `"issues": "[REDACTED:DEPLOY_TOKEN]", "rationale": 7`) {
+				t.Fatalf("redaction lost surrounding output: %s", log)
+			}
+		})
+	}
+}
+
 // Contract: a multi-line fatal reason must not split the terminal outcome over
 // several physical lines; the last line stays the flattened outcome.
 func TestRetryLogFlattensMultilineFatalReason(t *testing.T) {
