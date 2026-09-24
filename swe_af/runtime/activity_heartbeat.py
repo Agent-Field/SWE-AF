@@ -175,12 +175,10 @@ async def run_with_activity_heartbeat(
     try:
         return await child_task
     finally:
-        # ``cancelling()`` counts every cancellation request this task has
-        # ever received, including ones that were already delivered and
-        # handled before this call (e.g. a caller that catches and ignores a
-        # cancellation, or a nested ``asyncio.wait_for`` that timed out and
-        # was swallowed).  Such an old request must not turn a completed child
-        # result into a cancellation of this wait, so baseline the count
+        # ``cancelling()`` counts cancellation requests minus ``uncancel()``
+        # calls, including requests already delivered and handled before this
+        # call without ``uncancel()``. Such an old request must not turn a
+        # completed child result into cancellation, so baseline the count
         # before teardown and only re-raise on growth.
         current = asyncio.current_task()
         cancellations_before_teardown = (
@@ -191,7 +189,7 @@ async def run_with_activity_heartbeat(
             await heartbeat_task
         except asyncio.CancelledError:
             # Cancelling the heartbeat task makes this await raise even when
-            # *this* task was never cancelled; swallow only that case.  If a
+            # *this* task received no new cancellation; swallow that case. If a
             # new outer cancellation (e.g. asyncio.wait_for timing out) landed
             # while the heartbeat was being torn down, re-raise it so the
             # wrapper does not report success after being cancelled.

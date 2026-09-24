@@ -171,7 +171,10 @@ pip install --upgrade agentfield
 
 **Root cause:** Both builds cloned to the same workspace path (`/workspaces/<repo-name>`), sharing git state and artifacts.
 
-**Fix:** This is fixed in the current version. Each build now gets an isolated workspace: `/workspaces/<repo-name>-<build_id>`.
+**Fix:** Full-pipeline `swe-planner.build` uses an isolated workspace:
+`/workspaces/<repo-name>-<build_id>`. Fast mode has different workspace reuse
+rules; see [GitHub Repo Workflow](../README.md#github-repo-workflow-clone---build---pr)
+before running concurrent fast builds.
 
 **Ref:** [#43](https://github.com/Agent-Field/SWE-AF/issues/43)
 
@@ -179,7 +182,10 @@ pip install --upgrade agentfield
 
 ### Multiple concurrent builds
 
-Each build automatically gets an isolated workspace. To run multiple builds concurrently:
+Full-pipeline builds with automatically derived paths get isolated workspaces.
+For fast-mode concurrency constraints, see
+[GitHub Repo Workflow](../README.md#github-repo-workflow-clone---build---pr).
+To scale the full-pipeline workers:
 
 ```bash
 # Scale the agent service

@@ -93,6 +93,7 @@ def _clone_repo(repo_url: str, repo_path: str, *, reclone: bool = False) -> None
     os.makedirs(os.path.dirname(repo_path) or ".", exist_ok=True)
     clone_result = subprocess.run(
         ["git", "clone", repo_url, repo_path],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -145,6 +146,7 @@ def _prepare_repo(
 
         origin = subprocess.run(
             ["git", "remote", "get-url", "origin"],
+            check=False,
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -177,6 +179,7 @@ def _prepare_repo(
             shutil.rmtree(worktrees_dir, ignore_errors=True)
         subprocess.run(
             ["git", "worktree", "prune"],
+            check=False,
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -186,6 +189,7 @@ def _prepare_repo(
         # whether the existing clone can still provide a valid baseline.
         fetch = subprocess.run(
             ["git", "fetch", "origin"],
+            check=False,
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -199,12 +203,14 @@ def _prepare_repo(
 
         subprocess.run(
             ["git", "checkout", "-f", default_branch],
+            check=False,
             cwd=repo_path,
             capture_output=True,
             text=True,
         )
         reset = subprocess.run(
             ["git", "reset", "--hard", f"origin/{default_branch}"],
+            check=False,
             cwd=repo_path,
             capture_output=True,
             text=True,

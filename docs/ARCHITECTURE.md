@@ -70,7 +70,7 @@ The planning chain is a five-agent pipeline that progressively refines a vague g
 
 2. **Architect** — reads the PRD and codebase, produces a system design: components, interfaces, architectural decisions with rationale, and a file-changes overview.
 
-3. **Tech Lead** — reviews the architecture against the PRD in a bounded loop (up to `max_review_iterations + 1` rounds). If not approved, the Architect revises, editing the existing architecture document rather than redesigning it from scratch. If the loop exhausts, the last revision is auto-approved — the system never blocks on infinite review cycles. If a revision itself fails (its harness times out, returns nothing, or produces an unparseable response), the pipeline keeps the last completed architecture, records the reason in the review summary, and carries on to the Sprint Planner — a revision that cannot finish costs the revision, not the whole plan. A fatal API error (billing, invalid credentials) still aborts the run.
+3. **Tech Lead** — reviews the architecture against the PRD in a bounded loop (up to `max_review_iterations + 1` rounds). If not approved, the Architect revises, editing the existing architecture document rather than redesigning it from scratch. If the loop exhausts, the last revision is auto-approved — the system never blocks on infinite review cycles. If a revision itself fails (its harness times out, returns nothing, or produces an unparseable response), the pipeline keeps the last completed architecture, records the reason in the review summary, and carries on to the Sprint Planner — a revision that cannot finish costs the revision, not the whole plan. Restoring the on-disk `plan/architecture.md` snapshot is best-effort; snapshot or restore failures are noted. A fatal API error (billing, invalid credentials) still aborts the run. When a non-fatal revision failure occurs during a human-requested revision, the plan returns to the human approval gate with `revision_error` recorded in its revision history; automatic Tech Lead approval does not bypass human approval.
 
 4. **Sprint Planner** — decomposes the approved architecture into `PlannedIssue` items. Each issue has a name, acceptance criteria mapped from the PRD, dependency edges (`depends_on`), file manifests (`files_to_create`, `files_to_modify`), and — critically — an `IssueGuidance` block:
 
@@ -88,6 +88,18 @@ The planning chain is a five-agent pipeline that progressively refines a vague g
    The `needs_deeper_qa` flag is the routing decision that splits execution into [two paths](#pattern-risk-proportional-resource-allocation) — it's the sprint planner's judgment call on risk.
 
 5. **Issue Writers** — fan out in parallel across all issues, writing self-contained `issue-*.md` specs with full context so each coder agent can work independently.
+
+Schema failures in the PM, Architect, Tech Lead, and Sprint Planner receive
+bounded outer harness retries with the
+validation error included in the next prompt. The per-stage bounds live in
+[`pipeline.py`](../swe_af/reasoners/pipeline.py) and the
+[Go planning implementation](../go/internal/roles/planning/planning.go); these
+are additional to the SDK's internal schema retries, not a count of model runs.
+The PM, Architect, Tech Lead, and Sprint Planner append diagnostic sections to
+`plan/<role>_raw_response.txt` under the artifacts directory, with run headers,
+failed schema responses, and terminal outcomes. Raw responses are bounded and
+run-scoped credentials are redacted before persistence. Artifact write failures
+are reported without replacing the planning failure.
 
 **From Issues to Levels:**
 
