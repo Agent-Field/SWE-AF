@@ -220,7 +220,7 @@ async def test_prior_caught_cancellation_returns_child_result() -> None:
     result into a cancellation during heartbeat teardown.
 
     Cancelling the heartbeat task makes its await raise CancelledError even
-    though *this* task was never cancelled.  A stale ``cancelling()`` count
+    though *this* task received no new cancellation.  A stale ``cancelling()`` count
     from an earlier, already-handled cancellation must not be mistaken for a
     fresh cancellation and abort the completed wait.
     """
