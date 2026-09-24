@@ -26,6 +26,7 @@ import json
 from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import quote, quote_plus
 
 import pytest
 
@@ -394,6 +395,157 @@ def test_scoped_credentials_are_redacted_from_the_log(tmp_path) -> None:
     assert secret not in log
     assert "[REDACTED:DEPLOY_TOKEN]" in log
     assert secret not in str(excinfo.value)
+
+
+_SPECIAL_SECRET = 'ab"cd\\ef /?:+='
+
+
+@pytest.mark.parametrize(
+    "name,secret,render",
+    [
+        (
+            "json_escaped",
+            _SPECIAL_SECRET,
+            lambda s: json.dumps(s, ensure_ascii=False)[1:-1],
+        ),
+        ("url_percent", _SPECIAL_SECRET, lambda s: quote(s, safe="")),
+        ("url_plus", _SPECIAL_SECRET, lambda s: quote_plus(s, safe="")),
+        ("url_lower", "ab/cd+ef", lambda _: "ab%2fcd%2bef"),
+        ("url_mixed", "Ab/cD+ef", lambda _: "Ab%2fcD%2Bef"),
+        ("form_mixed", "Ab/cD+ ef", lambda _: "Ab%2FcD%2b+ef"),
+        ("json_ascii", 'ab"café', lambda s: json.dumps(s)[1:-1]),
+        (
+            "json_ascii_surrogates",
+            'ab"\\café\x7f😀<&',
+            lambda s: json.dumps(s)[1:-1],
+        ),
+        ("json_go_html", 'ab"cd&ef', lambda _: r'ab\"cd\u0026ef'),
+        (
+            "json_go_html_separators",
+            'ab"\\<>&\u2028\u2029ef',
+            lambda _: r'ab\"\\\u003c\u003e\u0026\u2028\u2029ef',
+        ),
+    ],
+)
+def test_encoded_credential_spellings_are_redacted_from_the_log(
+    tmp_path, name, secret, render
+) -> None:
+    """A credential echoed JSON-escaped (quotes/backslashes) or URL-encoded
+    does not contain the exact value, so exact matching alone misses it. Every
+    bounded spelling must be redacted while non-secret text survives.
+    """
+    from swe_af.hitl.credentials_store import (  # noqa: PLC0415
+        clear_scoped_credentials,
+        store_scoped_credentials,
+    )
+
+    case = _PM
+    rendered = render(secret)
+    store_scoped_credentials("run-test-1", {"DEPLOY_TOKEN": secret})
+    bad = SimpleNamespace(
+        parsed=None,
+        # The model wrote the credential in its encoded spelling. For the
+        # JSON-escaped case this is the exact string a JSON encoder produced;
+        # the URL spellings contain no JSON-special characters themselves.
+        result='{"validated_description": "' + rendered + '"}',
+        text="",
+        error_message="Schema validation failed.",
+        is_error=True,
+        failure_type="schema",
+    )
+    mock_router = _make_router([bad, bad])
+    try:
+        with pytest.raises(RuntimeError):
+            asyncio.run(_invoke_stage(case, tmp_path, mock_router))
+    finally:
+        clear_scoped_credentials("run-test-1")
+
+    log = _log_path(tmp_path, case).read_text(encoding="utf-8")
+    assert rendered not in log, f"{name} spelling survived redaction"
+    assert secret not in log
+    assert "[REDACTED:DEPLOY_TOKEN]" in log
+    assert '"validated_description"' in log  # non-secret text preserved
+
+
+def test_multiline_fatal_reason_keeps_outcome_as_the_last_line(tmp_path) -> None:
+    """A fatal reason can carry newlines; interpolated verbatim it would split
+    the terminal outcome across physical lines. The last line must stay the
+    flattened outcome so the log is greppable.
+    """
+    case = _PM
+    fatal = SimpleNamespace(
+        parsed=None,
+        result="",
+        text="",
+        error_message=(
+            "Credit balance is too low.\nAdd funds.\nSee the billing page."
+        ),
+        is_error=True,
+        failure_type="api_error",
+    )
+    mock_router = _make_router([fatal])
+
+    with pytest.raises(FatalHarnessError):
+        asyncio.run(_invoke_stage(case, tmp_path, mock_router))
+
+    log = _log_path(tmp_path, case).read_text(encoding="utf-8")
+    lines = log.rstrip().splitlines()
+    last_line = lines[-1]
+    assert last_line.startswith("===== outcome: FAILED after attempt 1/2:")
+    assert last_line.endswith("=====")
+    assert "credit balance is too low" in last_line.lower()
+    assert "add funds" in last_line.lower()
+    assert "see the billing page" in last_line.lower()
+    assert "Add funds." not in [line.strip() for line in lines]
+
+
+def test_multiline_schema_reason_keeps_each_log_line_single(tmp_path) -> None:
+    """Each attempt header and the bound-exhausted outcome interpolate the
+    schema failure, which can carry a multi-line harness message."""
+    case = _PM
+    bad = _bad_result(case)
+    bad.error_message = "Schema validation failed.\nretry budget gone."
+    mock_router = _make_router([bad, bad])
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(_invoke_stage(case, tmp_path, mock_router))
+
+    log = _log_path(tmp_path, case).read_text(encoding="utf-8")
+    lines = log.rstrip().splitlines()
+    attempt_lines = [line for line in lines if line.startswith("===== attempt ")]
+    assert len(attempt_lines) == 2
+    assert all("retry budget gone." in line for line in attempt_lines)
+    last_line = lines[-1]
+    assert last_line.startswith("===== outcome: FAILED after 2 attempt(s):")
+    assert last_line.endswith("=====")
+    assert "retry budget gone." in last_line
+    assert "retry budget gone." not in {line.strip() for line in lines}
+
+
+def test_same_second_same_run_headers_stay_distinct(tmp_path) -> None:
+    """Two invocations with the same run id in the same second must still get
+    distinguishable section headers: the timestamp alone has second
+    granularity, so the header carries a monotonic section number."""
+    from swe_af.reasoners import pipeline  # noqa: PLC0415
+
+    path = tmp_path.joinpath("headers.txt")
+    mock_router = _make_router([])
+    with patch.object(pipeline, "router", mock_router):
+        pipeline._record_run_header_best_effort("Sprint planner", str(path))
+        pipeline._record_run_header_best_effort("Sprint planner", str(path))
+
+    headers = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("===== run ")
+    ]
+    assert len(headers) == 2
+    assert headers[0] != headers[1]
+    assert all("| section " in header for header in headers)
+    assert all(
+        "run-test-1" in header and "Sprint planner" in header
+        for header in headers
+    )
 
 
 def test_unwritable_log_does_not_abort_a_recovering_run(tmp_path) -> None:

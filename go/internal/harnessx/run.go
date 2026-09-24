@@ -12,14 +12,19 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
-// runIDFromContext extracts the build's run ID from the reasoner execution
-// context. In production this reads agent.ExecutionContextFrom(ctx).RunID, which
-// the SDK populates on the handler's ctx before dispatch. It is a package var
-// (not a direct call) purely so tests can inject a run ID — the SDK's context
-// key is unexported, so there is no public way to seed ExecutionContext into a
-// ctx from an external package.
-var runIDFromContext = func(ctx context.Context) string {
-	return agent.ExecutionContextFrom(ctx).RunID
+// executionContextFrom is a seam over agent.ExecutionContextFrom so tests can
+// supply an execution context — the SDK's context key is unexported, so there
+// is no public way to seed one into a ctx from an external package.
+var executionContextFrom = agent.ExecutionContextFrom
+
+// credentialScopeID resolves the process-local credential scope for the
+// execution behind ctx: the run ID, falling back to the root workflow ID when
+// the run ID is empty (hitl.ScopeID). RunEnvironmentScout stores the scout's
+// credentials under exactly this key, so the env injection below reads the
+// same row the scout wrote.
+func credentialScopeID(ctx context.Context) string {
+	ec := executionContextFrom(ctx)
+	return hitl.ScopeID(ec.RunID, ec.RootWorkflowID)
 }
 
 // HarnessCaller is the minimal method set Run needs from *agent.Agent. Declaring
@@ -38,8 +43,9 @@ type HarnessCaller interface {
 //  1. Reflect T into the JSON schema the harness consumes (cached per type).
 //  2. Inject the build's run-scoped credentials into opts.Env, scoped creds
 //     overriding the base env — mirroring the Python precedence where a freshly
-//     minted scout token beats a stale value inherited from os.environ. The run
-//     ID comes from agent.ExecutionContextFrom(ctx).RunID.
+//     minted scout token beats a stale value inherited from os.environ. The
+//     scope key is the execution's run ID, or its root workflow ID when the
+//     run ID is empty (credentialScopeID).
 //  3. Call app.Harness with a fresh *T dest.
 //  4. Classify fatal (non-retryable) API errors FIRST, before the Parsed==nil
 //     fallback, so the real billing/auth message surfaces past every retry layer
@@ -56,8 +62,7 @@ type HarnessCaller interface {
 func Run[T any](ctx context.Context, app HarnessCaller, prompt string, opts harness.Options) (*T, *harness.Result, error) {
 	schema := schemaFor[T]()
 
-	runID := runIDFromContext(ctx)
-	opts.Env = hitl.InjectCredentialsIntoEnv(opts.Env, runID)
+	opts.Env = hitl.InjectCredentialsIntoEnv(opts.Env, credentialScopeID(ctx))
 
 	var dest T
 	result, err := app.Harness(ctx, prompt, schema, &dest, opts)

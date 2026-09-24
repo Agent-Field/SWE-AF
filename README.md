@@ -934,10 +934,20 @@ Fully customized:
 
 ```text
 .artifacts/
-├── plan/           # PRD, architecture, issue specs
+├── plan/           # PRD, architecture, issue specs, planning retry logs
 ├── execution/      # checkpoints, per-issue logs, agent outputs
 └── verification/   # acceptance criteria results
 ```
+
+Planning diagnostics are appended to `plan/<stage>_raw_response.txt` for
+`product_manager`, `architect`, `tech_lead`, and `sprint_planner`. Each invocation
+has a run header with a process-local section counter, so repeated calls within
+the same second can be distinguished. Failed schema attempts include bounded
+raw output; the terminal `===== outcome: ... =====` entry is kept on one physical
+line even when an error is multiline. Artifact writes are best-effort.
+Scout-negotiated credentials are redacted, including common JSON and URL
+encodings, but this is not a general-purpose secret scrubber: review logs before
+sharing them.
 
 </details>
 

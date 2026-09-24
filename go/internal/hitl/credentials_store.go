@@ -40,6 +40,18 @@ var (
 	store = map[string]map[string]string{}
 )
 
+// ScopeID resolves the process-local credential scope key for an execution:
+// the run ID when it is set, otherwise the root workflow ID. The scout stores
+// under this key when the run ID is empty, so every consumer (harness env
+// injection, retry-log redaction) must look up under the same key instead of
+// assuming the run ID alone.
+func ScopeID(runID, rootWorkflowID string) string {
+	if runID != "" {
+		return runID
+	}
+	return rootWorkflowID
+}
+
 // StoreScopedCredentials replaces the stored credentials for runID with creds.
 //
 // Filters out empty/whitespace-only values so a partially-filled mega-form
