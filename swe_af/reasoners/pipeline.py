@@ -11,7 +11,7 @@ import asyncio
 import json
 import os
 from collections import defaultdict, deque
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
@@ -213,12 +213,12 @@ def _redact_scoped_credentials(text: str) -> str:
     if not text:
         return text
     try:
-        from swe_af.hitl.credentials_store import get_scoped_credentials
-    except Exception:  # pragma: no cover  # noqa: BLE001 - diagnostics are best-effort
+        from swe_af.hitl.credentials_store import get_scoped_credentials  # noqa: PLC0415
+    except Exception:  # pragma: no cover - diagnostics must never fail a stage
         return text
     try:
         creds = get_scoped_credentials(_planning_run_id())
-    except Exception:  # pragma: no cover  # noqa: BLE001 - diagnostics are best-effort
+    except Exception:  # pragma: no cover - diagnostics must never fail a stage
         return text
     for name, value in sorted(
         creds.items(), key=lambda item: len(item[1]), reverse=True
@@ -253,7 +253,7 @@ def _describe_schema_failure(result, schema) -> str:
                     for err in exc.errors()[:10]
                 )
                 parse_error = f"raw response failed schema validation ({fields})"
-            except Exception as exc:  # noqa: BLE001 - surface any validator error
+            except Exception as exc:  # defensive: surface any validator error
                 parse_error = f"raw response failed schema validation ({exc})"
             else:
                 parse_error = "the harness returned no parsed result"
@@ -314,7 +314,7 @@ def _record_outcome_best_effort(stage: str, path: str, outcome: str) -> None:
     """Record a terminal retry outcome without ever failing the stage."""
     try:
         _record_retry_outcome(path, outcome)
-    except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the outcome
+    except Exception as exc:  # diagnostics must never mask the real outcome
         router.note(
             f"{stage} could not write the retry outcome to {path}: {exc}",
             tags=["planning", "schema_retry", "artifact_error"],
@@ -333,9 +333,9 @@ def _record_run_header_best_effort(stage: str, path: str) -> None:
         _append_artifact(
             path,
             f"===== run {_planning_run_id()} | {stage} | started "
-            f"{datetime.now(UTC).isoformat(timespec='seconds')} =====",
+            f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} =====",
         )
-    except Exception as exc:  # noqa: BLE001 - diagnostics must never fail the stage
+    except Exception as exc:  # diagnostics must never fail the stage
         router.note(
             f"{stage} could not write the retry-log header to {path}: {exc}",
             tags=["planning", "schema_retry", "artifact_error"],
@@ -418,7 +418,7 @@ async def _run_planning_call_with_schema_retries(
                 attempts=attempts,
                 error=last_error,
             )
-        except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the failure
+        except Exception as exc:  # diagnostics must never mask the real failure
             persistence_error = str(exc)
             router.note(
                 f"{stage} could not write the raw response to "

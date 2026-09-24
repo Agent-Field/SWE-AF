@@ -57,10 +57,8 @@ from swe_af.execution.schemas import (
     WorkspaceRepo,
     _default_planning_model,
     _default_runtime,
-    _workspace_root,
-)
-from swe_af.execution.schemas import (
     _derive_repo_name as _repo_name_from_url,
+    _workspace_root,
 )
 
 NODE_ID = os.getenv("NODE_ID", "swe-planner")
@@ -120,7 +118,7 @@ def _note_architecture_revision_degradation(message: str) -> None:
     """Emit a best-effort revision note without affecting degradation."""
     try:
         app.note(message, tags=["pipeline", "revision", "degraded"])
-    except Exception:  # noqa: BLE001, S110 - advisory notes must not affect the plan
+    except Exception:
         pass
 
 
@@ -133,7 +131,7 @@ def _snapshot_architecture_before_revision(
             return True, architecture_file.read()
     except FileNotFoundError:
         return False, b""
-    except Exception as exc:  # noqa: BLE001 - snapshot is best-effort
+    except Exception as exc:
         _note_architecture_revision_degradation(
             "Could not snapshot plan/architecture.md before revision: "
             f"{str(exc)[:500]}"
@@ -173,7 +171,7 @@ def _restore_architecture_after_failed_revision(
             _note_architecture_revision_degradation(
                 "Restored plan/architecture.md to the last completed revision"
             )
-    except Exception as exc:  # noqa: BLE001 - restoration is best-effort
+    except Exception as exc:
         _note_architecture_revision_degradation(
             "Could not restore plan/architecture.md after failed revision: "
             f"{str(exc)[:500]}"
@@ -1006,7 +1004,7 @@ async def build(
                         ), "run_architect (human revision)")
                     except (FatalHarnessError, ExecutionCancelledError):
                         raise
-                    except Exception as exc:  # noqa: BLE001 - non-fatal revisions degrade
+                    except Exception as exc:
                         _restore_architecture_after_failed_revision(
                             architecture_path, architecture_snapshot
                         )
@@ -1055,7 +1053,7 @@ async def build(
                                     ), "run_architect (tech lead revision)")
                                 except (FatalHarnessError, ExecutionCancelledError):
                                     raise
-                                except Exception as exc:  # noqa: BLE001 - non-fatal revisions degrade
+                                except Exception as exc:
                                     _restore_architecture_after_failed_revision(
                                         architecture_path, architecture_snapshot
                                     )
@@ -1716,7 +1714,7 @@ async def plan(
                 ), "run_architect (revision)")
             except (FatalHarnessError, ExecutionCancelledError):
                 raise
-            except Exception as exc:  # noqa: BLE001 - non-fatal revisions degrade
+            except Exception as exc:
                 _restore_architecture_after_failed_revision(
                     architecture_path, architecture_snapshot
                 )

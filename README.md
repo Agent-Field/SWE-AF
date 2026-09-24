@@ -621,18 +621,6 @@ docker compose -f docker-compose.local.yml up -d
 
 Pass `repo_url` instead of `repo_path` to let SWE-AF clone and open a PR after execution.
 
-For `swe-fast.build` (Python and Go), an omitted `repo_path` uses a reusable
-`<SWE_WORKSPACE_ROOT>/<repo-name>` checkout. Treat this derived directory as
-disposable: preparation may delete and re-clone it if it is not a Git repository,
-its origin differs, or resetting to `origin/<github_pr_base>` fails. Otherwise,
-it removes stale `.worktrees`, fetches origin, and hard-resets tracked files to
-that branch (`main` by default); unrelated untracked files are not cleaned.
-Do not run concurrent fast builds against the same derived path. Supply distinct
-`repo_path` values for concurrent builds. An explicitly supplied existing Git
-checkout is left untouched by repository preparation (the build itself still
-modifies it); an explicit nonempty non-Git directory is not deleted to make room
-for a clone. Without a `repo_url`, fast mode uses or creates the local directory.
-
 ```bash
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
