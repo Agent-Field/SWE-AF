@@ -274,7 +274,7 @@ def _redact_scoped_credentials(text: str) -> str:
         pattern = re.sub(
             r"%[0-9a-fA-F]{2}", lambda match: f"(?i:{match[0]})", re.escape(form)
         )
-        text = re.sub(pattern, lambda _: f"[REDACTED:{name}]", text)
+        text = re.sub(pattern, lambda _, name=name: f"[REDACTED:{name}]", text)
     return text
 
 
