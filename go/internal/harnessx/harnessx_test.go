@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Agent-Field/agentfield/sdk/go/agent"
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fatal"
@@ -146,9 +147,11 @@ func TestRunInjectsScopedCredsOverridingBase(t *testing.T) {
 	hitl.StoreScopedCredentials(runID, map[string]string{"RAILWAY_TOKEN": "fresh"})
 	defer hitl.ClearScopedCredentials(runID)
 
-	restore := runIDFromContext
-	runIDFromContext = func(context.Context) string { return runID }
-	defer func() { runIDFromContext = restore }()
+	restore := executionContextFrom
+	executionContextFrom = func(context.Context) agent.ExecutionContext {
+		return agent.ExecutionContext{RunID: runID}
+	}
+	defer func() { executionContextFrom = restore }()
 
 	mh := &mockHarness{
 		fn: func(_ context.Context, _ string, _ map[string]any, dest any, _ harness.Options) (*harness.Result, error) {
@@ -170,6 +173,35 @@ func TestRunInjectsScopedCredsOverridingBase(t *testing.T) {
 	// Base map must not be mutated in place (InjectCredentialsIntoEnv returns a copy).
 	if base.Env["RAILWAY_TOKEN"] != "stale" {
 		t.Fatalf("base env was mutated: %v", base.Env)
+	}
+}
+
+// Contract: when the run ID is empty the credential lookup uses the root
+// workflow ID — the same scope Key RunEnvironmentScout stores under — instead
+// of an empty key that would silently skip injection.
+func TestRunInjectsRootWorkflowScopedCredsWhenRunIDEmpty(t *testing.T) {
+	const rootID = "root-workflow-123"
+	hitl.StoreScopedCredentials(rootID, map[string]string{"RAILWAY_TOKEN": "root-fresh"})
+	defer hitl.ClearScopedCredentials(rootID)
+
+	restore := executionContextFrom
+	executionContextFrom = func(context.Context) agent.ExecutionContext {
+		return agent.ExecutionContext{RunID: "", RootWorkflowID: rootID}
+	}
+	defer func() { executionContextFrom = restore }()
+
+	mh := &mockHarness{
+		fn: func(_ context.Context, _ string, _ map[string]any, dest any, _ harness.Options) (*harness.Result, error) {
+			return &harness.Result{Parsed: dest}, nil
+		},
+	}
+
+	if _, _, err := Run[seededResult](context.Background(), mh, "prompt", harness.Options{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := mh.gotOpts.Env["RAILWAY_TOKEN"]; got != "root-fresh" {
+		t.Fatalf("expected root-workflow scoped cred injected, got RAILWAY_TOKEN=%q", got)
 	}
 }
 

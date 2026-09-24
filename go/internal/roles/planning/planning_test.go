@@ -809,6 +809,182 @@ func TestScopedCredentialsRedactedFromRetryLog(t *testing.T) {
 	}
 }
 
+// Contract: when RunID is empty the scout stores under RootWorkflowID, and the
+// retry-log redactor looks the credential up under that same root scope rather
+// than an empty key.
+func TestScopedCredentialsRedactedWithRootWorkflowScope(t *testing.T) {
+	repo := t.TempDir()
+	const rootID = "root-workflow-redact"
+	restore := executionContextFrom
+	executionContextFrom = func(context.Context) agent.ExecutionContext {
+		return agent.ExecutionContext{RunID: "", RootWorkflowID: rootID}
+	}
+	defer func() { executionContextFrom = restore }()
+
+	secret := "deploy-token-9f3a2b7c"
+	hitl.StoreScopedCredentials(rootID, map[string]string{"DEPLOY_TOKEN": secret})
+	defer hitl.ClearScopedCredentials(rootID)
+
+	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		return badSchemaResult(`{"issues": "` + secret + `", "rationale": 7}`), nil
+	}}
+	deps, _ := newDeps(h)
+	_, err := RunSprintPlanner(context.Background(), deps, map[string]any{"repo_path": repo})
+	if err == nil {
+		t.Fatalf("expected the schema failure to surface")
+	}
+
+	log := readRetryLog(t, repo, "sprint_planner_raw_response.txt")
+	if strings.Contains(log, secret) {
+		t.Fatalf("secret leaked into the retry log when scoped by root workflow id:\n%s", log)
+	}
+	if !strings.Contains(log, "[REDACTED:DEPLOY_TOKEN]") {
+		t.Fatalf("expected the redaction marker in the log:\n%s", log)
+	}
+}
+
+// Contract: a credential containing JSON-special or URL-special characters is
+// redacted in its exact, JSON-escaped, and percent-/form-encoded spellings, and
+// non-secret text is preserved.
+func TestRedactScopedCredentialsCoversEncodedSpellings(t *testing.T) {
+	const scopeID = "run-encoded-forms"
+	secret := `ab"cd\ef /?:+=`
+	hitl.StoreScopedCredentials(scopeID, map[string]string{"DEPLOY_TOKEN": secret})
+	defer hitl.ClearScopedCredentials(scopeID)
+
+	jsonBody, err := json.Marshal(secret)
+	if err != nil {
+		t.Fatalf("marshal secret: %v", err)
+	}
+	spellings := []struct{ name, form string }{
+		{"exact", secret},
+		// JSON-escaped body without the surrounding quotes, built by an
+		// independent encoder rather than the production helper.
+		{"json_escaped", string(jsonBody[1 : len(jsonBody)-1])},
+		{"url_percent", percentEncode(secret, false)},
+		{"url_plus", percentEncode(secret, true)},
+	}
+	for _, spelling := range spellings {
+		t.Run(spelling.name, func(t *testing.T) {
+			got := redactScopedCredentials(scopeID, "echo "+spelling.form+" done")
+			if strings.Contains(got, spelling.form) {
+				t.Fatalf("spelling %q survived redaction: %q", spelling.form, got)
+			}
+			if !strings.Contains(got, "[REDACTED:DEPLOY_TOKEN]") {
+				t.Fatalf("expected redaction marker for spelling %q, got %q", spelling.form, got)
+			}
+			if !strings.Contains(got, "echo ") || !strings.Contains(got, " done") {
+				t.Fatalf("non-secret text was not preserved: %q", got)
+			}
+		})
+	}
+}
+
+// Contract: a multi-line fatal reason must not split the terminal outcome over
+// several physical lines; the last line stays the flattened outcome.
+func TestRetryLogFlattensMultilineFatalReason(t *testing.T) {
+	repo := t.TempDir()
+	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		return &harness.Result{
+			IsError:      true,
+			Parsed:       nil,
+			ErrorMessage: "Credit balance is too low.\nAdd funds.\nSee the billing page.",
+		}, nil
+	}}
+	deps, _ := newDeps(h)
+	_, err := RunProductManager(context.Background(), deps, map[string]any{"goal": "x", "repo_path": repo})
+	if err == nil || !strings.Contains(err.Error(), "Fatal API error") {
+		t.Fatalf("expected fatal harness error, got %v", err)
+	}
+
+	log := readRetryLog(t, repo, "product_manager_raw_response.txt")
+	lastLine := lastLogLine(log)
+	if !strings.HasPrefix(lastLine, "===== outcome: FAILED after attempt 1/2:") {
+		t.Fatalf("expected terminal outcome as the last line, got %q", lastLine)
+	}
+	if !strings.Contains(lastLine, "Add funds.") || !strings.HasSuffix(lastLine, "=====") {
+		t.Fatalf("outcome reason was not flattened onto one line: %q", lastLine)
+	}
+	for _, line := range strings.Split(log, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "Add funds." || trimmed == "See the billing page." {
+			t.Fatalf("reason continuation leaked onto its own physical line:\n%s", log)
+		}
+	}
+}
+
+// Contract: a schema failure whose harness message spans lines keeps each
+// attempt header and the terminal outcome on one physical line each.
+func TestRetryLogFlattensMultilineSchemaFailure(t *testing.T) {
+	repo := t.TempDir()
+	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		bad := badSchemaResult(`{"issues": "not-a-list", "rationale": 7}`)
+		bad.ErrorMessage = "Schema validation failed.\nretry budget gone."
+		return bad, nil
+	}}
+	deps, _ := newDeps(h)
+	if _, err := RunSprintPlanner(context.Background(), deps, map[string]any{"repo_path": repo}); err == nil {
+		t.Fatalf("expected the schema failure to surface")
+	}
+
+	log := readRetryLog(t, repo, "sprint_planner_raw_response.txt")
+	attempts := 0
+	for _, line := range strings.Split(log, "\n") {
+		if strings.HasPrefix(line, "===== attempt ") {
+			attempts++
+			if !strings.Contains(line, "retry budget gone.") {
+				t.Fatalf("attempt header lost the reason: %q", line)
+			}
+		}
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempt headers, got %d:\n%s", attempts, log)
+	}
+	lastLine := lastLogLine(log)
+	if !strings.HasPrefix(lastLine, "===== outcome: FAILED after 3 attempt(s):") ||
+		!strings.Contains(lastLine, "retry budget gone.") {
+		t.Fatalf("expected one flattened terminal outcome line, got %q", lastLine)
+	}
+	for _, line := range strings.Split(log, "\n") {
+		if strings.TrimSpace(line) == "retry budget gone." {
+			t.Fatalf("reason continuation leaked onto its own physical line:\n%s", log)
+		}
+	}
+}
+
+// Contract: two invocations with the same scope id in the same second get
+// distinguishable run headers — the second-granular timestamp alone is not
+// enough.
+func TestRetryLogRunHeadersDistinctWithinSameSecond(t *testing.T) {
+	repo := t.TempDir()
+	path := filepath.Join(repo, "headers.txt")
+	deps, _ := newDeps(&fakeHarness{})
+	ctx := context.Background()
+
+	recordRunHeaderBestEffort(ctx, deps, "Sprint planner", path, "run-same")
+	recordRunHeaderBestEffort(ctx, deps, "Sprint planner", path, "run-same")
+
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected header log: %v", err)
+	}
+	var headers []string
+	for _, line := range strings.Split(string(blob), "\n") {
+		if strings.HasPrefix(line, "===== run ") {
+			headers = append(headers, line)
+		}
+	}
+	if len(headers) != 2 {
+		t.Fatalf("expected 2 run headers, got %d:\n%s", len(headers), blob)
+	}
+	if headers[0] == headers[1] {
+		t.Fatalf("same-second invocations produced identical headers: %q", headers[0])
+	}
+	if !strings.Contains(headers[0], "| section ") || !strings.Contains(headers[1], "| section ") {
+		t.Fatalf("headers must carry section numbers: %q / %q", headers[0], headers[1])
+	}
+}
+
 // readRetryLog reads a stage retry log and fails the test when it is missing.
 func readRetryLog(t *testing.T, repo, artifact string) string {
 	t.Helper()
