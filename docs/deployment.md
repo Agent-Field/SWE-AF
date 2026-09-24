@@ -171,9 +171,7 @@ pip install --upgrade agentfield
 
 **Root cause:** Both builds cloned to the same workspace path (`/workspaces/<repo-name>`), sharing git state and artifacts.
 
-**Fix:** Full-pipeline (`swe-planner`) builds derive an isolated workspace: `/workspaces/<repo-name>-<build_id>`.
-
-Fast-mode (`swe-fast`) builds instead reuse `/workspaces/<repo-name>` when only `repo_url` is supplied. In both Python and Go, repository preparation clones before planning, resets an existing matching clone to `origin/<github_pr_base>` (default `main`), and re-clones if the remote differs or reset fails. Derived paths may be cleared, including stale `.worktrees`; do not keep local work there or run concurrent fast builds against the same derived path. For concurrent fast builds, supply distinct `repo_path` values. Preparation leaves an explicitly supplied existing checkout untouched; an explicit non-empty directory without `.git` causes cloning to fail rather than being cleared.
+**Fix:** This is fixed in the current version. Each build now gets an isolated workspace: `/workspaces/<repo-name>-<build_id>`.
 
 **Ref:** [#43](https://github.com/Agent-Field/SWE-AF/issues/43)
 
@@ -181,7 +179,7 @@ Fast-mode (`swe-fast`) builds instead reuse `/workspaces/<repo-name>` when only 
 
 ### Multiple concurrent builds
 
-Follow the [workspace isolation rules above](#parallel-builds-cross-contamination) before running concurrent builds. To scale the full-pipeline service:
+Each build automatically gets an isolated workspace. To run multiple builds concurrently:
 
 ```bash
 # Scale the agent service
