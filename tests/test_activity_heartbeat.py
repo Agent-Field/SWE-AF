@@ -292,6 +292,69 @@ async def test_prior_caught_cancellation_still_propagates_new_teardown_cancel(
 
 
 @pytest.mark.asyncio
+async def test_outer_cancellation_while_child_running_propagates() -> None:
+    """A cancel landing while the child is still running must cancel the wait
+    and the child task; neither may be swallowed by heartbeat teardown."""
+    activity = ChildToolActivity()
+    child_started = asyncio.Event()
+
+    async def long_child() -> str:
+        child_started.set()
+        await asyncio.sleep(30)
+        return "unreachable"
+
+    child_task = asyncio.ensure_future(long_child())
+    await child_started.wait()
+
+    async def run_wrapper() -> str:
+        return await run_with_activity_heartbeat(
+            child_task,
+            note_fn=lambda *_args, **_kwargs: None,
+            activity=activity,
+            interval_seconds=30.0,
+        )
+
+    wrapper_task = asyncio.ensure_future(run_wrapper())
+    await asyncio.sleep(0)
+    wrapper_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await wrapper_task
+
+    assert wrapper_task.cancelled()
+    assert child_task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_prior_caught_cancellation_failing_child_still_raises_child_error() -> (
+    None
+):
+    """With a stale cancellation count, a child that *fails* must still raise
+    its own error; heartbeat teardown must not replace it with a
+    CancelledError."""
+    activity = ChildToolActivity()
+
+    async def failing_child() -> str:
+        await asyncio.sleep(0.02)
+        raise RuntimeError("tool failed")
+
+    async def run_wrapper() -> str:
+        await _leave_stale_cancellation()
+        return await run_with_activity_heartbeat(
+            failing_child(),
+            note_fn=lambda *_args, **_kwargs: None,
+            activity=activity,
+            interval_seconds=30.0,
+        )
+
+    wrapper_task = asyncio.ensure_future(run_wrapper())
+    with pytest.raises(RuntimeError, match="tool failed"):
+        await wrapper_task
+
+    assert not wrapper_task.cancelled()
+
+
+@pytest.mark.asyncio
 async def test_activity_stops_immediately_after_terminal_resolution() -> None:
     child = _FakeChild()
     activity = ChildToolActivity()
