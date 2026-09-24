@@ -106,6 +106,40 @@ func sortedSet(m map[string]bool) []string {
 	return out
 }
 
+// badSchemaResult builds a harness result that produced raw text which failed
+// schema validation.
+func badSchemaResult(raw string) *harness.Result {
+	return &harness.Result{
+		IsError:      true,
+		Parsed:       nil,
+		Result:       raw,
+		FailureType:  harness.FailureSchema,
+		ErrorMessage: "Schema validation failed after retries.",
+	}
+}
+
+// assertRetryLog checks that an append-only stage retry log carries a run
+// header and contains the wanted snippets and its terminal outcome line.
+func assertRetryLog(t *testing.T, path string, want []string, outcome string) {
+	t.Helper()
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected retry log at %s: %v", path, err)
+	}
+	log := string(blob)
+	if !strings.Contains(log, "===== run ") || !strings.Contains(log, " | started ") {
+		t.Fatalf("retry log missing run header:\n%s", log)
+	}
+	for _, snippet := range want {
+		if !strings.Contains(log, snippet) {
+			t.Fatalf("retry log missing %q:\n%s", snippet, log)
+		}
+	}
+	if !strings.Contains(log, outcome) {
+		t.Fatalf("retry log missing outcome %q:\n%s", outcome, log)
+	}
+}
+
 // --- run_product_manager ----------------------------------------------------
 
 // Contract: on success PM returns a PRD model_dump (the full PRD key set).
@@ -201,16 +235,29 @@ func TestProductManagerDirectCallRuntimeDefaults(t *testing.T) {
 	})
 }
 
-// Contract: parse failure raises (not a fallback).
+// Contract: parse failure raises after the bounded retries, naming the stage
+// and the failing field, with the raw response and terminal outcome retained.
 func TestProductManagerParseFailureRaises(t *testing.T) {
+	repo := t.TempDir()
+	raw := `{"validated_description": 7}`
 	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
-		return &harness.Result{IsError: true, ErrorMessage: "schema validation failed", Parsed: nil}, nil
+		return badSchemaResult(raw), nil
 	}}
 	deps, _ := newDeps(h)
-	_, err := RunProductManager(context.Background(), deps, map[string]any{"repo_path": t.TempDir()})
-	if err == nil || !strings.Contains(err.Error(), "Product manager failed to produce a valid PRD") {
+	_, err := RunProductManager(context.Background(), deps, map[string]any{"repo_path": repo})
+	if err == nil || !strings.Contains(err.Error(), "Product manager failed to produce a valid PRD after 2 attempt(s)") {
 		t.Fatalf("expected PRD failure error, got %v", err)
 	}
+	if !strings.Contains(err.Error(), "validated_description") {
+		t.Fatalf("expected the failing field named in the error, got %v", err)
+	}
+	if h.calls != 2 {
+		t.Fatalf("expected 2 attempts (1 retry), got %d", h.calls)
+	}
+	assertRetryLog(t,
+		filepath.Join(repo, ".artifacts", "plan", "product_manager_raw_response.txt"),
+		[]string{raw, "attempt 1/2 failed"},
+		"outcome: FAILED after 2 attempt(s)")
 }
 
 // Contract: a fatal harness error propagates as *FatalHarnessError.
@@ -409,16 +456,29 @@ func TestArchitectIncludesFeedback(t *testing.T) {
 	}
 }
 
-// Contract: parse failure raises.
+// Contract: parse failure raises after the bounded retries, naming the stage
+// and the failing field, with the raw response and terminal outcome retained.
 func TestArchitectParseFailureRaises(t *testing.T) {
+	repo := t.TempDir()
+	raw := `{"summary": 7}`
 	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
-		return &harness.Result{IsError: true, Parsed: nil}, nil
+		return badSchemaResult(raw), nil
 	}}
 	deps, _ := newDeps(h)
-	_, err := RunArchitect(context.Background(), deps, map[string]any{"repo_path": t.TempDir()})
-	if err == nil || !strings.Contains(err.Error(), "Architect failed to produce a valid architecture") {
+	_, err := RunArchitect(context.Background(), deps, map[string]any{"repo_path": repo})
+	if err == nil || !strings.Contains(err.Error(), "Architect failed to produce a valid architecture after 2 attempt(s)") {
 		t.Fatalf("expected architect failure error, got %v", err)
 	}
+	if !strings.Contains(err.Error(), "summary") {
+		t.Fatalf("expected the failing field named in the error, got %v", err)
+	}
+	if h.calls != 2 {
+		t.Fatalf("expected 2 attempts (1 retry), got %d", h.calls)
+	}
+	assertRetryLog(t,
+		filepath.Join(repo, ".artifacts", "plan", "architect_raw_response.txt"),
+		[]string{raw, "attempt 1/2 failed"},
+		"outcome: FAILED after 2 attempt(s)")
 }
 
 // --- run_tech_lead ----------------------------------------------------------
@@ -454,16 +514,320 @@ func TestTechLeadWritesReviewJSON(t *testing.T) {
 	}
 }
 
-// Contract: parse failure raises.
+// Contract: parse failure raises after the bounded retries, naming the stage
+// and the failing field, with the raw response and terminal outcome retained.
 func TestTechLeadParseFailureRaises(t *testing.T) {
+	repo := t.TempDir()
+	raw := `{"approved": 3, "feedback": "ok", "summary": "x"}`
 	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
-		return &harness.Result{IsError: true, Parsed: nil}, nil
+		return badSchemaResult(raw), nil
 	}}
 	deps, _ := newDeps(h)
-	_, err := RunTechLead(context.Background(), deps, map[string]any{"repo_path": t.TempDir()})
-	if err == nil || !strings.Contains(err.Error(), "Tech lead failed to produce a valid review") {
+	_, err := RunTechLead(context.Background(), deps, map[string]any{"repo_path": repo})
+	if err == nil || !strings.Contains(err.Error(), "Tech lead failed to produce a valid review after 2 attempt(s)") {
 		t.Fatalf("expected tech lead failure error, got %v", err)
 	}
+	if !strings.Contains(err.Error(), "approved") {
+		t.Fatalf("expected the failing field named in the error, got %v", err)
+	}
+	if h.calls != 2 {
+		t.Fatalf("expected 2 attempts (1 retry), got %d", h.calls)
+	}
+	assertRetryLog(t,
+		filepath.Join(repo, ".artifacts", "plan", "tech_lead_raw_response.txt"),
+		[]string{raw, "attempt 1/2 failed"},
+		"outcome: FAILED after 2 attempt(s)")
+}
+
+// planningStageCase describes one of the newly covered planning stages
+// (PM / architect / tech lead) so its retry behavior can be tested uniformly.
+type planningStageCase struct {
+	name         string
+	artifact     string
+	role         string
+	badRaw       string
+	failingField string
+	run          func(deps *Deps, repo string) (any, error)
+	populate     func(dest any)
+}
+
+func newPlanningStageCases() []planningStageCase {
+	return []planningStageCase{
+		{
+			name:         "product_manager",
+			artifact:     "product_manager_raw_response.txt",
+			role:         "PM",
+			badRaw:       `{"validated_description": 7}`,
+			failingField: "validated_description",
+			run: func(deps *Deps, repo string) (any, error) {
+				return RunProductManager(context.Background(), deps, map[string]any{
+					"goal": "build a fixture", "repo_path": repo,
+				})
+			},
+			populate: func(dest any) {
+				dest.(*schemas.PRD).ValidatedDescription = "build a fixture"
+			},
+		},
+		{
+			name:         "architect",
+			artifact:     "architect_raw_response.txt",
+			role:         "Architect",
+			badRaw:       `{"summary": 7}`,
+			failingField: "summary",
+			run: func(deps *Deps, repo string) (any, error) {
+				return RunArchitect(context.Background(), deps, map[string]any{
+					"prd":       map[string]any{"validated_description": "x"},
+					"repo_path": repo,
+				})
+			},
+			populate: func(dest any) {
+				dest.(*schemas.Architecture).Summary = "one component"
+			},
+		},
+		{
+			name:         "tech_lead",
+			artifact:     "tech_lead_raw_response.txt",
+			role:         "Tech lead",
+			badRaw:       `{"approved": 3, "feedback": "ok", "summary": "x"}`,
+			failingField: "approved",
+			run: func(deps *Deps, repo string) (any, error) {
+				return RunTechLead(context.Background(), deps, map[string]any{
+					"prd":       map[string]any{"validated_description": "x"},
+					"repo_path": repo,
+				})
+			},
+			populate: func(dest any) {
+				dest.(*schemas.ReviewResult).Approved = true
+			},
+		},
+	}
+}
+
+// Contract: each newly covered planning stage retries a schema-invalid
+// response with the validation error fed back, then records its recovery.
+func TestPlanningStagesRetryWithValidationError(t *testing.T) {
+	for _, tc := range newPlanningStageCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			h := &fakeHarness{fn: func(call int, _ string, dest any, _ harness.Options) (*harness.Result, error) {
+				if call == 1 {
+					return badSchemaResult(tc.badRaw), nil
+				}
+				tc.populate(dest)
+				return &harness.Result{Parsed: dest}, nil
+			}}
+			deps, _ := newDeps(h)
+			if _, err := tc.run(deps, repo); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if h.calls != 2 {
+				t.Fatalf("expected 2 harness calls, got %d", h.calls)
+			}
+			if !strings.Contains(h.prompts[1], "Retry Context") || !strings.Contains(h.prompts[1], tc.failingField) {
+				t.Fatalf("expected validation error fed back into retry prompt, got %q", h.prompts[1])
+			}
+			assertRetryLog(t,
+				filepath.Join(repo, ".artifacts", "plan", tc.artifact),
+				[]string{tc.badRaw, "attempt 1/2 failed"},
+				"outcome: succeeded on attempt 2/2")
+		})
+	}
+}
+
+// Contract: each newly covered planning stage fails fast on an empty
+// completion instead of burning its retry bound, and the log still ends with a
+// terminal outcome line.
+func TestPlanningStagesEmptyCompletionFailsFast(t *testing.T) {
+	for _, tc := range newPlanningStageCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+				return &harness.Result{IsError: true, Parsed: nil}, nil
+			}}
+			deps, _ := newDeps(h)
+			_, err := tc.run(deps, repo)
+			if err == nil || !strings.Contains(err.Error(), tc.role+" harness returned an empty completion") {
+				t.Fatalf("expected empty-completion error naming %s, got %v", tc.role, err)
+			}
+			if h.calls != 1 {
+				t.Fatalf("empty completion must not be retried, got %d calls", h.calls)
+			}
+			log := readRetryLog(t, repo, tc.artifact)
+			if !strings.Contains(log, "outcome: FAILED after attempt 1/2:") {
+				t.Fatalf("empty completion must record a terminal outcome:\n%s", log)
+			}
+		})
+	}
+}
+
+// Contract: a fatal API error arriving on a retry records a terminal outcome
+// before it propagates, so the log never ends on "attempt 1/N failed".
+func TestPlanningStagesFatalOnRetryRecordsOutcome(t *testing.T) {
+	for _, tc := range newPlanningStageCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			h := &fakeHarness{fn: func(call int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+				if call == 1 {
+					return badSchemaResult(tc.badRaw), nil
+				}
+				return &harness.Result{
+					IsError:      true,
+					Parsed:       nil,
+					ErrorMessage: "Credit balance is too low. Add funds.",
+				}, nil
+			}}
+			deps, _ := newDeps(h)
+			_, err := tc.run(deps, repo)
+			if err == nil || !strings.Contains(err.Error(), "Fatal API error") {
+				t.Fatalf("expected fatal harness error, got %v", err)
+			}
+			if h.calls != 2 {
+				t.Fatalf("expected 2 harness calls, got %d", h.calls)
+			}
+			log := readRetryLog(t, repo, tc.artifact)
+			if !strings.Contains(log, "attempt 1/2 failed") {
+				t.Fatalf("failed first attempt not retained:\n%s", log)
+			}
+			lastLine := lastLogLine(log)
+			if !strings.HasPrefix(lastLine, "===== outcome: FAILED after attempt 2/2:") {
+				t.Fatalf("expected terminal outcome as the last line, got %q", lastLine)
+			}
+			if !strings.Contains(strings.ToLower(lastLine), "credit balance is too low") {
+				t.Fatalf("outcome must carry the fatal reason, got %q", lastLine)
+			}
+		})
+	}
+}
+
+// Contract: an empty completion arriving on a retry gets the same terminal
+// outcome treatment as any other early exit.
+func TestPlanningStagesEmptyOnRetryRecordsOutcome(t *testing.T) {
+	for _, tc := range newPlanningStageCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			h := &fakeHarness{fn: func(call int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+				if call == 1 {
+					return badSchemaResult(tc.badRaw), nil
+				}
+				return &harness.Result{IsError: true, Parsed: nil}, nil
+			}}
+			deps, _ := newDeps(h)
+			_, err := tc.run(deps, repo)
+			if err == nil || !strings.Contains(err.Error(), "empty completion") {
+				t.Fatalf("expected empty-completion error, got %v", err)
+			}
+			if h.calls != 2 {
+				t.Fatalf("expected 2 harness calls, got %d", h.calls)
+			}
+			lastLine := lastLogLine(readRetryLog(t, repo, tc.artifact))
+			if !strings.HasPrefix(lastLine, "===== outcome: FAILED after attempt 2/2:") || !strings.Contains(lastLine, "empty completion") {
+				t.Fatalf("expected empty-completion outcome as the last line, got %q", lastLine)
+			}
+		})
+	}
+}
+
+// Contract: a second build against the same repo path appends a new run
+// section whose outcome is the last line, not the first build's FAILED outcome.
+func TestRetryLogSeparatesBuilds(t *testing.T) {
+	repo := t.TempDir()
+	rawPath := filepath.Join(repo, ".artifacts", "plan", "sprint_planner_raw_response.txt")
+
+	first := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		return badSchemaResult(`{"issues": "not-a-list", "rationale": 7}`), nil
+	}}
+	deps1, _ := newDeps(first)
+	if _, err := RunSprintPlanner(context.Background(), deps1, map[string]any{
+		"prd":          map[string]any{"validated_description": "x"},
+		"architecture": map[string]any{"summary": "y"},
+		"repo_path":    repo,
+	}); err == nil {
+		t.Fatalf("expected build 1 to exhaust its bound")
+	}
+
+	second := &fakeHarness{fn: func(_ int, _ string, dest any, _ harness.Options) (*harness.Result, error) {
+		s := dest.(*sprintPlanOutput)
+		s.Rationale = "recovered"
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	deps2, _ := newDeps(second)
+	if _, err := RunSprintPlanner(context.Background(), deps2, map[string]any{
+		"prd":          map[string]any{"validated_description": "x"},
+		"architecture": map[string]any{"summary": "y"},
+		"repo_path":    repo,
+	}); err != nil {
+		t.Fatalf("build 2 should succeed: %v", err)
+	}
+
+	blob, err := os.ReadFile(rawPath)
+	if err != nil {
+		t.Fatalf("expected retry log at %s: %v", rawPath, err)
+	}
+	log := string(blob)
+	if !strings.Contains(log, "outcome: FAILED after 3 attempt(s)") {
+		t.Fatalf("build 1's outcome must be retained:\n%s", log)
+	}
+	if strings.Count(log, "===== run ") != 2 {
+		t.Fatalf("expected one run header per build:\n%s", log)
+	}
+	if lastLine := lastLogLine(log); lastLine != "===== outcome: succeeded on attempt 1/3 =====" {
+		t.Fatalf("expected build 2's outcome as the last line, got %q", lastLine)
+	}
+}
+
+// Contract: run-scoped credentials echoed into a response cannot land in the
+// archived retry log or the raised error.
+func TestScopedCredentialsRedactedFromRetryLog(t *testing.T) {
+	repo := t.TempDir()
+	oldContext := executionContextFrom
+	executionContextFrom = func(context.Context) agent.ExecutionContext {
+		return agent.ExecutionContext{RunID: "run-redact"}
+	}
+	defer func() { executionContextFrom = oldContext }()
+
+	secret := "deploy-token-9f3a2b7c"
+	hitl.StoreScopedCredentials("run-redact", map[string]string{"DEPLOY_TOKEN": secret})
+	defer hitl.ClearScopedCredentials("run-redact")
+
+	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		return badSchemaResult(`{"issues": "` + secret + `", "rationale": 7}`), nil
+	}}
+	deps, _ := newDeps(h)
+	_, err := RunSprintPlanner(context.Background(), deps, map[string]any{"repo_path": repo})
+	if err == nil {
+		t.Fatalf("expected the schema failure to surface")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("secret leaked into the raised error: %v", err)
+	}
+	log := readRetryLog(t, repo, "sprint_planner_raw_response.txt")
+	if strings.Contains(log, secret) {
+		t.Fatalf("secret leaked into the retry log:\n%s", log)
+	}
+	if !strings.Contains(log, "[REDACTED:DEPLOY_TOKEN]") {
+		t.Fatalf("expected the redaction marker in the log:\n%s", log)
+	}
+}
+
+// readRetryLog reads a stage retry log and fails the test when it is missing.
+func readRetryLog(t *testing.T, repo, artifact string) string {
+	t.Helper()
+	blob, err := os.ReadFile(filepath.Join(repo, ".artifacts", "plan", artifact))
+	if err != nil {
+		t.Fatalf("expected retry log for %s: %v", artifact, err)
+	}
+	return string(blob)
+}
+
+// lastLogLine returns the final non-empty line of a retry log.
+func lastLogLine(log string) string {
+	lines := strings.Split(strings.TrimRight(log, "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return lines[i]
+		}
+	}
+	return ""
 }
 
 // --- run_sprint_planner -----------------------------------------------------
@@ -505,15 +869,193 @@ func TestSprintPlannerSuccess(t *testing.T) {
 		"files_to_modify", "testing_strategy", "sequence_number", "guidance", "target_repo")
 }
 
-// Contract: parse failure raises.
+// Contract: parse failure raises after the bounded retries (default 2 retries,
+// 3 attempts), naming the stage and the failing field, with every failed
+// attempt and the terminal outcome retained in the retry log.
 func TestSprintPlannerParseFailureRaises(t *testing.T) {
+	repo := t.TempDir()
+	raw := []string{
+		`{"issues": "not-a-list", "rationale": 7}`,
+		`{"issues": 42, "rationale": "ok"}`,
+		`{"issues": {"nested": true}, "rationale": "ok"}`,
+	}
+	h := &fakeHarness{fn: func(call int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		return &harness.Result{
+			IsError:      true,
+			Parsed:       nil,
+			Result:       raw[call-1],
+			FailureType:  harness.FailureSchema,
+			ErrorMessage: "Schema validation failed after retries.",
+		}, nil
+	}}
+	deps, _ := newDeps(h)
+	_, err := RunSprintPlanner(context.Background(), deps, map[string]any{"repo_path": repo})
+	if err == nil || !strings.Contains(err.Error(), "Sprint planner failed to produce valid issues after 3 attempt(s)") {
+		t.Fatalf("expected sprint planner failure error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "issues") {
+		t.Fatalf("expected the failing field named in the error, got %v", err)
+	}
+	if h.calls != 3 {
+		t.Fatalf("expected 3 attempts (default 2 retries), got %d", h.calls)
+	}
+	rawPath := filepath.Join(repo, ".artifacts", "plan", "sprint_planner_raw_response.txt")
+	blob, readErr := os.ReadFile(rawPath)
+	if readErr != nil {
+		t.Fatalf("expected raw responses retained at %s: %v", rawPath, readErr)
+	}
+	log := string(blob)
+	for i, want := range raw {
+		if !strings.Contains(log, want) {
+			t.Fatalf("attempt %d raw response not retained; log:\n%s", i+1, log)
+		}
+	}
+	if !strings.Contains(log, "outcome: FAILED after 3 attempt(s)") {
+		t.Fatalf("expected terminal FAILED outcome in log:\n%s", log)
+	}
+}
+
+// Contract: a failed attempt is retried with the validation error fed back into
+// the prompt, and the final-outcome line records the recovery.
+func TestSprintPlannerRetriesWithValidationError(t *testing.T) {
+	repo := t.TempDir()
+	h := &fakeHarness{fn: func(call int, _ string, dest any, _ harness.Options) (*harness.Result, error) {
+		if call == 1 {
+			return &harness.Result{
+				IsError:      true,
+				Parsed:       nil,
+				Result:       `{"issues": "not-a-list", "rationale": 7}`,
+				FailureType:  harness.FailureSchema,
+				ErrorMessage: "bad output",
+			}, nil
+		}
+		s := dest.(*sprintPlanOutput)
+		s.Rationale = "split by layer"
+		s.Issues = []schemas.PlannedIssue{{Name: "issue-a", Title: "A"}}
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	deps, _ := newDeps(h)
+	out, err := RunSprintPlanner(context.Background(), deps, map[string]any{
+		"prd":          map[string]any{"validated_description": "x"},
+		"architecture": map[string]any{"summary": "y"},
+		"repo_path":    repo,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if h.calls != 2 {
+		t.Fatalf("expected 2 harness calls, got %d", h.calls)
+	}
+	if !strings.Contains(h.prompts[1], "Retry Context") || !strings.Contains(h.prompts[1], "issues") {
+		t.Fatalf("expected validation error fed back into retry prompt, got %q", h.prompts[1])
+	}
+	m := out.(map[string]any)
+	issues := m["issues"].([]any)
+	if len(issues) != 1 || issues[0].(map[string]any)["name"] != "issue-a" {
+		t.Fatalf("unexpected issues: %v", issues)
+	}
+	rawPath := filepath.Join(repo, ".artifacts", "plan", "sprint_planner_raw_response.txt")
+	blob, readErr := os.ReadFile(rawPath)
+	if readErr != nil {
+		t.Fatalf("expected retry log at %s: %v", rawPath, readErr)
+	}
+	log := string(blob)
+	if !strings.Contains(log, "attempt 1/3 failed") || !strings.Contains(log, "not-a-list") {
+		t.Fatalf("failed attempt not retained in log:\n%s", log)
+	}
+	if !strings.Contains(log, "outcome: succeeded on attempt 2/3") {
+		t.Fatalf("expected recovery outcome in log:\n%s", log)
+	}
+}
+
+// Contract: a raw-response write failure is noted and never replaces the real
+// failure: the stage keeps retrying and still raises the schema error.
+func TestSprintPlannerRawResponseWriteFailureStillRaises(t *testing.T) {
+	repo := t.TempDir()
+	// A directory at the log path makes every append fail.
+	rawPath := filepath.Join(repo, ".artifacts", "plan", "sprint_planner_raw_response.txt")
+	if err := os.MkdirAll(rawPath, 0o755); err != nil {
+		t.Fatalf("mkdir raw path: %v", err)
+	}
+	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
+		return &harness.Result{
+			IsError:      true,
+			Parsed:       nil,
+			Result:       `{"issues": "not-a-list", "rationale": 7}`,
+			FailureType:  harness.FailureSchema,
+			ErrorMessage: "bad output",
+		}, nil
+	}}
+	deps, notes := newDeps(h)
+	_, err := RunSprintPlanner(context.Background(), deps, map[string]any{"repo_path": repo})
+	if err == nil || !strings.Contains(err.Error(), "Sprint planner failed to produce valid issues after 3 attempt(s)") {
+		t.Fatalf("expected schema failure to survive the write error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "raw response could not be written") {
+		t.Fatalf("expected the write failure named in the error, got %v", err)
+	}
+	if h.calls != 3 {
+		t.Fatalf("expected retries to continue past the write error, got %d calls", h.calls)
+	}
+	if joined := strings.Join(notes.msgs, "\n"); !strings.Contains(joined, "could not write") {
+		t.Fatalf("expected a run note for the write failure, got %v", notes.msgs)
+	}
+}
+
+// Contract: a raw-response write failure does not abort a run that recovers.
+func TestSprintPlannerRawResponseWriteFailureIsNonFatal(t *testing.T) {
+	repo := t.TempDir()
+	rawPath := filepath.Join(repo, ".artifacts", "plan", "sprint_planner_raw_response.txt")
+	if err := os.MkdirAll(rawPath, 0o755); err != nil {
+		t.Fatalf("mkdir raw path: %v", err)
+	}
+	h := &fakeHarness{fn: func(call int, _ string, dest any, _ harness.Options) (*harness.Result, error) {
+		if call == 1 {
+			return &harness.Result{
+				IsError:      true,
+				Parsed:       nil,
+				Result:       `{"issues": "not-a-list", "rationale": 7}`,
+				FailureType:  harness.FailureSchema,
+				ErrorMessage: "bad output",
+			}, nil
+		}
+		s := dest.(*sprintPlanOutput)
+		s.Rationale = "recovered"
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	deps, notes := newDeps(h)
+	out, err := RunSprintPlanner(context.Background(), deps, map[string]any{
+		"prd":          map[string]any{"validated_description": "x"},
+		"architecture": map[string]any{"summary": "y"},
+		"repo_path":    repo,
+	})
+	if err != nil {
+		t.Fatalf("write failure must not abort a recovering run: %v", err)
+	}
+	if h.calls != 2 {
+		t.Fatalf("expected 2 harness calls, got %d", h.calls)
+	}
+	if out.(map[string]any)["rationale"] != "recovered" {
+		t.Fatalf("unexpected result: %v", out)
+	}
+	if joined := strings.Join(notes.msgs, "\n"); !strings.Contains(joined, "could not write") {
+		t.Fatalf("expected a run note for the write failure, got %v", notes.msgs)
+	}
+}
+
+// Contract: an empty completion (no parsed object, no raw text) is the
+// provider/model mismatch shape and fails fast without burning retries.
+func TestSprintPlannerEmptyCompletionFailsFast(t *testing.T) {
 	h := &fakeHarness{fn: func(_ int, _ string, _ any, _ harness.Options) (*harness.Result, error) {
 		return &harness.Result{IsError: true, Parsed: nil}, nil
 	}}
 	deps, _ := newDeps(h)
 	_, err := RunSprintPlanner(context.Background(), deps, map[string]any{"repo_path": t.TempDir()})
-	if err == nil || !strings.Contains(err.Error(), "Sprint planner failed to produce valid issues") {
-		t.Fatalf("expected sprint planner failure error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "empty completion") {
+		t.Fatalf("expected empty-completion error, got %v", err)
+	}
+	if h.calls != 1 {
+		t.Fatalf("empty completion must not be retried, got %d calls", h.calls)
 	}
 }
 
