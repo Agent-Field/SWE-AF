@@ -892,6 +892,8 @@ func TestEncodedCredentialsRedactedFromRetryLog(t *testing.T) {
 		{"url_lower", "ab/cd+ef", "ab%2fcd%2bef"},
 		{"url_mixed", "Ab/cD+ef", "Ab%2fcD%2Bef"},
 		{"form_mixed", "Ab/cD+ ef", "Ab%2FcD%2b+ef"},
+		{"json_ascii", `ab"café`, `ab\"caf\u00e9`},
+		{"json_ascii_surrogates", "ab\"\\café\x7f😀<&", `ab\"\\caf\u00e9\u007f\ud83d\ude00<&`},
 		{"json_go_html", `ab"cd&ef`, ""},
 		{"json_go_html_separators", "ab\"\\<>&\u2028\u2029ef", ""},
 	} {

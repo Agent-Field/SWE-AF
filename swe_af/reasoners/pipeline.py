@@ -229,6 +229,7 @@ def _credential_forms(value: str) -> list[str]:
             html_json_body = html_json_body.replace(char, f"\\u{ord(char):04x}")
         encoded_forms = (
             json_body,
+            json.dumps(value, ensure_ascii=True)[1:-1],
             html_json_body,
             quote(value, safe=""),
             quote_plus(value, safe=""),

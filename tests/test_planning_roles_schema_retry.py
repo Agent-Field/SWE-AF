@@ -413,6 +413,12 @@ _SPECIAL_SECRET = 'ab"cd\\ef /?:+='
         ("url_lower", "ab/cd+ef", lambda _: "ab%2fcd%2bef"),
         ("url_mixed", "Ab/cD+ef", lambda _: "Ab%2fcD%2Bef"),
         ("form_mixed", "Ab/cD+ ef", lambda _: "Ab%2FcD%2b+ef"),
+        ("json_ascii", 'ab"café', lambda s: json.dumps(s)[1:-1]),
+        (
+            "json_ascii_surrogates",
+            'ab"\\café\x7f😀<&',
+            lambda s: json.dumps(s)[1:-1],
+        ),
         ("json_go_html", 'ab"cd&ef', lambda _: r'ab\"cd\u0026ef'),
         (
             "json_go_html_separators",

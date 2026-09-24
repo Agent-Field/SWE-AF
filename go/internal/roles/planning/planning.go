@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf16"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
@@ -604,6 +605,7 @@ func credentialForms(value string) []string {
 	jsonBody, _ := json.Marshal(value)
 	for _, form := range []string{
 		jsonEscapedBody(value),
+		jsonASCIIEscapedBody(value),
 		string(jsonBody[1 : len(jsonBody)-1]),
 		percentEncode(value, false),
 		percentEncode(value, true),
@@ -642,6 +644,22 @@ func jsonEscapedBody(value string) string {
 			} else {
 				b.WriteRune(r)
 			}
+		}
+	}
+	return b.String()
+}
+
+func jsonASCIIEscapedBody(value string) string {
+	var b strings.Builder
+	for _, r := range jsonEscapedBody(value) {
+		switch {
+		case r > 0xffff:
+			high, low := utf16.EncodeRune(r)
+			fmt.Fprintf(&b, `\u%04x\u%04x`, high, low)
+		case r >= 0x7f:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
 		}
 	}
 	return b.String()
