@@ -91,6 +91,14 @@ def test_codex_volume_mount_in_swe_agent_and_swe_fast():
     assert expected in _service_volumes("swe-fast")
 
 
+def test_commandcode_volume_mount_in_swe_agent_and_swe_fast():
+    # Host `cmd login` credentials, mounted the same way as ~/.codex, so the
+    # command_code runtime works with no in-container login step.
+    expected = "${HOME}/.commandcode:/root/.commandcode"
+    assert expected in _service_volumes("swe-agent")
+    assert expected in _service_volumes("swe-fast")
+
+
 def test_codex_auth_mode_env_in_swe_agent_and_swe_fast():
     expected = "SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}"
     assert expected in _service_environment("swe-agent")
