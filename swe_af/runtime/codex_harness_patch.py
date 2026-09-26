@@ -193,6 +193,13 @@ async def _run_codex_cli_with_stdin(
 
 def apply_codex_harness_patch() -> None:
     global _PATCHED, _ORIGINAL_BUILD_PROMPT_SUFFIX
+    # Chained here so the existing call sites (swe_af.reasoners / fast / issue
+    # __init__) register the Command Code provider too, without editing them.
+    from swe_af.runtime.commandcode_harness_patch import (
+        apply_commandcode_harness_patch,
+    )
+
+    apply_commandcode_harness_patch()
     if _PATCHED:
         return
     try:

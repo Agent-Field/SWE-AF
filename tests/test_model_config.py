@@ -669,6 +669,8 @@ class TestRuntimeProviderMapping(unittest.TestCase):
         self.assertEqual(runtime_to_harness_adapter("open_code"), "opencode")
         self.assertEqual(runtime_to_harness_adapter("opencode"), "opencode")
         self.assertEqual(runtime_to_harness_adapter("codex"), "codex")
+        self.assertEqual(runtime_to_harness_adapter("command_code"), "command-code")
+        self.assertEqual(runtime_to_harness_adapter("cmd"), "command-code")
 
     def test_runtime_to_harness_provider_maps_all_supported_runtimes(self) -> None:
         from swe_af.runtime.providers import runtime_to_harness_provider
@@ -676,12 +678,50 @@ class TestRuntimeProviderMapping(unittest.TestCase):
         self.assertEqual(runtime_to_harness_provider("claude_code"), "claude")
         self.assertEqual(runtime_to_harness_provider("open_code"), "opencode")
         self.assertEqual(runtime_to_harness_provider("codex"), "codex")
+        self.assertEqual(runtime_to_harness_provider("command_code"), "command_code")
 
     def test_unknown_runtime_provider_raises(self) -> None:
         from swe_af.runtime.providers import normalize_runtime_provider
 
         with self.assertRaises(ValueError):
             normalize_runtime_provider("bad_runtime")
+
+
+class TestCommandCodeConfig(unittest.TestCase):
+    """command_code is accepted by every config schema, resolves to the
+    command-code provider, and bakes in no model ids."""
+
+    def test_build_config_accepts_command_code_with_empty_model_defaults(self) -> None:
+        with _provider_env():
+            cfg = BuildConfig(runtime="command_code")
+
+            self.assertEqual(cfg.ai_provider, "command_code")
+            self.assertEqual(set(cfg.resolved_models().values()), {""})
+
+    def test_callers_can_pin_any_model_verbatim(self) -> None:
+        with _provider_env():
+            cfg = BuildConfig(
+                runtime="command_code", models={"default": "some/future-model-x"}
+            )
+
+            self.assertEqual(
+                set(cfg.resolved_models().values()), {"some/future-model-x"}
+            )
+
+    def test_execution_fast_and_issue_configs_accept_command_code(self) -> None:
+        from swe_af.fast.schemas import FastBuildConfig
+        from swe_af.issue.schemas import IssueBuildConfig
+
+        with _provider_env():
+            self.assertEqual(
+                ExecutionConfig(runtime="command_code").ai_provider, "command_code"
+            )
+            self.assertEqual(
+                FastBuildConfig(runtime="command_code").runtime, "command_code"
+            )
+            self.assertEqual(
+                IssueBuildConfig(runtime="command_code").runtime, "command_code"
+            )
 
 
 class TestDockerfileHarnessModelDefault(unittest.TestCase):

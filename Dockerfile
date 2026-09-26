@@ -19,6 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl -fsSL https://opencode.ai/install | bash && \
     # Install Codex CLI for codex runtime provider
     npm install -g @openai/codex && \
+    # Install Command Code CLI for command_code runtime provider
+    npm install -g command-code && \
     codex_path="$(command -v codex)" && \
     mv "${codex_path}" /usr/local/bin/codex-real && \
     printf '%s\n' \

@@ -92,6 +92,8 @@ This starts:
 
 To use Codex with a ChatGPT subscription, run `codex login` on the host before starting Docker and leave `OPENAI_API_KEY` unset for this process. The compose files mount `~/.codex` into both agent containers. To use OpenAI API billing instead, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
+To use Command Code, run `cmd login` on the host before starting Docker. The compose files mount `~/.commandcode` into both agent containers, so no in-container login is needed.
+
 ### Agent Only (connect to existing control plane)
 
 If you already have an AgentField control plane running:

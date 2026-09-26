@@ -346,8 +346,13 @@ print('OK')
 
 
 def test_ac_14_no_existing_swe_af_files_modified():
-    """AC-14: git diff HEAD shows no swe_af/ files modified outside swe_af/fast/,
-    docker-compose.yml, and pyproject.toml.
+    """AC-14: git diff HEAD shows no swe_af/ files modified outside swe_af/fast/
+    and swe_af/runtime/, the compose/config files, and tests.
+
+    Widened for the additive ``command_code`` runtime: the runtime set is
+    declared as a pydantic ``Literal`` in the config-schema modules (outside
+    swe_af/fast/), so those modules — plus the swe_af/runtime extension point —
+    are allowed. No reasoner or coding-loop file may change.
     """
     result = subprocess.run(
         ["git", "diff", "--name-only", "HEAD"],
@@ -361,10 +366,21 @@ def test_ac_14_no_existing_swe_af_files_modified():
         line = line.strip()
         if not line:
             continue
-        # Allow: swe_af/fast/**, docker-compose.yml, pyproject.toml, setup.cfg, setup.py, .artifacts/**
+        # Allow: swe_af/fast/**, swe_af/runtime/**, docker-compose.yml,
+        # pyproject.toml, setup.cfg, setup.py, .artifacts/**, tests/**, and the
+        # config-schema modules that declare the runtime Literal.
         if line.startswith("swe_af/fast/"):
             continue
-        if line in ("docker-compose.yml", "pyproject.toml", "setup.cfg", "setup.py"):
+        if line.startswith("swe_af/runtime/"):
+            continue
+        if line in (
+            "docker-compose.yml",
+            "pyproject.toml",
+            "setup.cfg",
+            "setup.py",
+            "swe_af/execution/schemas.py",
+            "swe_af/issue/schemas.py",
+        ):
             continue
         if line.startswith(".artifacts/"):
             continue
