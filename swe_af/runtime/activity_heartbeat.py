@@ -193,7 +193,6 @@ async def run_with_activity_heartbeat(
             # new outer cancellation (e.g. asyncio.wait_for timing out) landed
             # while the heartbeat was being torn down, re-raise it so the
             # wrapper does not report success after being cancelled.
-            current = asyncio.current_task()
             if (
                 current is not None
                 and current.cancelling() > cancellations_before_teardown
