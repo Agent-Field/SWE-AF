@@ -26,6 +26,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
 	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
+	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
@@ -113,10 +114,7 @@ var sleepFn = func(ctx context.Context, d time.Duration) {
 // be empty, and callers must treat empty as "no scoped state at all".
 func scopeIDFromCtx(ctx context.Context) string {
 	ec := executionContextFrom(ctx)
-	if ec.RunID != "" {
-		return ec.RunID
-	}
-	return ec.RootWorkflowID
+	return hitl.ScopeID(ec.RunID, ec.RootWorkflowID)
 }
 
 func executionIDFromCtx(ctx context.Context) string { return executionContextFrom(ctx).ExecutionID }

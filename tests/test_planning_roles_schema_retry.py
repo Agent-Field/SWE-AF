@@ -434,7 +434,7 @@ def test_encoded_credential_spellings_are_redacted_from_the_log(
     does not contain the exact value, so exact matching alone misses it. Every
     bounded spelling must be redacted while non-secret text survives.
     """
-    from swe_af.hitl.credentials_store import (  # noqa: PLC0415
+    from swe_af.hitl.credentials_store import (
         clear_scoped_credentials,
         store_scoped_credentials,
     )
@@ -526,7 +526,7 @@ def test_same_second_same_run_headers_stay_distinct(tmp_path) -> None:
     """Two invocations with the same run id in the same second must still get
     distinguishable section headers: the timestamp alone has second
     granularity, so the header carries a monotonic section number."""
-    from swe_af.reasoners import pipeline  # noqa: PLC0415
+    from swe_af.reasoners import pipeline
 
     path = tmp_path.joinpath("headers.txt")
     mock_router = _make_router([])
