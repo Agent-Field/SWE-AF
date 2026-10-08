@@ -8,11 +8,14 @@ FastAPI endpoints, workflow DAG tracking, and observability via router.note().
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import os
+import re
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote, quote_plus
 
 from pydantic import BaseModel, ValidationError
 
@@ -176,6 +179,11 @@ SPRINT_PLANNER_SCHEMA_RETRIES = 2
 # bound.
 _MAX_RAW_RESPONSE_CHARS = 200_000
 
+# Makes each retry-log run section unique even when two invocations share a run
+# id and start within the same wall-clock second: the header's timestamp has
+# second granularity, so the counter is what distinguishes them.
+_RUN_SECTION_SEQ = itertools.count(1)
+
 
 def _raw_completion_text(result) -> str:
     """Best-effort raw completion text from a HarnessResult-like object."""
@@ -202,13 +210,49 @@ def _planning_run_id() -> str:
     return str(run_id) if run_id else "unknown-run"
 
 
+def _credential_forms(value: str) -> list[str]:
+    """Bounded spellings a credential value can take in a response.
+
+    The log stores the model's raw completion text, so a credential can appear
+    in the exact form the scout negotiated, JSON-escaped (a value containing
+    ``"`` or ``\\`` is written escaped inside JSON), or URL-encoded when it is
+    part of a URL. Redacting only the exact value misses those spellings, so
+    each bounded encoding the log path can contain is included. The original
+    value comes first; callers replace longest-first so a shorter spelling
+    cannot split a longer one.
+    """
+    forms = [value]
+    try:
+        json_body = json.dumps(value, ensure_ascii=False)[1:-1]
+        html_json_body = json_body
+        for char in "<>&\u2028\u2029":
+            html_json_body = html_json_body.replace(char, f"\\u{ord(char):04x}")
+        encoded_forms = (
+            json_body,
+            json.dumps(value, ensure_ascii=True)[1:-1],
+            html_json_body,
+            quote(value, safe=""),
+            quote_plus(value, safe=""),
+        )
+    except (TypeError, ValueError, UnicodeError):
+        # Diagnostics must never fail the stage (or mask a real error further
+        # up): a pathological value that cannot be encoded still gets exact
+        # matching.
+        return forms
+    for encoded in encoded_forms:
+        if encoded != value and encoded not in forms:
+            forms.append(encoded)
+    return forms
+
+
 def _redact_scoped_credentials(text: str) -> str:
     """Replace any run-scoped credential value with a marker.
 
     The harness subprocess inherits the scout's scoped credentials, so a
-    response that echoes one can otherwise land in the archived retry log. The
-    values are replaced longest-first so a shorter value cannot split a longer
-    one.
+    response that echoes one can otherwise land in the archived retry log. A
+    value is matched exactly, JSON-escaped, and URL-encoded (see
+    :func:`_credential_forms`). Spellings are replaced longest-first so a
+    shorter one cannot split a longer one.
     """
     if not text:
         return text
@@ -220,12 +264,29 @@ def _redact_scoped_credentials(text: str) -> str:
         creds = get_scoped_credentials(_planning_run_id())
     except Exception:  # pragma: no cover - diagnostics must never fail a stage
         return text
-    for name, value in sorted(
-        creds.items(), key=lambda item: len(item[1]), reverse=True
-    ):
-        if value:
-            text = text.replace(value, f"[REDACTED:{name}]")
+    variants = [
+        (form, name)
+        for name, value in creds.items()
+        if value
+        for form in _credential_forms(value)
+    ]
+    for form, name in sorted(variants, key=lambda item: len(item[0]), reverse=True):
+        pattern = re.sub(
+            r"%[0-9a-fA-F]{2}", lambda match: f"(?i:{match[0]})", re.escape(form)
+        )
+        text = re.sub(pattern, lambda _, name=name: f"[REDACTED:{name}]", text)
     return text
+
+
+def _flatten_reason(reason: str) -> str:
+    """Collapse a multi-line failure reason onto one physical log line.
+
+    The retry log is read by its terminal ``===== outcome: ... =====`` line, so
+    a newline inside an interpolated error would push the outcome text onto
+    continuation lines and hide it. Every attempt header and outcome goes
+    through this before it is written.
+    """
+    return " ".join((reason or "").split())
 
 
 def _describe_schema_failure(result, schema) -> str:
@@ -296,18 +357,25 @@ def _persist_raw_response(
         if raw.strip()
         else "(the harness returned no raw completion text)"
     )
-    block = (
-        f"===== attempt {attempt}/{attempts} failed: {error} =====\n"
-        f"# raw completion text follows\n{body}"
+    # Redact while the reason is still multi-line (so a value containing a
+    # newline is matched), then flatten so the attempt header stays one line.
+    header = _flatten_reason(
+        _redact_scoped_credentials(
+            f"===== attempt {attempt}/{attempts} failed: {error} ====="
+        )
     )
+    block = f"{header}\n# raw completion text follows\n{body}"
     _append_artifact(path, _redact_scoped_credentials(block))
 
 
 def _record_retry_outcome(path: str, outcome: str) -> None:
-    """Append the terminal retry outcome to the stage's retry log."""
-    _append_artifact(
-        path, _redact_scoped_credentials(f"===== outcome: {outcome} =====")
-    )
+    """Append the terminal retry outcome to the stage's retry log.
+
+    Redaction runs before flattening so a credential containing a newline is
+    still matched, and the outcome always lands on one physical line.
+    """
+    line = _redact_scoped_credentials(f"===== outcome: {outcome} =====")
+    _append_artifact(path, _flatten_reason(line))
 
 
 def _record_outcome_best_effort(stage: str, path: str, outcome: str) -> None:
@@ -327,13 +395,15 @@ def _record_run_header_best_effort(stage: str, path: str) -> None:
     The log is append-only and keyed by repo path, so a second build against
     the same path appends after the first. The header makes each build's
     section identifiable without a reader having to guess which outcome is
-    current.
+    current, and its section counter keeps two invocations with the same run id
+    in the same second distinct.
     """
     try:
         _append_artifact(
             path,
             f"===== run {_planning_run_id()} | {stage} | started "
-            f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} =====",
+            f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} | "
+            f"section {next(_RUN_SECTION_SEQ)} =====",
         )
     except Exception as exc:  # diagnostics must never fail the stage
         router.note(
