@@ -631,6 +631,13 @@ _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "codex": {
         **{field: _CODEX_API_KEY_MODEL for field in ALL_MODEL_FIELDS},
     },
+    # Command Code: deliberately no baked-in model ids. A blank model makes the
+    # provider omit `-m`, so Command Code uses its own configured default, and
+    # every model it supports now or adds later works without a SWE-AF change.
+    # Callers override per role via models / SWE_DEFAULT_MODEL.
+    "command_code": {
+        **{field: "" for field in ALL_MODEL_FIELDS},
+    },
 }
 
 
@@ -661,7 +668,7 @@ def _codex_default_model() -> str:
     return _CODEX_CHATGPT_MODEL if _codex_uses_chatgpt_auth() else _CODEX_API_KEY_MODEL
 
 
-def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode", "codex"]:
+def _runtime_to_provider(runtime: str) -> Literal["claude", "opencode", "codex", "command_code"]:
     return runtime_to_harness_provider(runtime)  # type: ignore[return-value]
 
 
@@ -701,7 +708,7 @@ def _infron_only_env() -> bool:
     return bool(os.getenv("INFRON_API_KEY", "").strip())
 
 
-def _default_runtime() -> Literal["claude_code", "open_code", "codex"]:
+def _default_runtime() -> Literal["claude_code", "open_code", "codex", "command_code"]:
     """Default runtime, honoring the ``SWE_DEFAULT_RUNTIME`` env var.
 
     Lets the deployer pick the runtime without every caller having to pass
@@ -973,7 +980,7 @@ class BuildConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code", "codex"] = Field(default_factory=_default_runtime)
+    runtime: Literal["claude_code", "open_code", "codex", "command_code"] = Field(default_factory=_default_runtime)
     models: dict[str, str] | None = None
 
     max_review_iterations: int = 2
@@ -1092,7 +1099,7 @@ class BuildConfig(BaseModel):
         _validate_flat_models(self.models)
 
     @property
-    def ai_provider(self) -> Literal["claude", "opencode", "codex"]:
+    def ai_provider(self) -> Literal["claude", "opencode", "codex", "command_code"]:
         return _runtime_to_provider(self.runtime)
 
     @property
@@ -1282,7 +1289,7 @@ class ExecutionConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    runtime: Literal["claude_code", "open_code", "codex"] = Field(default_factory=_default_runtime)
+    runtime: Literal["claude_code", "open_code", "codex", "command_code"] = Field(default_factory=_default_runtime)
     models: dict[str, str] | None = None
     _resolved_models: dict[str, str] = PrivateAttr(default_factory=dict)
 
@@ -1334,7 +1341,7 @@ class ExecutionConfig(BaseModel):
         return self._resolved_models[field_name]
 
     @property
-    def ai_provider(self) -> Literal["claude", "opencode", "codex"]:
+    def ai_provider(self) -> Literal["claude", "opencode", "codex", "command_code"]:
         return _runtime_to_provider(self.runtime)
 
     @property

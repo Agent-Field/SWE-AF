@@ -53,6 +53,7 @@ services:
     volumes:
       - workspaces:/workspaces
       - ${HOME}/.codex:/root/.codex
+      - ${HOME}/.commandcode:/root/.commandcode
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
