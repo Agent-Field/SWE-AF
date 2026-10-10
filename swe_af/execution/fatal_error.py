@@ -34,6 +34,15 @@ _FATAL_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"account.{0,10}is disabled",
         r"unauthorized",
         r"quota.{0,20}exceeded",
+        # Claude subscription usage caps: retrying before the reset only burns
+        # the retry budget. Fail fast so the build can be resumed later.
+        r"usage limit reached",
+        r"hit your (\w+ )?limit",
+        r"out of extra usage",
+        # Expired/unrefreshable Claude subscription login: every call fails
+        # identically until someone re-authenticates.
+        r"failed to authenticate",
+        r"oauth session expired",
         # Codex model/auth mismatches: retrying with the same model + auth mode
         # fails identically. Treating these as fatal surfaces the real reason
         # (instead of a silent empty build that burns the retry cap) — e.g. the
@@ -41,6 +50,19 @@ _FATAL_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"not supported when using codex with a chatgpt account",
         r"requires a newer version of codex",
     )
+)
+
+# Claude CLI's synthetic replies when a subscription cap is hit; checked
+# against the raw completion text (anchored to the reply's start).
+_USAGE_LIMIT_OUTPUT = re.compile(
+    r"^\s*(you've hit your (\w+ )?limit|claude ai usage limit reached|"
+    r"you're out of extra usage|failed to authenticate: oauth)",
+    re.IGNORECASE,
+)
+_USAGE_LIMIT_MESSAGE = re.compile(
+    r"(you've hit your (\w+ )?limit · resets|"
+    r"failed to authenticate: oauth)[^'\"\]]{0,60}",
+    re.IGNORECASE,
 )
 
 # Patterns emitted when a harness subprocess is killed by its overall or idle
@@ -169,6 +191,20 @@ def check_fatal_harness_error(result) -> None:
     msg = getattr(result, "error_message", "") or ""
     if is_fatal_error(msg):
         raise FatalHarnessError(msg)
+    # A Claude subscription cap reaches us only as the CLI's synthetic reply
+    # (e.g. "You've hit your session limit · resets 9:50pm (UTC)") while the
+    # error message just says the output file was never written. Only the
+    # limit patterns are applied to raw output, so model prose can't trip it.
+    output = _harness_output_text(result)
+    if _USAGE_LIMIT_OUTPUT.search(output):
+        raise FatalHarnessError(f"Claude unavailable: {output.strip()[:200]}")
+    # Planning stages can return no raw text at all; the synthetic reply then
+    # survives only in the session messages. Match the CLI's exact phrasing
+    # (including "· resets") so quoted prose elsewhere can't trip it.
+    for message in reversed(getattr(result, "messages", None) or []):
+        found = _USAGE_LIMIT_MESSAGE.search(str(message))
+        if found:
+            raise FatalHarnessError(f"Claude unavailable: {found.group(0)}")
 
 
 # The SDK classifies terminal harness failures on ``HarnessResult.failure_type``
