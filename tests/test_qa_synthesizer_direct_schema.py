@@ -1,17 +1,18 @@
 """Regression tests for the QA synthesizer dropping the AI's decision (#113).
 
-``run_qa_synthesizer`` is the only reasoner that calls ``router.ai()`` — every
-other agent in ``execution_agents`` goes through ``router.harness()``, which
-returns a ``HarnessResult`` wrapper carrying a ``.parsed`` attribute.
-``router.ai(..., schema=X)`` instead returns the validated ``X`` instance
-directly, so reading ``.parsed`` off it raised ``AttributeError``.  The
-surrounding broad ``except Exception`` swallowed that, logged "QA synthesizer
-agent failed" and fell through to the crude tests_passed/review_approved
-heuristic — discarding the synthesizer's decision on *every* call.
+``run_qa_synthesizer`` originally called ``router.ai()``, which returns the
+validated schema instance directly; reading ``.parsed`` off it raised, the broad
+``except`` swallowed that, and the crude tests_passed/review_approved heuristic
+replaced the synthesizer's decision on *every* call.
+
+It now goes through ``router.harness()`` like every other agent (so it shares
+the runtime's credentials, e.g. a Claude subscription login), which returns a
+``HarnessResult`` wrapper carrying ``.parsed``.
 """
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from swe_af.execution.schemas import QASynthesisAction, QASynthesisResult
@@ -23,6 +24,10 @@ FALLBACK_APPROVES = {
     "qa_result": {"passed": True},
     "review_result": {"approved": True, "blocking": False},
 }
+
+
+def _harness_result(parsed) -> SimpleNamespace:
+    return SimpleNamespace(parsed=parsed, is_error=False, error_message=None, result="")
 
 
 def _error_notes(router: MagicMock) -> list:
@@ -38,14 +43,14 @@ async def test_ai_decision_wins_over_heuristic_fallback(monkeypatch) -> None:
         summary="Tests pass but the fix regresses the public API.",
         stuck=True,
     )
-    router = MagicMock(ai=AsyncMock(return_value=decision))
+    router = MagicMock(harness=AsyncMock(return_value=_harness_result(decision)))
     monkeypatch.setattr(execution_agents, "router", router)
 
     out = await execution_agents.run_qa_synthesizer(
         iteration_history=[], iteration_id="iter-7", **FALLBACK_APPROVES
     )
 
-    assert router.ai.await_args.kwargs["schema"] is QASynthesisResult
+    assert router.harness.await_args.kwargs["schema"] is QASynthesisResult
     assert out["action"] == QASynthesisAction.BLOCK
     assert out["summary"] == decision.summary
     assert out["stuck"] is True
@@ -56,11 +61,10 @@ async def test_ai_decision_wins_over_heuristic_fallback(monkeypatch) -> None:
 async def test_non_schema_response_falls_back_and_says_so(monkeypatch) -> None:
     """An unparseable response reaches the heuristic, but not silently.
 
-    ``ai()`` hands back a ``ToolCallResponse`` when the model's content is not
-    parseable JSON.  Issue #113 was diagnosed from the note this path emits, so
-    the fallback must stay loud.
+    Issue #113 was diagnosed from the note this path emits, so the fallback
+    must stay loud.
     """
-    router = MagicMock(ai=AsyncMock(return_value=object()))
+    router = MagicMock(harness=AsyncMock(return_value=_harness_result(None)))
     monkeypatch.setattr(execution_agents, "router", router)
 
     out = await execution_agents.run_qa_synthesizer(

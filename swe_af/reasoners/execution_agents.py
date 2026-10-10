@@ -1252,26 +1252,35 @@ async def run_qa_synthesizer(
         workspace_manifest=ws_manifest,
     )
 
+    # Run through the coding harness like the other agents, so it uses the same
+    # runtime credentials (e.g. a Claude subscription login) instead of a direct
+    # provider API call that needs its own key.
+    provider = runtime_to_harness_adapter(ai_provider)
+
     try:
-        result = await router.ai(
+        result = await router.harness(
             task_prompt,
-            system=QA_SYNTHESIZER_SYSTEM_PROMPT,
+            system_prompt=QA_SYNTHESIZER_SYSTEM_PROMPT,
             schema=QASynthesisResult,
             model=model,
+            provider=provider,
+            tools=["Read", "Write", "Glob", "Grep"],
+            cwd=worktree_path or artifacts_dir or None,
+            max_turns=DEFAULT_AGENT_MAX_TURNS,
+            permission_mode=permission_mode or None,
         )
-        # Unlike the harness-backed agents above, router.ai() returns the
-        # validated schema instance itself — there is no .parsed wrapper.
-        if isinstance(result, QASynthesisResult):
+        check_fatal_harness_error(result)
+        if result.parsed is not None:
             router.note(
-                f"QA synthesizer complete: action={result.action.value}, "
-                f"stuck={result.stuck}",
+                f"QA synthesizer complete: action={result.parsed.action.value}, "
+                f"stuck={result.parsed.stuck}",
                 tags=["qa_synthesizer", "complete"],
             )
-            out = result.model_dump()
+            out = result.parsed.model_dump()
             out["iteration_id"] = iteration_id
             return out
         router.note(
-            f"QA synthesizer returned {type(result).__name__}, not QASynthesisResult",
+            "QA synthesizer returned no parsed result",
             tags=["qa_synthesizer", "error"],
         )
     except FatalHarnessError:
