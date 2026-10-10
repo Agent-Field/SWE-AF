@@ -9,7 +9,7 @@ Ref: https://github.com/Agent-Field/SWE-AF/issues/49
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import pytest
@@ -57,6 +57,10 @@ class TestIsFatalError:
             # Codex model/auth mismatches (#82 Gap 3) — non-retryable.
             "The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.",
             "The 'gpt-5.5' model requires a newer version of Codex. Please upgrade.",
+            # Claude subscription caps and expired logins — every call fails alike.
+            "You've hit your session limit · resets 9:50pm (UTC)",
+            "Claude AI usage limit reached",
+            "Failed to authenticate: OAuth session expired and could not be refreshed",
         ],
     )
     def test_fatal_patterns_detected(self, message: str) -> None:
@@ -117,6 +121,7 @@ class FakeResult:
     result: Optional[str] = None
     text: str = ""
     failure_type: Optional[str] = None
+    messages: list = field(default_factory=list)
 
 
 class TestCheckFatalHarnessError:
@@ -144,6 +149,78 @@ class TestCheckFatalHarnessError:
 
     def test_empty_error_message_passes(self) -> None:
         result = FakeResult(is_error=True, error_message="")
+        check_fatal_harness_error(result)  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# Claude subscription caps / expired logins surfaced only as the CLI's reply
+# ---------------------------------------------------------------------------
+
+SCHEMA_FAILURE = (
+    "Schema validation failed after 2 retry attempt(s). "
+    "Last error: The output file was NOT created."
+)
+
+
+class _TextBlock:
+    """Mimics claude_agent_sdk.TextBlock as it appears in HarnessResult.messages."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def __repr__(self) -> str:
+        return f"TextBlock(text={self.text!r})"
+
+
+class TestClaudeUnavailableReplies:
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "You've hit your session limit · resets 9:50pm (UTC)",
+            "You've hit your limit · resets 3pm (UTC)",
+            "Failed to authenticate: OAuth session expired and could not be refreshed",
+        ],
+    )
+    def test_raw_completion_reply_raises(self, reply: str) -> None:
+        result = FakeResult(is_error=True, error_message=SCHEMA_FAILURE, result=reply)
+        with pytest.raises(FatalHarnessError, match="Claude unavailable"):
+            check_fatal_harness_error(result)
+
+    def test_reply_only_in_session_messages_raises(self) -> None:
+        """Planning stages can return no raw text; the reply survives in messages."""
+        reply = "You've hit your session limit · resets 1:30pm (UTC)"
+        result = FakeResult(
+            is_error=True,
+            error_message=SCHEMA_FAILURE,
+            messages=[
+                {"subtype": "init"},
+                {"content": [_TextBlock(reply)], "model": "<synthetic>"},
+            ],
+        )
+        with pytest.raises(FatalHarnessError, match="session limit"):
+            check_fatal_harness_error(result)
+
+    @pytest.mark.parametrize(
+        "prose",
+        [
+            "Added a banner for users who hit your limit of 5 retries.",
+            "Handle the case where merchants fail to authenticate.",
+        ],
+    )
+    def test_model_prose_does_not_raise(self, prose: str) -> None:
+        result = FakeResult(
+            is_error=True,
+            error_message=SCHEMA_FAILURE,
+            result=prose,
+            messages=[{"content": [_TextBlock(prose)]}],
+        )
+        check_fatal_harness_error(result)  # Should not raise
+
+    def test_successful_result_is_not_inspected(self) -> None:
+        result = FakeResult(
+            is_error=False,
+            result="You've hit your session limit · resets 9:50pm (UTC)",
+        )
         check_fatal_harness_error(result)  # Should not raise
 
 
