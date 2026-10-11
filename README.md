@@ -419,6 +419,22 @@ For Codex with ChatGPT subscription auth, install the Codex CLI on the host, run
 
 ### Optional: web search
 
+#### Parallel Search MCP (no API key)
+
+For the `open_code` runtime, [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) provides free web search in Fast mode and page fetching without a Parallel account or API key. The shared `opencode.json` includes a disabled `parallel` server, so existing deployments keep their current behavior.
+
+To enable it, set this environment variable on the SWE-AF process or container before starting the node:
+
+```bash
+export OPENCODE_CONFIG_CONTENT='{"mcp":{"parallel":{"type":"remote","url":"https://search.parallel.ai/mcp","enabled":true,"oauth":false,"headers":{"User-Agent":"SWE-AF/0.1.0 (https://github.com/Agent-Field/SWE-AF)"}}}}'
+```
+
+If you already use `OPENCODE_CONFIG_CONTENT`, merge the `mcp.parallel` object into it. OpenCode merges this override with its existing provider and model configuration. Check connectivity in the same environment with `opencode mcp list`; `parallel` should be connected. OpenCode then advertises `parallel_web_search` and `parallel_web_fetch` to agents using this runtime. Anonymous access has rate limits; see the linked setup guide for higher-volume use.
+
+This setup applies to the OpenCode runtime in both the Python and Go nodes. The bundled pro engine and other runtimes do not consume this OpenCode MCP configuration.
+
+#### Exa
+
 Coding and review agents can look up external documentation, library APIs, error messages, and version/deprecation status during a build. This is opt-in via two env vars on the deployment:
 
 ```

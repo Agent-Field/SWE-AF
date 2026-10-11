@@ -2,6 +2,17 @@
   "$schema": "https://opencode.ai/config.json",
   "model": "{env:HARNESS_MODEL}",
   "small_model": "{env:HARNESS_MODEL}",
+  "mcp": {
+    "parallel": {
+      "type": "remote",
+      "url": "https://search.parallel.ai/mcp",
+      "enabled": false,
+      "oauth": false,
+      "headers": {
+        "User-Agent": "SWE-AF/0.1.0 (https://github.com/Agent-Field/SWE-AF)"
+      }
+    }
+  },
   "provider": {
     "openrouter": {
       "options": {
