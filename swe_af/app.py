@@ -98,7 +98,11 @@ async def _harness_with_scoped_credentials(*args, env=None, **kwargs):
     from swe_af.hitl import inject_credentials_into_env  # noqa: PLC0415
 
     ctx = getattr(app, "ctx", None)
-    run_id = (getattr(ctx, "run_id", None) if ctx else None) or ""
+    run_id = (
+        (getattr(ctx, "run_id", None) or getattr(ctx, "root_workflow_id", None))
+        if ctx
+        else None
+    ) or ""
     base_env = dict(os.environ) if env is None else dict(env)
     merged_env = inject_credentials_into_env(base_env, run_id)
     return await _original_harness(*args, env=merged_env, **kwargs)
