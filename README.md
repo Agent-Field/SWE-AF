@@ -389,25 +389,27 @@ With **only** an `INFRON_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway 
 
 ### MiniMax direct providers
 
-The Docker images include direct MiniMax provider entries for both supported regions and API compatibility modes. `MiniMax-M3` and `MiniMax-M2.7` are available in every entry.
+The Docker images include direct MiniMax provider entries for both supported regions and API compatibility modes. Every entry lists `MiniMax-M3.1-Flash` first, followed by `MiniMax-M3`. Set the model explicitly with the environment variables below; existing runtime and per-role overrides still apply.
 
 | Region | OpenAI-compatible `open_code` model IDs | Anthropic-compatible `open_code` model IDs | Anthropic base URL |
 |---|---|---|---|
-| Global | `minimax-global-openai/MiniMax-M3`, `minimax-global-openai/MiniMax-M2.7` | `minimax-anthropic/MiniMax-M3`, `minimax-anthropic/MiniMax-M2.7` | `https://api.minimax.io/anthropic` |
-| China | `minimax-cn-openai/MiniMax-M3`, `minimax-cn-openai/MiniMax-M2.7` | `minimax-anthropic/MiniMax-M3`, `minimax-anthropic/MiniMax-M2.7` | `https://api.minimaxi.com/anthropic` |
+| Global | `minimax-global-openai/MiniMax-M3.1-Flash`, `minimax-global-openai/MiniMax-M3` | `minimax-anthropic/MiniMax-M3.1-Flash`, `minimax-anthropic/MiniMax-M3` | `https://api.minimax.io/anthropic` |
+| China | `minimax-cn-openai/MiniMax-M3.1-Flash`, `minimax-cn-openai/MiniMax-M3` | `minimax-anthropic/MiniMax-M3.1-Flash`, `minimax-anthropic/MiniMax-M3` | `https://api.minimaxi.com/anthropic` |
 
-| Model | Context window | Input modalities | Thinking | Input / output / cache read / cache write per million tokens |
-|---|---:|---|---|---|
-| `MiniMax-M3` | 1,000,000 | text, image, video | adaptive or disabled | $0.30 / $1.20 / $0.06 / not charged |
-| `MiniMax-M2.7` | 204,800 | text | always on | $0.30 / $1.20 / $0.06 / $0.375 |
+| Model | Context window | Maximum output | Input modalities | Thinking | Input / output / cache read per million tokens |
+|---|---:|---:|---|---|---|
+| `MiniMax-M3.1-Flash` | 1,000,000 | 524,288 | text, image, video | always adaptive | $0.15 / $0.60 / $0.015 |
+| `MiniMax-M3` | 1,000,000 | 524,288 | text, image, video | adaptive or disabled | $0.30 / $1.20 / $0.06 |
 
-`MiniMax-M3` pricing is tiered by input length: requests over 512K input tokens are billed at $0.60 / $2.40 / $0.12 instead. The baked provider metadata uses the standard ≤512K tier, which is what normal coding requests hit.
+`MiniMax-M3` Standard pricing is tiered by input length: requests over 512K input tokens are billed at $0.60 / $2.40 / $0.12 instead. Priority pricing is 1.5× Standard. The flat provider metadata represents only the Standard ≤512K tier. Cache-write pricing is unspecified and omitted. See the [official pricing](https://platform.minimax.io/docs/pricing/overview).
+
+Flash thinking is always adaptive; do not disable it. M3 defaults to adaptive thinking on the OpenAI-compatible API and disabled thinking on the Anthropic-compatible API. These are API capabilities; this preset update does not add thinking, effort, or service-tier controls to the runtime.
 
 For the direct OpenAI-compatible path, set `MINIMAX_API_KEY`, use `runtime: "open_code"`, and select one of the `minimax-global-openai/*` or `minimax-cn-openai/*` model IDs above. The configured OpenAI-compatible base URLs are `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`.
 
-For the Anthropic-compatible OpenCode path, set `MINIMAX_API_KEY`, set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above, use `runtime: "open_code"`, and select `minimax-anthropic/MiniMax-M3` or `minimax-anthropic/MiniMax-M2.7`. The provider configuration appends `/v1`; keep `ANTHROPIC_BASE_URL` at the regional `/anthropic` URL.
+For the Anthropic-compatible OpenCode path, set `MINIMAX_API_KEY`, set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above, use `runtime: "open_code"`, and select `minimax-anthropic/MiniMax-M3.1-Flash` or `minimax-anthropic/MiniMax-M3`. The provider configuration appends `/v1`; keep `ANTHROPIC_BASE_URL` at the regional `/anthropic` URL.
 
-For the Anthropic-compatible Claude path, set `ANTHROPIC_AUTH_TOKEN`, set `ANTHROPIC_BASE_URL` to the regional `/anthropic` URL shown above, use `runtime: "claude_code"`, and select `MiniMax-M3` or `MiniMax-M2.7`. Do not append `/v1`; Claude Code adds `/v1/messages` to the configured base URL. Unset `ANTHROPIC_API_KEY` (and `CLAUDE_CODE_OAUTH_TOKEN`) in that deployment — an Anthropic credential left in the environment can be sent to the non-Anthropic endpoint.
+For the Anthropic-compatible Claude path, set `ANTHROPIC_AUTH_TOKEN`, set `ANTHROPIC_BASE_URL` to the regional `/anthropic` URL shown above, use `runtime: "claude_code"`, and select `MiniMax-M3.1-Flash` or `MiniMax-M3`. Do not append `/v1`; Claude Code adds `/v1/messages` to the configured base URL. Unset `ANTHROPIC_API_KEY` (and `CLAUDE_CODE_OAUTH_TOKEN`) in that deployment — an Anthropic credential left in the environment can be sent to the non-Anthropic endpoint.
 
 `ANTHROPIC_BASE_URL` is process-wide, so one deployment cannot route Claude and MiniMax Anthropic-compatible traffic to different endpoints.
 
