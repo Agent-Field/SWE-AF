@@ -403,7 +403,9 @@ The Docker images include direct MiniMax provider entries for both supported reg
 
 `MiniMax-M3` Standard pricing is tiered by input length: requests over 512K input tokens are billed at $0.60 / $2.40 / $0.12 instead. Priority pricing is 1.5× Standard. The flat provider metadata represents only the Standard ≤512K tier. Cache-write pricing is unspecified and omitted. See the [official pricing](https://platform.minimax.io/docs/pricing/overview).
 
-Flash thinking is always adaptive; do not disable it. M3 defaults to adaptive thinking on the OpenAI-compatible API and disabled thinking on the Anthropic-compatible API. These are API capabilities; this preset update does not add thinking, effort, or service-tier controls to the runtime.
+Flash thinking is always adaptive. Its OpenCode presets disable the inherited `none` and `thinking` variants and expose `low`, `medium`, `high`, `xhigh`, and `max` effort instead, with `max` as the default. The OpenAI-compatible adapter sends `reasoning_effort`; the Anthropic-compatible adapter sends `output_config.effort`. M3 retains OpenCode's existing adaptive/disabled variants without effort settings. Although M3's Anthropic API defaults to disabled thinking, OpenCode enables adaptive thinking by default. No service-tier setting is sent.
+
+The Infron catalog retains its existing `minimax/minimax-m3` route and removes the older M2.5 option. Flash is offered through the direct profiles above; no unverified gateway route is added.
 
 For the direct OpenAI-compatible path, set `MINIMAX_API_KEY`, use `runtime: "open_code"`, and select one of the `minimax-global-openai/*` or `minimax-cn-openai/*` model IDs above. The configured OpenAI-compatible base URLs are `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`.
 

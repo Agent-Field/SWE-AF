@@ -74,7 +74,12 @@ def test_minimax_model_metadata_matches_target_config(
     for provider_id in (*OPENAI_PROVIDERS, ANTHROPIC_PROVIDER):
         models = providers[provider_id]["models"]
         for model_id in MODEL_IDS:
-            assert models[model_id] == {
+            metadata = {
+                key: value
+                for key, value in models[model_id].items()
+                if key not in {"options", "variants"}
+            }
+            assert metadata == {
                 "id": model_id,
                 "name": model_id,
                 "attachment": True,
@@ -86,6 +91,46 @@ def test_minimax_model_metadata_matches_target_config(
                     "output": ["text"],
                 },
             }
+
+
+@pytest.mark.parametrize("provider_id", (*OPENAI_PROVIDERS, ANTHROPIC_PROVIDER))
+def test_flash_variants_cannot_disable_thinking(
+    opencode_config: dict[str, object], provider_id: str
+) -> None:
+    models = opencode_config["provider"][provider_id]["models"]
+    flash = models["MiniMax-M3.1-Flash"]
+    effort_key = "effort" if provider_id == ANTHROPIC_PROVIDER else "reasoningEffort"
+    assert flash["options"] == {
+        "thinking": {"type": "adaptive"},
+        effort_key: "max",
+    }
+    # OpenCode merges generated M3 variants before removing disabled entries.
+    assert flash["variants"]["none"] == {"disabled": True}
+    assert flash["variants"]["thinking"] == {"disabled": True}
+    active = {
+        name: options
+        for name, options in flash["variants"].items()
+        if not options.get("disabled")
+    }
+    assert list(active) == ["low", "medium", "high", "xhigh", "max"]
+    for effort, options in active.items():
+        assert options == {"thinking": {"type": "adaptive"}, effort_key: effort}
+    # Preserve M3's runtime defaults and adaptive/disabled toggle, without effort.
+    assert "options" not in models["MiniMax-M3"]
+    assert "variants" not in models["MiniMax-M3"]
+
+
+def test_gateway_catalog_removes_old_minimax_text_without_fabricating_routes(
+    opencode_config: dict[str, object],
+) -> None:
+    providers = opencode_config["provider"]
+    minimax_routes = [
+        model_id
+        for model_id in providers["infron"]["models"]
+        if model_id.startswith("minimax/")
+    ]
+    assert minimax_routes == ["minimax/minimax-m3"]
+    assert "models" not in providers["openrouter"]
 
 
 def test_minimax_anthropic_endpoints_and_model_ids_are_documented() -> None:

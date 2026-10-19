@@ -24,6 +24,19 @@
           "name": "MiniMax-M3.1-Flash",
           "attachment": true,
           "reasoning": true,
+          "options": {
+            "thinking": { "type": "adaptive" },
+            "reasoningEffort": "max"
+          },
+          "variants": {
+            "none": { "disabled": true },
+            "thinking": { "disabled": true },
+            "low": { "thinking": { "type": "adaptive" }, "reasoningEffort": "low" },
+            "medium": { "thinking": { "type": "adaptive" }, "reasoningEffort": "medium" },
+            "high": { "thinking": { "type": "adaptive" }, "reasoningEffort": "high" },
+            "xhigh": { "thinking": { "type": "adaptive" }, "reasoningEffort": "xhigh" },
+            "max": { "thinking": { "type": "adaptive" }, "reasoningEffort": "max" }
+          },
           "limit": {
             "context": 1000000,
             "output": 524288
@@ -87,6 +100,19 @@
           "name": "MiniMax-M3.1-Flash",
           "attachment": true,
           "reasoning": true,
+          "options": {
+            "thinking": { "type": "adaptive" },
+            "reasoningEffort": "max"
+          },
+          "variants": {
+            "none": { "disabled": true },
+            "thinking": { "disabled": true },
+            "low": { "thinking": { "type": "adaptive" }, "reasoningEffort": "low" },
+            "medium": { "thinking": { "type": "adaptive" }, "reasoningEffort": "medium" },
+            "high": { "thinking": { "type": "adaptive" }, "reasoningEffort": "high" },
+            "xhigh": { "thinking": { "type": "adaptive" }, "reasoningEffort": "xhigh" },
+            "max": { "thinking": { "type": "adaptive" }, "reasoningEffort": "max" }
+          },
           "limit": {
             "context": 1000000,
             "output": 524288
@@ -150,6 +176,19 @@
           "name": "MiniMax-M3.1-Flash",
           "attachment": true,
           "reasoning": true,
+          "options": {
+            "thinking": { "type": "adaptive" },
+            "effort": "max"
+          },
+          "variants": {
+            "none": { "disabled": true },
+            "thinking": { "disabled": true },
+            "low": { "thinking": { "type": "adaptive" }, "effort": "low" },
+            "medium": { "thinking": { "type": "adaptive" }, "effort": "medium" },
+            "high": { "thinking": { "type": "adaptive" }, "effort": "high" },
+            "xhigh": { "thinking": { "type": "adaptive" }, "effort": "xhigh" },
+            "max": { "thinking": { "type": "adaptive" }, "effort": "max" }
+          },
           "limit": {
             "context": 1000000,
             "output": 524288
@@ -222,9 +261,6 @@
         },
         "deepseek/deepseek-v4-pro": {
           "name": "DeepSeek V4 Pro"
-        },
-        "minimax/minimax-m2.5": {
-          "name": "MiniMax M2.5"
         },
         "minimax/minimax-m3": {
           "name": "MiniMax M3"
