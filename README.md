@@ -204,7 +204,8 @@ Most agent frameworks wrap a single coder loop. SWE-AF is a coordinated engineer
 
 </details>
 
-**Claude, OpenCode, Codex, and Command Code runtimes supported**: Run builds with any runtime and tune models per role in one flat config map.
+**AForge, Claude, OpenCode, Codex, and Command Code runtimes supported**: Run builds with any runtime and tune models per role in one flat config map.
+- `runtime: "aforge"` maps to AForge exec and is the default when an OpenRouter key is present without a runtime override.
 - `runtime: "claude_code"` maps to Claude backend.
 - `runtime: "open_code"` maps to OpenCode backend (OpenRouter/OpenAI/Google/Anthropic model IDs).
 - `runtime: "codex"` maps to the OpenAI Codex CLI backend.
@@ -247,7 +248,7 @@ New to AgentField? Install the control plane first with `curl -fsSL https://agen
 
 One click deploys SWE-AF + AgentField control plane + PostgreSQL. Exactly **one** environment variable is required in Railway — an LLM provider key:
 
-- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. With only this set (no `ANTHROPIC_API_KEY`, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash-0731` — no further configuration needed.
+- `OPENROUTER_API_KEY` — **recommended, simplest**. One key, 200+ open and proprietary models. When present and no runtime is explicitly selected, SWE-AF uses AForge `exec` and defaults every role to `openrouter/deepseek/deepseek-v4-flash-0731`.
 - *Alternative:* `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (uses Pro/Max subscription credits), to run the `claude_code` runtime instead.
 
 Optional:
@@ -280,6 +281,43 @@ python -m pip install -e ".[dev]"
 
 ### 3. Run
 
+#### Harness selection
+
+The Docker image ships AForge: a dedicated build stage downloads the released
+binary from `https://agentfield.ai/downloads/aforge/<version>/` and verifies it
+against the release `checksums.txt` before it enters the image. Both
+coordinates are build args, so a mirror or a different release can be
+substituted without editing the Dockerfile:
+
+```bash
+docker build \
+  --build-arg AFORGE_BASE_URL=https://agentfield.ai/downloads/aforge \
+  --build-arg AFORGE_VERSION=v0.1.0 \
+  -t swe-af .
+```
+
+`AFORGE_VERSION` is part of that layer's cache key — bumping it is what pulls a
+newer AForge; a floating URL alone would keep restoring the cached binary.
+
+A host installation needs `aforge` on `PATH` instead:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-...
+export SWE_DEFAULT_RUNTIME=aforge
+export SWE_DEFAULT_MODEL=openrouter/deepseek/deepseek-v4-flash-0731
+python -m swe_af
+```
+
+Set `SWE_DEFAULT_RUNTIME=open_code` for an OpenCode rollback (OpenCode stays
+installed in the image), or `claude_code` for Claude.
+
+> `AFORGE_BIN` and `AGENTFIELD_AFORGE_COMMAND` are honored on the pinned
+> `agentfield>=0.1.130` SDK, which carries
+> [agentfield#905](https://github.com/Agent-Field/agentfield/pull/905):
+> `AFORGE_BIN` overrides the binary otherwise resolved as `aforge` from `PATH`,
+> and `AGENTFIELD_AFORGE_COMMAND` picks the headless command (`exec`, the
+> default, or `do`) — `aforge exec --json -w <root> --timeout <seconds>`.
+
 ```bash
 af                 # starts AgentField control plane on :8080
 python -m swe_af   # registers node id "swe-planner"
@@ -288,7 +326,7 @@ python -m swe_af   # registers node id "swe-planner"
 ### 4. Trigger a build
 
 ```bash
-# Default (uses Claude)
+# Default (AForge with OpenRouter; otherwise follows deployment configuration)
 curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'
@@ -384,7 +422,7 @@ For Infron with `open_code`, set `INFRON_API_KEY` and use `infron/<provider>/<mo
 SWE_DEFAULT_MODEL=infron/moonshotai/kimi-k2.6
 ```
 
-With **only** an `INFRON_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway key, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults to `infron/deepseek/deepseek-v4-flash-0731` — the same rule the existing gateway path already follows. A gateway key already configured keeps precedence, so adding an Infron key never reroutes an existing deployment on its own.
+With **only** an `INFRON_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway key, no `SWE_DEFAULT_RUNTIME`), the main build/execute/issue/planning paths auto-select the `open_code` runtime and default to `infron/deepseek/deepseek-v4-flash-0731`. Fast mode retains its Claude fallback without OpenRouter; select `SWE_DEFAULT_RUNTIME=open_code` explicitly for fast Infron builds. A gateway key already configured keeps precedence, so adding an Infron key never reroutes an existing deployment on its own.
 
 > Docker and Railway deployments using Infron must set `HARNESS_MODEL=infron/deepseek/deepseek-v4-flash-0731` (or another `infron/...` id) in the environment. The image bakes an `openrouter/...` value that the `open_code` model cascade reads after the Infron auto default and would otherwise override it. `SWE_DEFAULT_MODEL` pins every role model but does not feed OpenCode's `small_model`; set `HARNESS_MODEL` for that path (setting both is fine).
 
@@ -561,10 +599,17 @@ cp .env.example .env
 docker compose up -d
 ```
 
-> `.env.example` ships with **every** provider key commented out — uncomment
-> exactly one. In particular, don't leave a placeholder `ANTHROPIC_API_KEY`
-> value in place: any non-empty value forces the `claude_code` runtime and
-> breaks an OpenRouter-only setup.
+> `.env.example` ships with every provider key commented out. With a nonblank
+> `OPENROUTER_API_KEY` and no explicit runtime, both nodes now select `aforge`,
+> even alongside Anthropic credentials (API key, OAuth/subscription, or a custom
+> Anthropic endpoint). Existing deployments can therefore change harness,
+> model family, and billing provider on upgrade. Set `SWE_DEFAULT_RUNTIME=claude_code`
+> to retain Claude or `SWE_DEFAULT_RUNTIME=open_code` to retain OpenCode.
+> Request `config.runtime` overrides the deployment setting. Explicit model
+> settings still win, so check that they are compatible with the selected runtime.
+> Host/package installs also need the AForge CLI on `PATH` (or `AFORGE_BIN`);
+> the Docker and Railway images include it. Command Code is Python-only and
+> always requires an explicit runtime choice.
 
 Submit a build:
 
@@ -861,7 +906,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
-| `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python node only). The default also honors the `SWE_DEFAULT_RUNTIME` env var when no `runtime` is passed in `config` — set it on the deployment so callers don't need to plumb a config through. |
+| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python only, explicit opt-in). With OpenRouter available the default is `"aforge"`; with only Infron it is `"open_code"` on the main path; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide; request `runtime` wins over that. |
 | `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |

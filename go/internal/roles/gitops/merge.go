@@ -57,7 +57,7 @@ func RunMerger(ctx context.Context, deps *Deps, input map[string]any) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	model, err := resolveModel(in.Model, "merger")
+	model, err := resolveModel(in.Model, "merger", provider)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func RunIntegrationTester(ctx context.Context, deps *Deps, input map[string]any)
 	if err != nil {
 		return nil, err
 	}
-	model, err := resolveModel(in.Model, "integration_tester")
+	model, err := resolveModel(in.Model, "integration_tester", provider)
 	if err != nil {
 		return nil, err
 	}

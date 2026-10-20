@@ -5,7 +5,7 @@ module github.com/Agent-Field/SWE-AF/go
 go 1.21
 
 require (
-	github.com/Agent-Field/agentfield/sdk/go v0.0.0-20260723130821-20955b2637b4
+	github.com/Agent-Field/agentfield/sdk/go v0.1.130
 	github.com/invopop/jsonschema v0.13.0
 	golang.org/x/sync v0.11.0
 )
@@ -19,8 +19,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// The SDK has no sdk/go/vX.Y.Z submodule tags, so it is pinned by
-// pseudo-version above — the same commit go/Dockerfile pins via
-// AGENTFIELD_SDK_REF. Bump both together. Dev can still layer a local
-// checkout on top with the go.work workspace; nothing here depends on a
-// sibling checkout anymore, which is what makes `af install …//go` work.
+// The SDK now publishes sdk/go/vX.Y.Z submodule tags, so the require above is
+// a real version. go/Dockerfile and .github/workflows/ci.yml pin the same
+// release by commit via AGENTFIELD_SDK_REF (sdk/go/v0.1.130 is
+// aba20a9b248d9ee6c74f4e7e688ef0740c542dc9) — bump them together. Dev can still
+// layer a local checkout on top with the go.work workspace; nothing here
+// depends on a sibling checkout, which is what makes `af install …//go` work.

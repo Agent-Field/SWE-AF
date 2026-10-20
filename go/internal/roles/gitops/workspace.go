@@ -61,7 +61,7 @@ func RunGitInit(ctx context.Context, deps *Deps, input map[string]any) (any, err
 	if err != nil {
 		return nil, err
 	}
-	model, err := resolveModel(in.Model, "git")
+	model, err := resolveModel(in.Model, "git", provider)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +143,7 @@ func RunWorkspaceSetup(ctx context.Context, deps *Deps, input map[string]any) (a
 	if err != nil {
 		return nil, err
 	}
-	model, err := resolveModel(in.Model, "git")
+	model, err := resolveModel(in.Model, "git", provider)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +208,7 @@ func RunWorkspaceCleanup(ctx context.Context, deps *Deps, input map[string]any) 
 	if err != nil {
 		return nil, err
 	}
-	model, err := resolveModel(in.Model, "git")
+	model, err := resolveModel(in.Model, "git", provider)
 	if err != nil {
 		return nil, err
 	}

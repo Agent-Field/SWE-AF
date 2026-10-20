@@ -372,8 +372,8 @@ def _happy_path_side_effect() -> list:
 
 
 @pytest.mark.asyncio
-async def test_plan_openrouter_only_defaults_to_open_code(mock_agent_ai, tmp_path, monkeypatch):
-    """Only an OpenRouter key present → plan() runs on open_code with the default
+async def test_plan_openrouter_defaults_to_aforge(mock_agent_ai, tmp_path, monkeypatch):
+    """An OpenRouter key present → plan() runs on aforge with the default
     OpenRouter model, with no ai_provider/model args passed."""
     for k in _PROVIDER_ENV_KEYS:
         monkeypatch.delenv(k, raising=False)
@@ -384,7 +384,7 @@ async def test_plan_openrouter_only_defaults_to_open_code(mock_agent_ai, tmp_pat
 
     pm_call = mock_agent_ai.call_args_list[0]
     assert pm_call.args[0].endswith("run_product_manager")
-    assert pm_call.kwargs["ai_provider"] == "open_code"
+    assert pm_call.kwargs["ai_provider"] == "aforge"
     assert pm_call.kwargs["model"] == "openrouter/deepseek/deepseek-v4-flash-0731"
 
 
@@ -409,7 +409,7 @@ async def test_plan_explicit_args_override_env(mock_agent_ai, tmp_path, monkeypa
     """Explicit ai_provider/model always win over the env-resolved defaults."""
     for k in _PROVIDER_ENV_KEYS:
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")  # would otherwise force open_code
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")  # would otherwise force aforge
 
     mock_agent_ai.side_effect = _happy_path_side_effect()
     await _run_plan_defaults(str(tmp_path), ai_provider="codex", pm_model="gpt-5")
@@ -431,5 +431,5 @@ async def test_plan_swe_default_model_overrides_openrouter_auto(mock_agent_ai, t
     await _run_plan_defaults(str(tmp_path))
 
     pm_call = mock_agent_ai.call_args_list[0]
-    assert pm_call.kwargs["ai_provider"] == "open_code"
+    assert pm_call.kwargs["ai_provider"] == "aforge"
     assert pm_call.kwargs["model"] == "openrouter/qwen/qwen3-max"

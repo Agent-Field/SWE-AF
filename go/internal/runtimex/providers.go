@@ -1,13 +1,15 @@
-// Package runtimex is a verbatim port of swe_af/runtime/providers.py: the
+// Package runtimex ports the Go-supported subset of swe_af/runtime/providers.py:
 // shared runtime/provider normalization and mapping utilities.
 //
-// Three canonical runtimes exist (RuntimeValues). Callers pass user-facing
-// aliases ("claude", "claude-code", "opencode", ...) which NormalizeRuntimeProvider
-// folds to a canonical value. Two separate mappings then translate a canonical
-// runtime to the string the harness expects — and they are NOT the same for
-// claude_code: the harness *provider* is "claude" while the harness *adapter*
-// is "claude-code" (design §4.7, "note the asymmetry"). open_code and codex map
-// identically under both.
+// Four canonical Go runtimes exist (RuntimeValues). Python additionally supports
+// command_code through a local SDK patch; that provider is unavailable in Go.
+// Callers pass user-facing
+// aliases ("claude", "claude-code", "opencode", "aforge-v2", ...) which
+// NormalizeRuntimeProvider folds to a canonical value. Two separate mappings
+// then translate a canonical runtime to the string the harness expects — and
+// they are NOT the same for claude_code: the harness *provider* is "claude"
+// while the harness *adapter* is "claude-code" (design §4.7, "note the
+// asymmetry"). aforge, open_code and codex map identically under both.
 package runtimex
 
 import (
@@ -15,9 +17,10 @@ import (
 	"strings"
 )
 
-// RuntimeValues is the tuple of canonical runtime values, ported verbatim from
-// Python's RUNTIME_VALUES = ("claude_code", "open_code", "codex").
-var RuntimeValues = [...]string{"claude_code", "open_code", "codex"}
+// RuntimeValues is the tuple of canonical Go runtime values. Python's
+// RUNTIME_VALUES also includes the Python-only command_code runtime.
+// Order matters: it is joined verbatim into the "Valid runtimes: ..." error.
+var RuntimeValues = [...]string{"aforge", "claude_code", "open_code", "codex"}
 
 // NormalizeRuntimeProvider normalizes user/runtime aliases to canonical runtime
 // values.
@@ -34,6 +37,8 @@ func NormalizeRuntimeProvider(runtime string) (string, error) {
 		return "claude_code", nil
 	case "open_code", "opencode":
 		return "open_code", nil
+	case "aforge", "aforge_v2", "aforge-v2":
+		return "aforge", nil
 	case "codex":
 		return "codex", nil
 	}
@@ -44,8 +49,8 @@ func NormalizeRuntimeProvider(runtime string) (string, error) {
 // value.
 //
 // Ports runtime_to_harness_provider: claude_code -> "claude", open_code ->
-// "opencode", codex -> "codex". Normalizes first, propagating the normalize
-// error for unsupported input.
+// "opencode", aforge -> "aforge", codex -> "codex". Normalizes first,
+// propagating the normalize error for unsupported input.
 func RuntimeToHarnessProvider(runtime string) (string, error) {
 	normalized, err := NormalizeRuntimeProvider(runtime)
 	if err != nil {
@@ -56,6 +61,8 @@ func RuntimeToHarnessProvider(runtime string) (string, error) {
 		return "claude", nil
 	case "open_code":
 		return "opencode", nil
+	case "aforge":
+		return "aforge", nil
 	default:
 		return "codex", nil
 	}
@@ -65,9 +72,10 @@ func RuntimeToHarnessProvider(runtime string) (string, error) {
 // values.
 //
 // Ports runtime_to_harness_adapter: claude_code -> "claude-code", open_code ->
-// "opencode", codex -> "codex". Differs from RuntimeToHarnessProvider only for
-// claude_code ("claude-code" here vs "claude" there). Normalizes first,
-// propagating the normalize error for unsupported input.
+// "opencode", aforge -> "aforge", codex -> "codex". Differs from
+// RuntimeToHarnessProvider only for claude_code ("claude-code" here vs "claude"
+// there). Normalizes first, propagating the normalize error for unsupported
+// input.
 func RuntimeToHarnessAdapter(runtime string) (string, error) {
 	normalized, err := NormalizeRuntimeProvider(runtime)
 	if err != nil {
@@ -78,6 +86,8 @@ func RuntimeToHarnessAdapter(runtime string) (string, error) {
 		return "claude-code", nil
 	case "open_code":
 		return "opencode", nil
+	case "aforge":
+		return "aforge", nil
 	default:
 		return "codex", nil
 	}

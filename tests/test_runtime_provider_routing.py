@@ -7,6 +7,11 @@ def test_runtime_to_harness_adapter_supports_codex() -> None:
     assert runtime_to_harness_adapter("codex") == "codex"
 
 
+def test_runtime_to_harness_adapter_supports_aforge_aliases() -> None:
+    assert runtime_to_harness_adapter("aforge") == "aforge"
+    assert runtime_to_harness_adapter("aforge-v2") == "aforge"
+
+
 def test_runtime_to_harness_adapter_supports_command_code() -> None:
     assert runtime_to_harness_adapter("command_code") == "command-code"
     assert runtime_to_harness_adapter("cmd") == "command-code"

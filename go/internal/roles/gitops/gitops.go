@@ -100,11 +100,11 @@ func resolveProvider(aiProvider string) (string, error) {
 	return runtimex.RuntimeToHarnessAdapter(orDefault(aiProvider, config.DefaultRuntime()))
 }
 
-func resolveModel(model, role string) (string, error) {
+func resolveModel(model, role, runtime string) (string, error) {
 	if model != "" {
 		return model, nil
 	}
-	return config.DefaultRoleModel(role)
+	return config.DefaultRoleModel(role, runtime)
 }
 
 // roleOptions builds the harness.Options for a role from its resolved

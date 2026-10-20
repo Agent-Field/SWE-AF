@@ -180,7 +180,7 @@ def test_omitted_runtime_falls_back_to_env_resolution(
 ) -> None:
     """No runtime arg → runtime is resolved from env (historical behavior)."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
-    # OpenRouter-only env auto-selects open_code, so the auto default applies.
+    # OpenRouter env auto-selects aforge, which shares this model default.
     assert _default_planning_model() == _OPENROUTER_AUTO_DEFAULT_MODEL
 
 

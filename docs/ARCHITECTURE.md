@@ -422,7 +422,7 @@ SWE-AF orchestrates 22 specialized agents across four phases. Each agent is a re
 
 Every build now uses a single V2 model contract:
 
-- `runtime`: `claude_code`, `open_code`, `codex`, or `command_code` (Python node only)
+- `runtime`: `aforge`, `claude_code`, `open_code`, `codex`, or `command_code` (Python only, explicit opt-in)
 - `models`: flat role map (`default` + explicit role keys)
 
 Supported role keys:
@@ -440,10 +440,11 @@ Runtime defaults:
 
 | Runtime | Base default | Special default |
 |---|---|---|
+| `aforge` | `openrouter/deepseek/deepseek-v4-flash-0731` | auto-selected with a nonblank OpenRouter key and no runtime override |
 | `claude_code` | `sonnet` | `qa_synthesizer=haiku` |
 | `open_code` | `openrouter/deepseek/deepseek-v4-flash-0731` | none |
 | `codex` | `gpt-5.3-codex` | none |
-| `command_code` (Python node only) | CLI-configured default (blank model) | no baked-in model IDs |
+| `command_code` | blank (CLI default) | Python only, explicit opt-in |
 
 The QA synthesizer uses the same runtime harness and credentials as the coding
 and review roles. Existing `models.qa_synthesizer` overrides using LiteLLM's
@@ -452,8 +453,11 @@ removes the matching provider prefix for `claude_code` or `codex`, respectively.
 OpenCode keeps its provider-qualified model IDs. No separate direct-LLM API key
 is required for the Python synthesizer.
 
-The `open_code` default applies both when the runtime is auto-selected (only
-`OPENROUTER_API_KEY` present — no `ANTHROPIC_API_KEY`, no
-`SWE_DEFAULT_RUNTIME`) and when `SWE_DEFAULT_RUNTIME=open_code` is set
-explicitly. It is also what fast mode resolves to on that path. Override the
-base default with `SWE_DEFAULT_MODEL` or per-request `models`.
+With an OpenRouter key and no runtime override, both nodes now select `aforge`,
+including when Anthropic credentials are also set. Select
+`SWE_DEFAULT_RUNTIME=open_code` to retain OpenCode or `claude_code` to retain
+Claude. Request runtime overrides take precedence. Infron alone still selects
+`open_code` on the main path (fast mode needs an explicit runtime); its host
+default is `infron/deepseek/deepseek-v4-flash-0731`. In Docker override the baked
+`HARNESS_MODEL` for Infron too. Override model defaults with `SWE_DEFAULT_MODEL`
+or per-request `models`.

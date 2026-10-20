@@ -103,10 +103,10 @@ func RunProductManager(ctx context.Context, deps *Deps, input map[string]any) (a
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
 	additionalContext := getString(input, "additional_context", "")
-	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel(aiProvider))
 	initialPrior := getPriorResponses(input)
 
 	base, paths, err := ensurePaths(repoPath, artifactsDir)
@@ -203,10 +203,10 @@ func RunEnvironmentScout(ctx context.Context, deps *Deps, input map[string]any) 
 	prd := getMap(input, "prd")
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
-	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel(aiProvider))
 	initialPrior := getPriorResponses(input)
 
 	// Ensure the artifact dirs exist; the scout writes no artifacts of its own.
@@ -320,10 +320,10 @@ func RunArchitect(ctx context.Context, deps *Deps, input map[string]any) (any, e
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
 	feedback := getString(input, "feedback", "")
-	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel(aiProvider))
 
 	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
@@ -396,10 +396,10 @@ func RunTechLead(ctx context.Context, deps *Deps, input map[string]any) (any, er
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
 	revisionNumber := getInt(input, "revision_number", 0)
-	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel(aiProvider))
 
 	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
@@ -895,10 +895,10 @@ func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (an
 
 	repoPath := getString(input, "repo_path", "")
 	artifactsDir := getString(input, "artifacts_dir", ".artifacts")
-	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel())
 	maxTurns := getInt(input, "max_turns", config.DefaultAgentMaxTurns)
 	permissionMode := getString(input, "permission_mode", "")
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
+	model := orResolvedDefault(getString(input, "model", ""), config.DefaultPlanningModel(aiProvider))
 
 	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {

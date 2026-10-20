@@ -75,7 +75,7 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 
 | Key | Values | Description |
 |-----|--------|-------------|
-| `runtime` | `"claude_code"`, `"open_code"`, `"codex"`, `"command_code"` | AI backend to use; `command_code` is Python-node only |
+| `runtime` | `"aforge"`, `"claude_code"`, `"open_code"`, `"codex"`, `"command_code"` | AI backend; `command_code` is Python-only and always explicit |
 | `models.default` | model ID string | Default model for all agents |
 | `models.coder` | model ID string | Override for coder role |
 | `models.qa` | model ID string | Override for QA role |

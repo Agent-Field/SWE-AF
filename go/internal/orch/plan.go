@@ -151,13 +151,13 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	}
 
 	// Resolve provider/model defaults from the environment (docstring parity):
-	// with only an OPENROUTER_API_KEY present the pipeline runs on open_code with
+	// with only an OPENROUTER_API_KEY present the pipeline runs on aforge with
 	// the default OpenRouter model; explicit args always win.
 	aiProvider := in.AIProvider
 	if aiProvider == "" {
 		aiProvider = config.DefaultRuntime()
 	}
-	defaultModel := config.DefaultPlanningModel()
+	defaultModel := config.DefaultPlanningModel(aiProvider)
 	pmModel := firstNonEmpty(in.PMModel, defaultModel)
 	architectModel := firstNonEmpty(in.ArchitectModel, defaultModel)
 	techLeadModel := firstNonEmpty(in.TechLeadModel, defaultModel)

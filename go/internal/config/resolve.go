@@ -131,9 +131,9 @@ const (
 	codexAPIKeyModel  = "gpt-5.3-codex" // OpenAI API-key auth (api_key mode)
 	codexChatGPTModel = "gpt-5.5"       // ChatGPT-account auth (-codex blocked)
 
-	// Default model for the open_code runtime — both the auto-selected
-	// OpenRouter path (see openRouterOnlyEnv) and an explicit
-	// SWE_DEFAULT_RUNTIME=open_code resolve here, so opting in explicitly
+	// Default model for the OpenRouter-backed runtimes (aforge, open_code) —
+	// both the auto-selected OpenRouter path (see openRouterOnlyEnv) and an
+	// explicit SWE_DEFAULT_RUNTIME resolve here, so opting in explicitly
 	// never silently swaps the model.
 	openRouterAutoDefaultModel = "openrouter/deepseek/deepseek-v4-flash-0731"
 
@@ -145,12 +145,16 @@ const (
 
 // runtimeBaseModels ports _RUNTIME_BASE_MODELS[runtime] as a fresh copy for the
 // given runtime, or nil if the runtime is unknown. claude_code is all "sonnet"
-// except qa_synthesizer_model="haiku"; open_code is all
+// except qa_synthesizer_model="haiku"; aforge and open_code are all
 // openRouterAutoDefaultModel (v4-flash-0731); codex is all the API-key model
 // (adjusted for auth mode by ResolveRuntimeModels).
 func runtimeBaseModels(runtime string) map[string]string {
 	base := make(map[string]string, len(AllModelFields))
 	switch runtime {
+	case "aforge":
+		for _, field := range AllModelFields {
+			base[field] = openRouterAutoDefaultModel
+		}
 	case "claude_code":
 		for _, field := range AllModelFields {
 			base[field] = "sonnet"
@@ -179,13 +183,11 @@ func envStripped(key string) string {
 }
 
 // openRouterOnlyEnv ports _openrouter_only_env: whether the deployer implicitly
-// chose the OpenRouter runtime (no explicit SWE_DEFAULT_RUNTIME, no Anthropic
-// key, but an OpenRouter key present).
+// chose the OpenRouter runtime (no explicit SWE_DEFAULT_RUNTIME, but an
+// OpenRouter key present). An Anthropic key alongside it no longer vetoes the
+// choice — OpenRouter wins, and SWE_DEFAULT_RUNTIME=claude_code is the opt-out.
 func openRouterOnlyEnv() bool {
 	if envStripped("SWE_DEFAULT_RUNTIME") != "" {
-		return false
-	}
-	if envStripped("ANTHROPIC_API_KEY") != "" {
 		return false
 	}
 	return envStripped("OPENROUTER_API_KEY") != ""
@@ -210,12 +212,20 @@ func infronOnlyEnv() bool {
 }
 
 // DefaultRuntime ports _default_runtime, honoring SWE_DEFAULT_RUNTIME.
-// When unset, auto-selects open_code if only a gateway key is present,
-// otherwise claude_code. An invalid env value falls back to claude_code.
+// When unset, auto-selects aforge with an OpenRouter key, open_code with only
+// an Infron key, otherwise claude_code. An invalid env value falls back to
+// claude_code.
+//
+// The aforge default requires an AgentField Go SDK whose harness.BuildProvider
+// knows the "aforge" provider (agentfield#905). go.mod pins sdk/go v0.1.130,
+// which carries it — see go/README.md § Docker.
 func DefaultRuntime() string {
 	value := envStripped("SWE_DEFAULT_RUNTIME")
 	if value == "" {
-		if openRouterOnlyEnv() || infronOnlyEnv() {
+		if openRouterOnlyEnv() {
+			return "aforge"
+		}
+		if infronOnlyEnv() {
 			return "open_code"
 		}
 		return "claude_code"
@@ -292,36 +302,37 @@ func tierModelsFromEnv() map[string]string {
 	return tiers
 }
 
-// DefaultPlanningModel ports _default_planning_model: SWE_MODEL_HIGH first
-// (the planning reasoners are high-tier roles, see RoleToTier — the same
-// relative precedence tier env vars have in ResolveRuntimeModels), then the
-// env cascade, then the gateway default when only a gateway key is present,
-// else "sonnet".
-func DefaultPlanningModel() string {
-	if highModel := tierModelsFromEnv()["high"]; highModel != "" {
-		return highModel
+// DefaultPlanningModel resolves the high-tier PM model for the selected runtime.
+// Omitting the runtime uses deployment auto-selection, matching Python's
+// _default_planning_model. Explicit runtime overrides must select that runtime's
+// model family as well as its harness provider.
+func DefaultPlanningModel(runtime ...string) string {
+	model, err := DefaultRoleModel("pm", runtime...)
+	if err != nil {
+		// Invalid providers are rejected by the harness adapter mapping.
+		return "sonnet"
 	}
-	if envModel := defaultModelFromEnv(DefaultRuntime()); envModel != "" {
-		return envModel
-	}
-	if openRouterOnlyEnv() {
-		return openRouterAutoDefaultModel
-	}
-	if infronOnlyEnv() {
-		return infronAutoDefaultModel
-	}
-	return "sonnet"
+	return model
 }
 
 // DefaultRoleModel resolves the configured call-time default for one role.
 // It uses the same runtime base, environment cascade, and tier precedence as
 // ResolveRuntimeModels, without introducing a separate direct-call policy.
-func DefaultRoleModel(role string) (string, error) {
+// An explicit runtime takes precedence over deployment auto-selection.
+func DefaultRoleModel(role string, runtime ...string) (string, error) {
 	field, ok := RoleToModelField[role]
 	if !ok {
 		return "", fmt.Errorf("unknown role %s", pyRepr(role))
 	}
-	resolved, err := ResolveRuntimeModels(DefaultRuntime(), nil, []string{field})
+	selected := DefaultRuntime()
+	if len(runtime) > 0 && runtime[0] != "" {
+		selected = runtime[0]
+	}
+	selected, err := runtimex.NormalizeRuntimeProvider(selected)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := ResolveRuntimeModels(selected, nil, []string{field})
 	if err != nil {
 		return "", err
 	}
