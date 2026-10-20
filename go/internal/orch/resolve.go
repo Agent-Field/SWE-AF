@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
+	"github.com/Agent-Field/SWE-AF/go/internal/roles/ci"
 	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
 
@@ -135,6 +136,12 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 		resolverModel = "sonnet"
 	}
 
+	// Remember where the remote head branch pointed before the agent ran, so a
+	// post-run comparison can tell whether anything was actually pushed. Read
+	// from the remote (not a local ref) — the agent pushes straight from its own
+	// process, which leaves this workspace's remote-tracking refs stale.
+	remoteBefore := remoteBranchSHA(ctx, repoPath, in.HeadBranch)
+
 	resolveResult, err := deps.Call(ctx, "run_pr_resolver", map[string]any{
 		"repo_path":          repoPath,
 		"pr_number":          in.PRNumber,
@@ -148,7 +155,7 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 		"goal":               in.Goal,
 		"additional_context": in.AdditionalContext,
 		"model":              resolverModel,
-		"permission_mode":    cfg.PermissionMode,
+		"permission_mode":    resolverPermissionMode(cfg.PermissionMode, cfg.AIProvider()),
 		"ai_provider":        cfg.AIProvider(),
 	}, "run_pr_resolver")
 	if err != nil {
@@ -168,6 +175,68 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 		} else {
 			deps.Note(ctx, fmt.Sprintf("Resolve push failed: %s", strings.TrimSpace(push.Stderr)),
 				"resolve", "push", "error")
+		}
+	}
+
+	// ---- 5b. Reconcile an unusable agent report against the remote ---------
+	// When the harness returned no parseable result, run_pr_resolver hands back
+	// a deterministic all-false fallback. That report says nothing about what
+	// happened on disk: the agent may well have committed and pushed before the
+	// final structured answer failed to parse. Ask the remote instead of the
+	// report, and record precisely what the remote can and cannot prove.
+	if resolverReportInvalid(resolveResult) {
+		// report_invalid marks the agent's own report as untrustworthy. It is
+		// set whenever the sentinel is seen, independently of what the remote
+		// shows, so consumers never mistake a reconstructed result for a
+		// first-hand one.
+		resolveResult["report_invalid"] = true
+
+		remoteAfter := remoteBranchSHA(ctx, repoPath, in.HeadBranch)
+		localHead := localHeadSHA(ctx, repoPath)
+		verdict := classifyRemoteAdvance(remoteBefore, remoteAfter, localHead)
+
+		switch {
+		case verdict.Attributed:
+			// The remote tip is exactly this workspace's HEAD, so the advance
+			// is our agent's work. pushed is now provable — fixed is NOT: a
+			// landed commit is not evidence that CI passes or that the review
+			// comments were addressed. Leaving fixed false keeps the overall
+			// success verdict below (fixed && pushed) false, which is the
+			// truthful answer for a run whose agent never reported back.
+			resolveResult["pushed"] = true
+			pushed = true
+
+			// rev-list / diff need the post-push objects locally; the workspace
+			// only has what it cloned plus whatever the agent committed.
+			if fetchRemoteBranch(ctx, repoPath, in.HeadBranch) {
+				resolveResult["commit_shas"] = remoteCommitSHAs(ctx, repoPath, remoteBefore, remoteAfter)
+				resolveResult["files_changed"] = remoteFilesChanged(ctx, repoPath, remoteBefore, remoteAfter)
+			} else {
+				// verification_partial: the push is confirmed but the commit
+				// and file lists could not be reconstructed, so their emptiness
+				// means "unknown", not "nothing changed".
+				resolveResult["commit_shas"] = []string{}
+				resolveResult["files_changed"] = []string{}
+				resolveResult["verification_partial"] = true
+			}
+			resolveResult["summary"] = "agent report invalid; verified this workspace's work was pushed to " + in.HeadBranch
+			resolveResult["error_message"] = "agent report invalid; push verified against the remote, fix NOT verified"
+			deps.Note(ctx, "Resolve: agent report invalid, but this workspace's HEAD is now the remote tip — push verified, fix unverified",
+				"resolve", "report", "warning")
+
+		case verdict.Advanced:
+			// The branch moved but the new tip is not our HEAD: someone (or
+			// something) else pushed while we ran. Record the observation and
+			// attribute nothing — claiming this push would be a lie, and the
+			// commits are not ours to describe.
+			resolveResult["remote_advanced"] = true
+			deps.Note(ctx, fmt.Sprintf(
+				"Resolve: agent report invalid and %s moved on the remote, but the new tip is not this workspace's HEAD — not attributing the push",
+				in.HeadBranch), "resolve", "report", "warning")
+
+		default:
+			deps.Note(ctx, "Resolve: agent report invalid and the remote branch did not move — no work landed",
+				"resolve", "report", "warning")
 		}
 	}
 
@@ -226,6 +295,9 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 	// ---- 8. Workspace cleanup (non-blocking) -------------------------------
 	_ = os.RemoveAll(repoPath)
 
+	// fixed && pushed — both must hold. Step 5b can raise pushed on the strength
+	// of the remote alone, but it never raises fixed, so a run whose agent never
+	// reported back still lands here as success=false.
 	success := asBool(resolveResult["fixed"]) && pushed
 	summary := fmt.Sprintf(
 		"PR #%d: merge=%s, %d file(s) changed, %d/%d comment(s) addressed",
@@ -262,6 +334,125 @@ func ResolveHandler(ctx context.Context, deps *Deps, input map[string]any) (any,
 		"summary":        summary,
 		"success":        success,
 	}, nil
+}
+
+// resolverReportInvalid reports whether run_pr_resolver returned its
+// deterministic "the harness gave me nothing parseable" fallback rather than a
+// real report. Matches ci.InvalidResolverReport in either field the fallback
+// sets, so a future change to only one of them still trips the check.
+func resolverReportInvalid(result map[string]any) bool {
+	return mapStr(result, "error_message", "") == ci.InvalidResolverReport ||
+		mapStr(result, "summary", "") == ci.InvalidResolverReport
+}
+
+// pushVerdict is what the remote branch can prove about a run whose agent
+// report is unusable. The two flags are deliberately separate: a branch that
+// moved is not the same claim as a branch that moved *because of us*.
+type pushVerdict struct {
+	// Advanced: the remote head branch tip changed while the resolver ran.
+	Advanced bool
+	// Attributed: the new remote tip is this workspace's HEAD, so the advance
+	// is the work this run produced and may be reported as our push. False
+	// alongside Advanced means a third party moved the branch.
+	Attributed bool
+}
+
+// classifyRemoteAdvance decides what may be claimed from three SHAs: the remote
+// tip before the agent ran, the remote tip after, and this workspace's local
+// HEAD. An unknown ("") before/after SHA proves nothing, so it yields the zero
+// verdict — silence is preferable to a guess.
+func classifyRemoteAdvance(remoteBefore, remoteAfter, localHead string) pushVerdict {
+	if remoteBefore == "" || remoteAfter == "" || remoteBefore == remoteAfter {
+		return pushVerdict{}
+	}
+	return pushVerdict{
+		Advanced:   true,
+		Attributed: localHead != "" && localHead == remoteAfter,
+	}
+}
+
+// remoteBranchSHA returns the SHA origin currently has for branch, or "" when
+// the branch is absent or the query failed.
+func remoteBranchSHA(ctx context.Context, repoPath, branch string) string {
+	r := runGit(ctx, repoPath, "ls-remote", "origin", "refs/heads/"+branch)
+	if r.ExitCode != 0 {
+		return ""
+	}
+	fields := strings.Fields(r.Stdout)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// localHeadSHA returns the workspace's current HEAD SHA, or "" if unreadable.
+func localHeadSHA(ctx context.Context, repoPath string) string {
+	r := runGit(ctx, repoPath, "rev-parse", "HEAD")
+	if r.ExitCode != 0 {
+		return ""
+	}
+	return strings.TrimSpace(r.Stdout)
+}
+
+// fetchRemoteBranch pulls the branch's current objects into the workspace so
+// rev-list / diff can resolve the post-push SHA locally. Reports success.
+func fetchRemoteBranch(ctx context.Context, repoPath, branch string) bool {
+	return runGit(ctx, repoPath, "fetch", "origin", branch).ExitCode == 0
+}
+
+func remoteCommitSHAs(ctx context.Context, repoPath, before, after string) []string {
+	r := runGit(ctx, repoPath, "rev-list", "--reverse", before+".."+after)
+	if r.ExitCode != 0 {
+		return []string{}
+	}
+	return nonEmptyLines(r.Stdout)
+}
+
+func remoteFilesChanged(ctx context.Context, repoPath, before, after string) []string {
+	r := runGit(ctx, repoPath, "diff", "--name-only", before, after)
+	if r.ExitCode != 0 {
+		return []string{}
+	}
+	return nonEmptyLines(r.Stdout)
+}
+
+func nonEmptyLines(s string) []string {
+	out := []string{}
+	for _, line := range strings.Split(s, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// resolverPermissionMode picks the permission mode handed to run_pr_resolver.
+//
+// An explicitly configured mode always wins. When none is configured the
+// default is provider-dependent, because the SDK harnesses disagree on what an
+// empty permission mode means (sdk/go/harness):
+//
+//   - claude: an empty mode omits --permission-mode entirely, so the CLI falls
+//     back to its "prompting" default. Under `claude --print` there is nobody to
+//     answer the prompt, so every write is denied and the resolver silently
+//     produces no commits. "auto" maps to bypassPermissions, which is what the
+//     resolver actually needs — it owns a throwaway clone.
+//   - codex: an empty mode already yields `--sandbox workspace-write`, i.e. the
+//     workspace is writable. "auto" would escalate to
+//     --dangerously-bypass-approvals-and-sandbox, dropping the sandbox around
+//     the *whole machine* for no benefit. Leave it empty.
+//   - opencode: the provider never reads PermissionMode, so the value is inert.
+//     Leave it empty rather than implying a guarantee we do not make.
+//
+// Hence the "auto" default is gated to the claude provider only.
+func resolverPermissionMode(configured, provider string) string {
+	if configured != "" {
+		return configured
+	}
+	if provider == "claude" {
+		return "auto"
+	}
+	return ""
 }
 
 // attemptBaseMerge fetches base_branch and merges it into the current branch.

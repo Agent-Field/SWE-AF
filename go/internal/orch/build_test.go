@@ -8,11 +8,36 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
 	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
+
+type fakeFurrow struct {
+	handle        *furrow.Handle
+	attachErr     error
+	attachedPath  string
+	attachedRunID string
+	publishedRuns []string
+	publishes     []string
+}
+
+func (f *fakeFurrow) Enabled() bool { return true }
+func (f *fakeFurrow) Attach(runID, _, repoPath string) (*furrow.Handle, error) {
+	f.attachedRunID, f.attachedPath = runID, repoPath
+	return f.handle, f.attachErr
+}
+func (f *fakeFurrow) Publish(runID string, label string) error {
+	f.publishedRuns = append(f.publishedRuns, runID)
+	f.publishes = append(f.publishes, label)
+	return errors.New("ignored publish failure")
+}
+func (f *fakeFurrow) Handle(string) *furrow.Handle            { return f.handle }
+func (f *fakeFurrow) Detach(string) error                     { return nil }
+func (f *fakeFurrow) Sweep(time.Duration, int64) (int, error) { return 0, nil }
 
 // buildHandler routes mock reasoner responses by target suffix. Overridable
 // per-reasoner via the exec/verify hooks.
@@ -144,6 +169,111 @@ func TestBuildVerifiedSuccess(t *testing.T) {
 	}
 	if !asBool(out.(map[string]any)["success"]) {
 		t.Fatal("success should be true")
+	}
+}
+
+func TestBuildWorkspaceHandleAvailability(t *testing.T) {
+	defer withExecCtx("run-furrow", "exec-furrow")()
+	exec := func(map[string]any) map[string]any {
+		return map[string]any{
+			"completed_issues": []any{map[string]any{"name": "i1"}},
+			"merged_branches":  []any{"issue/x"},
+			"all_issues":       []any{map[string]any{"name": "i1"}},
+			"failed_issues":    []any{}, "skipped_issues": []any{}, "accumulated_debt": []any{},
+		}
+	}
+	verify := func(map[string]any) map[string]any {
+		return map[string]any{"passed": true, "criteria_results": []any{}, "summary": "ok"}
+	}
+
+	tests := []struct {
+		name       string
+		attacher   *fakeFurrow
+		wantHandle bool
+	}{
+		{name: "available", attacher: &fakeFurrow{handle: &furrow.Handle{
+			Version: 1, Remote: "dir:/mirror", Namespace: "run-furrow", Key: "secret-key",
+		}}, wantHandle: true},
+		{name: "unavailable", attacher: &fakeFurrow{}},
+		{name: "attach error", attacher: &fakeFurrow{attachErr: errors.New("attach failed")}},
+		{name: "nil dependency"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &mockApp{handler: buildHandler(exec, verify)}
+			deps := &Deps{App: app, NodeID: "swe-planner"}
+			if tc.attacher != nil {
+				deps.Furrow = tc.attacher
+			}
+			out, err := Build(context.Background(), deps, map[string]any{
+				"goal": "thing", "repo_path": t.TempDir(),
+				"config": map[string]any{"git_init_max_retries": 1},
+			})
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			result := out.(map[string]any)
+			_, gotHandle := result["workspace_handle"]
+			if gotHandle != tc.wantHandle {
+				t.Fatalf("workspace_handle present = %v, want %v", gotHandle, tc.wantHandle)
+			}
+			if tc.attacher != nil && len(tc.attacher.publishes) != 1 {
+				t.Fatalf("publishes = %v, want build completion", tc.attacher.publishes)
+			}
+			for _, note := range app.notes {
+				if strings.Contains(note, "secret-key") {
+					t.Fatalf("note leaked workspace key: %q", note)
+				}
+			}
+		})
+	}
+}
+
+// A build whose execution context carries no run ID still has a root workflow
+// ID, and that is what everything per-run in the build must be filed under —
+// planning.Scout already stores scoped credentials that way. Handing furrow an
+// empty scope instead made every such build share one registry row, so build B
+// received build A's workspace path, recovery key and token.
+func TestBuildScopesWorkspaceMirrorByRootWorkflowID(t *testing.T) {
+	exec := func(map[string]any) map[string]any {
+		return map[string]any{
+			"completed_issues": []any{map[string]any{"name": "i1"}},
+			"merged_branches":  []any{"issue/x"},
+			"all_issues":       []any{map[string]any{"name": "i1"}},
+			"failed_issues":    []any{}, "skipped_issues": []any{}, "accumulated_debt": []any{},
+		}
+	}
+	verify := func(map[string]any) map[string]any {
+		return map[string]any{"passed": true, "criteria_results": []any{}, "summary": "ok"}
+	}
+	for _, tc := range []struct {
+		name           string
+		runID          string
+		rootWorkflowID string
+		wantScope      string
+	}{
+		{name: "run id wins", runID: "run-1", rootWorkflowID: "wf-1", wantScope: "run-1"},
+		{name: "root workflow id fallback", rootWorkflowID: "wf-2", wantScope: "wf-2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer withExecCtxRoot(tc.runID, "exec", tc.rootWorkflowID)()
+			f := &fakeFurrow{handle: &furrow.Handle{Version: 1, Remote: "dir:/mirror", Namespace: "ns"}}
+			deps := &Deps{App: &mockApp{handler: buildHandler(exec, verify)}, NodeID: "swe-planner", Furrow: f}
+			if _, err := Build(context.Background(), deps, map[string]any{
+				"goal": "thing", "repo_path": t.TempDir(),
+				"config": map[string]any{"git_init_max_retries": 1},
+			}); err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if f.attachedRunID != tc.wantScope {
+				t.Errorf("Attach run ID = %q, want %q", f.attachedRunID, tc.wantScope)
+			}
+			// Publish must reach the same row Attach created, or the mirror
+			// stops updating the moment the run ID is absent.
+			if len(f.publishedRuns) != 1 || f.publishedRuns[0] != tc.wantScope {
+				t.Errorf("Publish run IDs = %v, want [%q]", f.publishedRuns, tc.wantScope)
+			}
+		})
 	}
 }
 

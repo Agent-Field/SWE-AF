@@ -70,7 +70,7 @@ The planning chain is a five-agent pipeline that progressively refines a vague g
 
 2. **Architect** — reads the PRD and codebase, produces a system design: components, interfaces, architectural decisions with rationale, and a file-changes overview.
 
-3. **Tech Lead** — reviews the architecture against the PRD in a bounded loop (up to `max_review_iterations + 1` rounds). If not approved, the Architect revises. If the loop exhausts, the last revision is auto-approved — the system never blocks on infinite review cycles.
+3. **Tech Lead** — reviews the architecture against the PRD in a bounded loop (up to `max_review_iterations + 1` rounds). If not approved, the Architect revises, editing the existing architecture document rather than redesigning it from scratch. If the loop exhausts, the last revision is auto-approved — the system never blocks on infinite review cycles. If a revision itself fails (its harness times out, returns nothing, or produces an unparseable response), the pipeline keeps the last completed architecture, records the reason in the review summary, and carries on to the Sprint Planner — a revision that cannot finish costs the revision, not the whole plan. A fatal API error (billing, invalid credentials) still aborts the run.
 
 4. **Sprint Planner** — decomposes the approved architecture into `PlannedIssue` items. Each issue has a name, acceptance criteria mapped from the PRD, dependency edges (`depends_on`), file manifests (`files_to_create`, `files_to_modify`), and — critically — an `IssueGuidance` block:
 

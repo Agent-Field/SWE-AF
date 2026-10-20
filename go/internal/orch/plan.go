@@ -1,8 +1,10 @@
 package orch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/dagutil"
+	"github.com/Agent-Field/SWE-AF/go/internal/fatal"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
@@ -25,6 +28,92 @@ var PlanHandler Handler = Plan
 // (alongside orch.Handlers()) so build.go need not be edited to reference Plan.
 func RegisterPlan(m map[string]Handler) {
 	m["plan"] = PlanHandler
+}
+
+type architectureArtifactSnapshot struct {
+	existed  bool
+	contents []byte
+}
+
+func architectureArtifactPath(repoPath, artifactsDir string) string {
+	absRepo, err := filepath.Abs(repoPath)
+	if err != nil {
+		absRepo = repoPath
+	}
+	return filepath.Join(absRepo, artifactsDir, "plan", "architecture.md")
+}
+
+func snapshotArchitectureArtifact(path string) (*architectureArtifactSnapshot, error) {
+	contents, err := os.ReadFile(path)
+	if err == nil {
+		return &architectureArtifactSnapshot{existed: true, contents: contents}, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return &architectureArtifactSnapshot{}, nil
+	}
+	return nil, err
+}
+
+func restoreArchitectureArtifact(path string, snapshot *architectureArtifactSnapshot) (bool, error) {
+	if snapshot == nil {
+		return false, nil
+	}
+	if snapshot.existed {
+		current, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		if err == nil && bytes.Equal(current, snapshot.contents) {
+			return false, nil
+		}
+		if err := os.WriteFile(path, snapshot.contents, 0o644); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func snapshotArchitectureBeforeRevision(
+	ctx context.Context, deps *Deps, path string,
+) *architectureArtifactSnapshot {
+	snapshot, err := snapshotArchitectureArtifact(path)
+	if err != nil {
+		deps.Note(ctx, "Could not snapshot plan/architecture.md before revision: "+err.Error(),
+			"pipeline", "revision", "degraded")
+		return nil
+	}
+	return snapshot
+}
+
+func restoreArchitectureAfterFailedRevision(
+	ctx context.Context, deps *Deps, path string, snapshot *architectureArtifactSnapshot,
+) {
+	restored, err := restoreArchitectureArtifact(path, snapshot)
+	if err != nil {
+		deps.Note(ctx, "Could not restore plan/architecture.md after failed revision: "+err.Error(),
+			"pipeline", "revision", "degraded")
+		return
+	}
+	if restored {
+		deps.Note(ctx, "Restored plan/architecture.md to the last completed revision",
+			"pipeline", "revision", "degraded")
+	}
+}
+
+func isNonDegradableRevisionError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var fatalErr *fatal.FatalHarnessError
+	return errors.As(err, &fatalErr)
 }
 
 // planInput mirrors the Python plan() signature (param names + defaults).
@@ -74,6 +163,7 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	techLeadModel := firstNonEmpty(in.TechLeadModel, defaultModel)
 	sprintPlannerModel := firstNonEmpty(in.SprintPlannerModel, defaultModel)
 	issueWriterModel := firstNonEmpty(in.IssueWriterModel, defaultModel)
+	architecturePath := architectureArtifactPath(in.RepoPath, in.ArtifactsDir)
 
 	deps.Note(ctx, "Pipeline starting", "pipeline", "start")
 
@@ -129,6 +219,8 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 
 	// 3. Tech Lead review loop (bounded: max_review_iterations + 1 passes).
 	var review map[string]any
+	revisionErr := ""
+	revisionFailed := false
 	for i := 0; i <= in.MaxReviewIterations; i++ {
 		deps.Note(ctx, fmt.Sprintf("Phase 3: Tech Lead review (iteration %d)", i),
 			"pipeline", "tech_lead")
@@ -151,7 +243,8 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		if i < in.MaxReviewIterations {
 			deps.Note(ctx, fmt.Sprintf("Architecture revision %d", i+1),
 				"pipeline", "revision")
-			arch, err = deps.Call(ctx, "run_architect", map[string]any{
+			architectureSnapshot := snapshotArchitectureBeforeRevision(ctx, deps, architecturePath)
+			revised, rerr := deps.Call(ctx, "run_architect", map[string]any{
 				"prd":                prd,
 				"repo_path":          in.RepoPath,
 				"artifacts_dir":      in.ArtifactsDir,
@@ -161,9 +254,24 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 				"ai_provider":        aiProvider,
 				"workspace_manifest": in.WorkspaceManifest,
 			}, "run_architect (revision)")
-			if err != nil {
-				return nil, err
+			if rerr != nil {
+				if isNonDegradableRevisionError(rerr) {
+					return nil, rerr
+				}
+				restoreArchitectureAfterFailedRevision(ctx, deps, architecturePath, architectureSnapshot)
+				rawRevisionErr := rerr.Error()
+				revisionErr = truncateRevisionError(rawRevisionErr)
+				revisionFailed = true
+				noteTags := []string{"pipeline", "revision", "degraded"}
+				if fatal.IsTimeoutError(rawRevisionErr) {
+					noteTags = append(noteTags, "timeout")
+				}
+				deps.Note(ctx,
+					"Architecture revision did not complete; keeping the last completed architecture: "+revisionErr,
+					noteTags...)
+				break
 			}
+			arch = revised
 		}
 	}
 
@@ -171,7 +279,16 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	if review == nil {
 		return nil, fmt.Errorf("plan: tech lead review is nil")
 	}
-	if !asBool(review["approved"]) {
+	if revisionFailed {
+		review = map[string]any{
+			"approved":              true,
+			"feedback":              mapGet(review, "feedback", ""),
+			"scope_issues":          any0(review["scope_issues"]),
+			"complexity_assessment": mapStr(review, "complexity_assessment", "appropriate"),
+			"summary": mapStr(review, "summary", "") +
+				" [auto-approved: architecture revision did not complete: " + revisionErr + "]",
+		}
+	} else if !asBool(review["approved"]) {
 		review = map[string]any{
 			"approved":              true,
 			"feedback":              mapGet(review, "feedback", ""),
@@ -216,7 +333,6 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	base := filepath.Join(absRepo, in.ArtifactsDir)
 	issuesDir := filepath.Join(base, "plan", "issues")
 	prdPath := filepath.Join(base, "plan", "prd.md")
-	architecturePath := filepath.Join(base, "plan", "architecture.md")
 	if err := os.MkdirAll(issuesDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -304,6 +420,14 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func truncateRevisionError(message string) string {
+	runes := []rune(message)
+	if len(runes) > 500 {
+		return string(runes[:500])
+	}
+	return message
 }
 
 // buildPlanResult coerces the collected reasoner dicts into the typed

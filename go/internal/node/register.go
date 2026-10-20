@@ -43,6 +43,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/orch"
 	"github.com/Agent-Field/SWE-AF/go/internal/roles/advisor"
@@ -79,11 +80,19 @@ func (n *Node) RegisterPlanner() {
 	// surfaces broken entries next to swe-pro's working code_task. The role
 	// reasoners stay registered (internal, undiscoverable) so pro_execute can
 	// still call them. SWE_PRO_ENGINE=0 restores the full classic surface.
+	//
+	// get_workspace_handle goes with them: it names a run's live mirror, and a
+	// mirror is only ever attached by the classic build/execute path (see
+	// orch.Build). With the classic entry points withheld nothing on this node
+	// attaches one, so the reasoner could only ever answer available:false.
 	if pro.Available() {
 		n.registerProReasoners()
 		return
 	}
 	n.registerOrchestrators()
+	if n.furrowEnabled() {
+		n.registerWorkspaceHandleReasoner()
+	}
 	n.registerIssueReasoner()
 }
 
@@ -179,6 +188,7 @@ func (n *Node) registerOrchestrators() {
 		AgentFieldServer: n.AgentFieldServer,
 		CIGate:           orch.RunCIGate,
 		ApprovalGate:     orch.PlanApprovalGate,
+		Furrow:           n.Furrow,
 	}
 	// Engine default routing (seamless path): with the flag truthy AND the
 	// binary present, builds and execute calls that name no execute_fn_target
@@ -214,6 +224,67 @@ func (n *Node) registerOrchestrators() {
 		}
 		regHandler(n, name, deps, h, opts...)
 	}
+}
+
+// furrowEnabled reports whether this node actually mirrors workspaces. It is
+// the same shape as the pro.Available() gate next to it: a surface that exists
+// only to reach a live mirror has no business being advertised on a node that
+// never makes one. Mirroring must be asked for — explicitly via
+// SWE_FURROW_ENABLED, or by the platform having provisioned a public mirror
+// endpoint (FURROW_PUBLIC_ADDR, set by the desktop app's cloud deploy) — so on
+// a local install that configured neither this is false and
+// get_workspace_handle is simply not registered.
+func (n *Node) furrowEnabled() bool {
+	return n != nil && n.Furrow != nil && n.Furrow.Enabled()
+}
+
+// workspaceHandleResult renders a handle for the wire.
+//
+// The trust boundary matters here. This reasoner has NO per-caller
+// authorization: anything that can reach the node and guess or observe a run ID
+// gets an answer. A furrow handle's Key is the run's recovery key — it decrypts
+// that workspace, secrets and untracked files included — and Token authenticates
+// to furrowd, which serves the run's remote read-write, so a leaked token buys
+// push and delete as well as pull.
+//
+// So both are withheld by default and the result says so, leaving Remote,
+// Namespace and RepoPath: enough for a caller that already shares the
+// filesystem, and enough for a human to see a mirror exists. An operator on a
+// single-tenant, trusted cluster opts back in with SWE_FURROW_EXPOSE_SECRETS.
+func workspaceHandleResult(handle *furrow.Handle) map[string]any {
+	data, _ := json.Marshal(handle)
+	result := map[string]any{}
+	_ = json.Unmarshal(data, &result)
+	expose := furrow.EnvTruthy(furrow.EnvExposeSecrets)
+	if !expose {
+		delete(result, "key")
+		delete(result, "token")
+	}
+	result["secrets_redacted"] = !expose
+	return result
+}
+
+// registerWorkspaceHandleReasoner exposes connection details for a workspace
+// only when furrow discovered and attached one for the requested run.
+func (n *Node) registerWorkspaceHandleReasoner() {
+	name := "get_workspace_handle"
+	n.registered = append(n.registered, name)
+	n.App.RegisterReasoner(name, func(_ context.Context, input map[string]any) (any, error) {
+		runID, _ := input["run_id"].(string)
+		if runID == "" || n.Furrow == nil {
+			return map[string]any{"available": false}, nil
+		}
+		handle := n.Furrow.Handle(runID)
+		if handle == nil {
+			return map[string]any{"available": false}, nil
+		}
+		return workspaceHandleResult(handle), nil
+	}, agent.WithReasonerTags(tagEntrypoint), agent.WithDescription(
+		"Returns connection details for cloning a run's live workspace. Route here when a caller needs to clone or follow an active build workspace. "+
+			"The reasoner performs NO authorization: any caller holding a run ID gets an answer, so the recovery key and transport token are redacted "+
+			"(secrets_redacted=true) and the response carries only the remote, namespace and on-node path. Set SWE_FURROW_EXPOSE_SECRETS=1 to return them "+
+			"in full — appropriate only on a single-tenant cluster where every caller is already trusted with the workspace contents."),
+		agent.WithInputSchema(schema(`{"type":"object","additionalProperties":true,"required":["run_id"],"properties":{"run_id":{"type":"string"}}}`)))
 }
 
 // orchestratorEntrypoints is the set of orchestrators a caller may start a run

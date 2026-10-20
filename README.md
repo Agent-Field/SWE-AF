@@ -414,6 +414,16 @@ JSON
 
 For OpenRouter with `open_code`, use model IDs in `openrouter/<provider>/<model>` format (for example `openrouter/minimax/minimax-m2.5`).
 
+For Infron with `open_code`, set `INFRON_API_KEY` and use `infron/<provider>/<model>` (for example `infron/moonshotai/kimi-k2.6`). Infron is an OpenAI-compatible gateway serving the standard `<provider>/<model>` ids, so moving a role across is a prefix swap and nothing else changes:
+
+```bash
+SWE_DEFAULT_MODEL=infron/moonshotai/kimi-k2.6
+```
+
+With **only** an `INFRON_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway key, no `SWE_DEFAULT_RUNTIME`), SWE-AF auto-selects the `open_code` runtime and defaults to `infron/deepseek/deepseek-v4-flash-0731` — the same rule the existing gateway path already follows. A gateway key already configured keeps precedence, so adding an Infron key never reroutes an existing deployment on its own.
+
+> Docker and Railway deployments using Infron must set `HARNESS_MODEL=infron/deepseek/deepseek-v4-flash-0731` (or another `infron/...` id) in the environment. The image bakes an `openrouter/...` value that the `open_code` model cascade reads after the Infron auto default and would otherwise override it. `SWE_DEFAULT_MODEL` pins every role model but does not feed OpenCode's `small_model`; set `HARNESS_MODEL` for that path (setting both is fine).
+
 ### MiniMax direct providers
 
 The Docker images include direct MiniMax provider entries for both supported regions and API compatibility modes. `MiniMax-M3` and `MiniMax-M2.7` are available in every entry.
@@ -961,10 +971,21 @@ Fully customized:
 
 ```text
 .artifacts/
-├── plan/           # PRD, architecture, issue specs
+├── plan/           # PRD, architecture, issue specs, planning retry logs
 ├── execution/      # checkpoints, per-issue logs, agent outputs
 └── verification/   # acceptance criteria results
 ```
+
+Planning diagnostics are appended to `plan/<stage>_raw_response.txt` for
+`product_manager`, `architect`, `tech_lead`, and `sprint_planner`. Each invocation
+has a run header with a process-local section counter, so repeated calls from
+the same process within the same second can be distinguished. Failed schema
+attempts include bounded raw output; the terminal `===== outcome: ... =====`
+entry is kept on one physical line even when an error is multiline. Artifact
+writes are best-effort.
+Scout-negotiated credentials are redacted, including common JSON and URL
+encodings, but this is not a general-purpose secret scrubber: review logs before
+sharing them.
 
 </details>
 

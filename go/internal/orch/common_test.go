@@ -31,9 +31,15 @@ func (m *mockApp) Note(ctx context.Context, message string, tags ...string) {
 
 // withExecCtx overrides the execution-context seam for a test.
 func withExecCtx(runID, execID string) func() {
+	return withExecCtxRoot(runID, execID, "")
+}
+
+// withExecCtxRoot is withExecCtx for the case that matters to scoping: a
+// context whose RunID is empty but which still names a root workflow.
+func withExecCtxRoot(runID, execID, rootWorkflowID string) func() {
 	prev := executionContextFrom
 	executionContextFrom = func(context.Context) agent.ExecutionContext {
-		return agent.ExecutionContext{RunID: runID, ExecutionID: execID}
+		return agent.ExecutionContext{RunID: runID, ExecutionID: execID, RootWorkflowID: rootWorkflowID}
 	}
 	return func() { executionContextFrom = prev }
 }

@@ -1,0 +1,358 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/furrow"
+)
+
+type testServer struct {
+	addr   string
+	root   string
+	cancel context.CancelFunc
+	done   chan error
+}
+
+func startTestServer(t *testing.T, maxConns int, script string) testServer {
+	t.Helper()
+	root := t.TempDir()
+	helper := filepath.Join(root, "furrow-helper")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]furrow.Entry{"run-1": {Token: "correct-token", Namespace: "workspace"}}
+	data, _ := json.Marshal(entries)
+	if err := os.WriteFile(filepath.Join(root, "registry.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config{addr: "127.0.0.1:0", root: root, cert: filepath.Join(root, "cert.pem"), key: filepath.Join(root, "key.pem"), furrowBin: helper, maxConns: maxConns}
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan net.Addr, 1)
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfg, ready) }()
+	var addr net.Addr
+	select {
+	case addr = <-ready:
+	case err := <-done:
+		t.Fatalf("server failed to start: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not start")
+	}
+	s := testServer{addr: addr.String(), root: root, cancel: cancel, done: done}
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(4 * time.Second):
+			t.Error("server did not shut down")
+		}
+	})
+	return s
+}
+
+func buildDialer(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "furrow-dial")
+	if runtime.GOOS == "windows" {
+		path += ".exe"
+	}
+	cmd := exec.Command("go", "build", "-o", path, "../furrow-dial")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build dialer: %v\n%s", err, output)
+	}
+	return path
+}
+
+func dialTLS(t *testing.T, addr string) *tls.Conn {
+	t.Helper()
+	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec -- test certificate.
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+func TestHappyPathRoundTripThroughDialer(t *testing.T) {
+	s := startTestServer(t, 32, `printf 'MARKER:'; cat`)
+	cmd := exec.Command(buildDialer(t), "-T", "-o", "BatchMode=yes", "--", s.addr, "furrow", "__remote", "workspace")
+	cmd.Env = append(os.Environ(), "FURROW_DIAL_TOKEN=correct-token", "FURROW_DIAL_INSECURE=1")
+	cmd.Stdin = strings.NewReader("ciphertext")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("dialer failed: %v: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "MARKER:ciphertext"; got != want {
+		t.Fatalf("round trip = %q, want %q", got, want)
+	}
+}
+
+// furrow never puts the human workspace name on the wire: it sends a keyed
+// BLAKE3 digest of it, which the node has no way to predict or recompute. A
+// connection therefore has to be accepted on the strength of its token alone,
+// with the namespace passed through to the child untouched. Comparing it to the
+// registry's namespace rejected every real clone.
+func TestBlindedNamespaceIsAcceptedAndPassedThrough(t *testing.T) {
+	s := startTestServer(t, 32, `printf 'NS:'; cat`)
+	blinded := "54678c944c726f3f5e1af8a279d2a42c" // shape furrow actually sends
+	cmd := exec.Command(buildDialer(t), "-T", "-o", "BatchMode=yes", "--", s.addr, "furrow", "__remote", blinded)
+	cmd.Env = append(os.Environ(), "FURROW_DIAL_TOKEN=correct-token", "FURROW_DIAL_INSECURE=1")
+	cmd.Stdin = strings.NewReader("payload")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("dialer failed for blinded namespace: %v: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "NS:payload"; got != want {
+		t.Fatalf("round trip = %q, want %q", got, want)
+	}
+}
+
+// The manager records each run's store under a SANITIZED directory; the
+// daemon must serve the recorded path, not one rebuilt from the raw run ID —
+// a traversal-shaped ID would otherwise name a directory outside the root.
+func TestChildServesRecordedStoreDirNotRawRunID(t *testing.T) {
+	s := startTestServer(t, 32, `printf 'DIR:%s' "$FURROW_REMOTE_DATA_DIR"`)
+	storeDir := filepath.Join(s.root, "remotes", "run")
+	entries := map[string]furrow.Entry{"../escape": {Token: "dir-token", Namespace: "run", StoreDir: storeDir}}
+	data, _ := json.Marshal(entries)
+	if err := os.WriteFile(filepath.Join(s.root, "registry.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(buildDialer(t), "-T", "-o", "BatchMode=yes", "--", s.addr, "furrow", "__remote", "workspace")
+	cmd.Env = append(os.Environ(), "FURROW_DIAL_TOKEN=dir-token", "FURROW_DIAL_INSECURE=1")
+	cmd.Stdin = strings.NewReader("")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("dialer failed: %v: %s", err, stderr.String())
+	}
+	if got, want := stdout.String(), "DIR:"+storeDir; got != want {
+		t.Fatalf("data dir = %q, want %q", got, want)
+	}
+}
+
+func TestAuthenticationRejected(t *testing.T) {
+	s := startTestServer(t, 32, `cat`)
+	tests := []struct {
+		name, line string
+	}{
+		{"wrong token", "AUTH wrong workspace\n"},
+		{"unknown token", "AUTH absent workspace\n"},
+		{"garbage", "hello\n"},
+		{"oversized", strings.Repeat("x", 513) + "\n"},
+		// The namespace is attacker-chosen text used to pick a directory under
+		// the run's data root, so anything outside furrow's own charset —
+		// especially a traversal — must never reach the child.
+		{"namespace traversal", "AUTH correct-token ../../etc\n"},
+		{"namespace slash", "AUTH correct-token a/b\n"},
+		{"namespace dotdot", "AUTH correct-token ..\n"},
+		{"namespace too long", "AUTH correct-token " + strings.Repeat("n", 97) + "\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := dialTLS(t, s.addr)
+			defer conn.Close()
+			if _, err := io.WriteString(conn, tc.line); err != nil {
+				t.Fatal(err)
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			data, _ := io.ReadAll(conn)
+			if len(data) != 0 {
+				t.Fatalf("rejection disclosed %q", data)
+			}
+		})
+	}
+}
+
+func TestChildKilledWhenClientDisconnects(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	t.Setenv("CHILD_PID_FILE", pidFile)
+	s := startTestServer(t, 32, `echo $$ > "$CHILD_PID_FILE"; trap '' TERM; while :; do sleep 1; done`)
+	conn := dialTLS(t, s.addr)
+	if _, err := io.WriteString(conn, "AUTH correct-token workspace\n"); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 3)
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "OK\n" {
+		t.Fatalf("auth response %q, %v", buf, err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(pidFile); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("child did not publish pid")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pids, _ := os.ReadFile(pidFile)
+	var pid int
+	if _, err := fmt.Sscanf(string(pids), "%d", &pid); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	deadline = time.Now().Add(4 * time.Second)
+	for {
+		err := syscall.Kill(pid, 0)
+		if err == syscall.ESRCH {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("child %d remains alive", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A client that authenticates and then goes silent must not be able to hold
+// the daemon open: cancelling has to close live connections, not just the
+// listener, or SIGTERM hangs forever waiting on that handler.
+func TestShutdownClosesIdleAuthenticatedConnection(t *testing.T) {
+	s := startTestServer(t, 32, `cat`)
+	conn := dialTLS(t, s.addr)
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "AUTH correct-token workspace\n"); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 3)
+	if _, err := io.ReadFull(conn, reply); err != nil || string(reply) != "OK\n" {
+		t.Fatalf("auth reply = %q, %v", reply, err)
+	}
+	// Authenticated and now idle: the handler is blocked copying client input.
+	s.cancel()
+	select {
+	case err := <-s.done:
+		s.done <- err // put it back; the harness's cleanup reads this too
+	case <-time.After(10 * time.Second):
+		t.Fatal("server did not shut down while an idle client was connected")
+	}
+}
+
+func TestConcurrencyLimitEnforced(t *testing.T) {
+	s := startTestServer(t, 1, `cat`)
+	first := dialTLS(t, s.addr)
+	defer first.Close()
+	if _, err := io.WriteString(first, "AUTH correct-token workspace\n"); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 3)
+	if _, err := io.ReadFull(first, response); err != nil {
+		t.Fatal(err)
+	}
+	second, err := tls.Dial("tcp", s.addr, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec -- test certificate.
+	if err != nil {
+		return
+	}
+	defer second.Close()
+	_ = second.SetDeadline(time.Now().Add(2 * time.Second))
+	_, writeErr := io.WriteString(second, "AUTH correct-token workspace\n")
+	if writeErr == nil {
+		_, writeErr = io.ReadAll(second)
+	}
+	if writeErr == nil {
+		t.Fatal("second connection was not rejected at the concurrency limit")
+	}
+}
+
+// furrowd is the only process in this feature listening on a network socket,
+// and lookupEntry runs on every AUTH line an unauthenticated stranger sends.
+// It used to decode the registry into furrow.Entry, whose Key field IS the
+// run's recovery key, so every key on the node was resident in the daemon's
+// memory during that read. The daemon needs a token to compare and a directory
+// to serve; nothing here may parse the key.
+func TestRegistryReadNeverDecodesRecoveryKeys(t *testing.T) {
+	rowType := reflect.TypeOf(registryRow{})
+	for i := 0; i < rowType.NumField(); i++ {
+		field := rowType.Field(i)
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "key" {
+			t.Fatalf("furrowd decodes the recovery key through field %s", field.Name)
+		}
+	}
+	// And the field really is present in the file being read, so the check
+	// above is about what we DECODE, not about what happens to be on disk.
+	entryType := reflect.TypeOf(furrow.Entry{})
+	keyField, ok := entryType.FieldByName("Key")
+	if !ok || strings.Split(keyField.Tag.Get("json"), ",")[0] != "key" {
+		t.Fatal("furrow.Entry no longer writes a \"key\" field; revisit this test")
+	}
+
+	root := t.TempDir()
+	storeDir := filepath.Join(root, "remotes", "run-1")
+	const recoveryKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	entries := map[string]furrow.Entry{"run-1": {
+		RunID: "run-1", RepoPath: "/work/repo", Namespace: "workspace",
+		Key: recoveryKey, Token: "correct-token", StoreDir: storeDir,
+	}}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "registry.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), recoveryKey) {
+		t.Fatal("registry fixture does not actually contain a recovery key")
+	}
+
+	entry, ok := lookupEntry(path, "correct-token")
+	if !ok {
+		t.Fatal("narrowing the registry read broke authentication")
+	}
+	if entry.StoreDir != storeDir || entry.Namespace != "workspace" {
+		t.Fatalf("entry = %+v, want the recorded store dir and namespace", entry)
+	}
+	if rendered := fmt.Sprintf("%+v", entry); strings.Contains(rendered, recoveryKey) {
+		t.Fatalf("recovery key reached furrowd: %s", rendered)
+	}
+}
+
+// The namespace is attacker-supplied text that becomes an argv element of
+// `furrow __remote <namespace>`. The permitted charset includes '-', so a
+// leading one would arrive at furrow looking like a flag; nothing here knows
+// how furrow's parser treats that, and no namespace the manager produces ever
+// starts with '-'.
+func TestValidNamespaceRejectsFlagShapedInput(t *testing.T) {
+	for _, tc := range []struct {
+		namespace string
+		want      bool
+	}{
+		{"workspace", true},
+		{"run_2026-08-10.a", true},
+		{"a-b", true},
+		{"-workspace", false},
+		{"--force", false},
+		{"-", false},
+		{"", false},
+		{".", false},
+		{"..", false},
+		{"../escape", false},
+		{"has space", false},
+		{strings.Repeat("a", 96), true},
+		{strings.Repeat("a", 97), false},
+	} {
+		if got := validNamespace(tc.namespace); got != tc.want {
+			t.Errorf("validNamespace(%q) = %v, want %v", tc.namespace, got, tc.want)
+		}
+	}
+}

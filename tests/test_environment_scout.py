@@ -12,7 +12,8 @@ Three pillars covered:
 from __future__ import annotations
 
 import threading
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -163,6 +164,55 @@ def test_inject_credentials_empty_base_works():
     store_scoped_credentials("build-A", {"RAILWAY_TOKEN": "x"})
     merged = inject_credentials_into_env(None, "build-A")
     assert merged == {"RAILWAY_TOKEN": "x"}
+
+
+# ---------------------------------------------------------------------------
+# app.py harness wrapper — credential scope resolution
+# ---------------------------------------------------------------------------
+
+
+async def _call_harness_wrapper_with_ctx(monkeypatch, ctx):
+    """Drive ``_harness_with_scoped_credentials`` under ``ctx`` and return the
+    env it handed to the underlying harness."""
+    import swe_af.app as app_mod
+
+    captured: dict[str, dict[str, str]] = {}
+
+    async def fake_harness(*_args, env=None, **_kwargs):
+        captured["env"] = dict(env or {})
+
+    monkeypatch.setattr(app_mod, "_original_harness", fake_harness)
+    # ``Agent.ctx`` is a read-only property backed by SDK thread-local state,
+    # so stand in for it at the class level for the duration of the call.
+    with patch.object(type(app_mod.app), "ctx", new_callable=PropertyMock) as ctx_prop:
+        ctx_prop.return_value = ctx
+        await app_mod._harness_with_scoped_credentials("prompt", env={})
+    return captured["env"]
+
+
+@pytest.mark.asyncio
+async def test_harness_wrapper_injects_run_scoped_creds(monkeypatch):
+    store_scoped_credentials("run-123", {"RAILWAY_TOKEN": "run-fresh"})
+    ctx = SimpleNamespace(run_id="run-123", root_workflow_id="root-workflow-123")
+
+    env = await _call_harness_wrapper_with_ctx(monkeypatch, ctx)
+
+    assert env["RAILWAY_TOKEN"] == "run-fresh"
+
+
+@pytest.mark.asyncio
+async def test_harness_wrapper_injects_root_workflow_scoped_creds_when_run_id_empty(
+    monkeypatch,
+):
+    """Mirror of Go ``TestRunInjectsRootWorkflowScopedCredsWhenRunIDEmpty``:
+    the scout stores under ``root_workflow_id`` when ``run_id`` is empty, so
+    the harness wrapper must look up under the same key."""
+    store_scoped_credentials("root-workflow-123", {"RAILWAY_TOKEN": "root-fresh"})
+    ctx = SimpleNamespace(run_id="", root_workflow_id="root-workflow-123")
+
+    env = await _call_harness_wrapper_with_ctx(monkeypatch, ctx)
+
+    assert env["RAILWAY_TOKEN"] == "root-fresh"
 
 
 # ---------------------------------------------------------------------------

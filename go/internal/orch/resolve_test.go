@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/config"
+	"github.com/Agent-Field/SWE-AF/go/internal/roles/ci"
 )
 
 // --- seam helpers ---------------------------------------------------------
@@ -635,5 +638,311 @@ func TestResolveFailureSuccessFalse(t *testing.T) {
 	}
 	if mapStr(res, "summary", "") == "" {
 		t.Fatal("summary must be present even on failure")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolverPermissionMode — the writability default is gated to claude.
+//
+// Validation contract:
+//   - When no permission mode is configured and the runtime resolves to the
+//     claude provider, the resolver runs with "auto" (bypassPermissions) so it
+//     can actually write to its throwaway clone.
+//   - Under codex the default stays empty: the codex harness already grants
+//     workspace-write, and "auto" would escalate to a full sandbox bypass.
+//   - Under opencode the default stays empty: the provider ignores the value.
+//   - An explicitly configured mode is never overridden, for any provider.
+// ---------------------------------------------------------------------------
+
+func TestResolverPermissionModeGatedToClaude(t *testing.T) {
+	cases := []struct {
+		runtime string
+		want    string
+	}{
+		{"claude_code", "auto"},
+		{"codex", ""},
+		{"open_code", ""},
+	}
+	for _, tc := range cases {
+		cfg, err := config.LoadBuildConfig(map[string]any{"runtime": tc.runtime})
+		if err != nil {
+			t.Fatalf("runtime %q: LoadBuildConfig: %v", tc.runtime, err)
+		}
+		if cfg.PermissionMode != "" {
+			t.Fatalf("runtime %q: expected an unset default permission mode, got %q",
+				tc.runtime, cfg.PermissionMode)
+		}
+		got := resolverPermissionMode(cfg.PermissionMode, cfg.AIProvider())
+		if got != tc.want {
+			t.Errorf("runtime %q (provider %q): permission mode = %q, want %q",
+				tc.runtime, cfg.AIProvider(), got, tc.want)
+		}
+	}
+}
+
+func TestResolverPermissionModeRespectsExplicitConfig(t *testing.T) {
+	for _, provider := range []string{"claude", "codex", "opencode", ""} {
+		if got := resolverPermissionMode("plan", provider); got != "plan" {
+			t.Errorf("provider %q: explicit mode = %q, want plan", provider, got)
+		}
+	}
+}
+
+// The gate must hold end-to-end: the kwarg the resolver reasoner actually
+// receives is the gated value, not cfg.PermissionMode verbatim.
+func TestResolveSendsGatedPermissionMode(t *testing.T) {
+	for _, tc := range []struct {
+		runtime string
+		want    string
+	}{
+		{"claude_code", "auto"},
+		{"codex", ""},
+		{"open_code", ""},
+	} {
+		func() {
+			defer withExecCtx("run-pm", "exec-pm")()
+			_, _, restore := installGitGH(
+				func(_ string, _ []string) cmdResult { return cmdResult{ExitCode: 0} },
+				func(_ string, _ []string) cmdResult { return cmdResult{ExitCode: 0} },
+			)
+			defer restore()
+			_, restoreSleep := installSleep()
+			defer restoreSleep()
+
+			seen := map[string]any{}
+			app := &mockApp{handler: func(_ context.Context, target string, in map[string]any) (map[string]any, error) {
+				if strings.Contains(target, "run_pr_resolver") {
+					seen = in
+					return map[string]any{"fixed": false, "pushed": false}, nil
+				}
+				return map[string]any{}, nil
+			}}
+			deps := &Deps{App: app, NodeID: "swe-planner"}
+
+			if _, err := ResolveHandler(context.Background(), deps, map[string]any{
+				"pr_url":      "https://github.com/o/r/pull/3",
+				"pr_number":   3,
+				"repo_url":    "https://github.com/o/r.git",
+				"head_branch": "feature/pm",
+				"config":      map[string]any{"runtime": tc.runtime},
+			}); err != nil {
+				t.Fatalf("runtime %q: resolve errored: %v", tc.runtime, err)
+			}
+			if got := mapStr(seen, "permission_mode", ""); got != tc.want {
+				t.Errorf("runtime %q: permission_mode kwarg = %q, want %q", tc.runtime, got, tc.want)
+			}
+		}()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// classifyRemoteAdvance — what the remote is allowed to prove.
+//
+// Validation contract:
+//   - Remote unchanged → nothing is claimed.
+//   - An unknown before/after SHA → nothing is claimed (silence over guessing).
+//   - Remote moved and the new tip equals our HEAD → the advance is ours.
+//   - Remote moved and the new tip is some other commit → the advance happened
+//     but is not attributable to this run.
+// ---------------------------------------------------------------------------
+
+func TestClassifyRemoteAdvance(t *testing.T) {
+	cases := []struct {
+		name                 string
+		before, after, local string
+		wantAdvanced         bool
+		wantAttributed       bool
+	}{
+		{"unchanged", "a1", "a1", "a1", false, false},
+		{"before unknown", "", "b2", "b2", false, false},
+		{"after unknown", "a1", "", "a1", false, false},
+		{"ours", "a1", "b2", "b2", true, true},
+		{"third party", "a1", "b2", "a1", true, false},
+		{"local head unknown", "a1", "b2", "", true, false},
+	}
+	for _, tc := range cases {
+		got := classifyRemoteAdvance(tc.before, tc.after, tc.local)
+		if got.Advanced != tc.wantAdvanced || got.Attributed != tc.wantAttributed {
+			t.Errorf("%s: classifyRemoteAdvance(%q,%q,%q) = %+v, want advanced=%v attributed=%v",
+				tc.name, tc.before, tc.after, tc.local, got, tc.wantAdvanced, tc.wantAttributed)
+		}
+	}
+}
+
+func TestResolverReportInvalidMatchesCISentinel(t *testing.T) {
+	if !resolverReportInvalid(map[string]any{"error_message": ci.InvalidResolverReport}) {
+		t.Error("error_message carrying the sentinel must be detected")
+	}
+	if !resolverReportInvalid(map[string]any{"summary": ci.InvalidResolverReport}) {
+		t.Error("summary carrying the sentinel must be detected")
+	}
+	if resolverReportInvalid(map[string]any{"summary": "fixed three tests", "error_message": ""}) {
+		t.Error("a real report must not be flagged invalid")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Invalid agent report reconciled against the remote (validation contract).
+//
+//   - Report invalid + remote advanced to our HEAD → pushed=true, fixed stays
+//     false, report_invalid=true, overall success=false.
+//   - Report invalid + remote advanced to someone else's commit → nothing is
+//     attributed: pushed stays false and no commit/file lists are invented.
+// ---------------------------------------------------------------------------
+
+// remoteSHAScript drives the fake git for the reconciliation tests: ls-remote
+// returns lsRemote[i] on the i-th call (before, then after), rev-parse HEAD
+// returns localHead.
+func remoteSHAScript(lsRemote []string, localHead string, fetchOK bool,
+	revList, diffFiles string) func(string, []string) cmdResult {
+	calls := 0
+	return func(_ string, args []string) cmdResult {
+		switch args[0] {
+		case "ls-remote":
+			sha := ""
+			if calls < len(lsRemote) {
+				sha = lsRemote[calls]
+			}
+			calls++
+			if sha == "" {
+				return cmdResult{ExitCode: 1}
+			}
+			return cmdResult{ExitCode: 0, Stdout: sha + "\trefs/heads/feature\n"}
+		case "rev-parse":
+			return cmdResult{ExitCode: 0, Stdout: localHead + "\n"}
+		case "fetch":
+			// Only the verification fetch (`git fetch origin feature`) honours
+			// fetchOK; the clone-time PR-head fetch and the base-merge fetch
+			// always succeed so the handler reaches step 5b.
+			if !fetchOK && len(args) == 3 && args[2] == "feature" {
+				return cmdResult{ExitCode: 1, Stderr: "network down"}
+			}
+			return cmdResult{ExitCode: 0}
+		case "rev-list":
+			return cmdResult{ExitCode: 0, Stdout: revList}
+		case "diff":
+			return cmdResult{ExitCode: 0, Stdout: diffFiles}
+		case "merge-base":
+			return cmdResult{ExitCode: 0} // is-ancestor → clean merge state
+		}
+		return cmdResult{ExitCode: 0}
+	}
+}
+
+func runResolveWithInvalidReport(t *testing.T, git func(string, []string) cmdResult) map[string]any {
+	t.Helper()
+	defer withExecCtx("run-ir", "exec-ir")()
+	_, _, restore := installGitGH(git, func(string, []string) cmdResult { return cmdResult{ExitCode: 0} })
+	defer restore()
+	_, restoreSleep := installSleep()
+	defer restoreSleep()
+
+	app := &mockApp{handler: func(_ context.Context, target string, _ map[string]any) (map[string]any, error) {
+		if strings.Contains(target, "run_pr_resolver") {
+			return map[string]any{
+				"fixed":               false,
+				"pushed":              false,
+				"files_changed":       []any{},
+				"commit_shas":         []any{},
+				"addressed_comments":  []any{},
+				"summary":             ci.InvalidResolverReport,
+				"error_message":       ci.InvalidResolverReport,
+				"rejected_workaround": []any{},
+			}, nil
+		}
+		return map[string]any{}, nil
+	}}
+	deps := &Deps{App: app, NodeID: "swe-planner", CIGate: func(context.Context, CIGateRequest) (map[string]any, error) {
+		return map[string]any{"final_status": "passed"}, nil
+	}}
+
+	out, err := ResolveHandler(context.Background(), deps, map[string]any{
+		"pr_url":      "https://github.com/o/r/pull/7",
+		"pr_number":   7,
+		"repo_url":    "https://github.com/o/r.git",
+		"head_branch": "feature",
+	})
+	if err != nil {
+		t.Fatalf("resolve errored: %v", err)
+	}
+	return out.(map[string]any)
+}
+
+func TestResolveInvalidReportWithOurPushReportsPushedNotFixed(t *testing.T) {
+	res := runResolveWithInvalidReport(t, remoteSHAScript(
+		[]string{"old1", "new2"}, "new2", true, "c1\nc2\n", "a.go\nb.go\n"))
+
+	rr := res["resolve_result"].(map[string]any)
+	if !asBool(rr["pushed"]) {
+		t.Error("pushed must be true: the remote tip is this workspace's HEAD")
+	}
+	if asBool(rr["fixed"]) {
+		t.Error("fixed must stay false: a landed commit does not prove the PR is fixed")
+	}
+	if !asBool(rr["report_invalid"]) {
+		t.Error("report_invalid must be surfaced so callers know the report was reconstructed")
+	}
+	if asBool(rr["verification_partial"]) {
+		t.Error("verification_partial must be unset when the fetch succeeded")
+	}
+	if got := asStrList(rr["commit_shas"]); len(got) != 2 {
+		t.Errorf("commit_shas = %v, want the two commits the remote advanced by", got)
+	}
+	if got := asStrList(rr["files_changed"]); len(got) != 2 {
+		t.Errorf("files_changed = %v, want two files", got)
+	}
+	if asBool(res["success"]) {
+		t.Error("overall success must remain false while fixed is false")
+	}
+}
+
+func TestResolveInvalidReportDegradesWhenFetchFails(t *testing.T) {
+	res := runResolveWithInvalidReport(t, remoteSHAScript(
+		[]string{"old1", "new2"}, "new2", false, "", ""))
+
+	rr := res["resolve_result"].(map[string]any)
+	if !asBool(rr["pushed"]) {
+		t.Error("pushed must still be true: the remote comparison alone proves it")
+	}
+	if !asBool(rr["verification_partial"]) {
+		t.Error("verification_partial must flag that empty commit/file lists mean unknown")
+	}
+	if len(asStrList(rr["commit_shas"])) != 0 || len(asStrList(rr["files_changed"])) != 0 {
+		t.Error("no commit/file detail may be invented when the fetch failed")
+	}
+}
+
+func TestResolveInvalidReportDoesNotAttributeThirdPartyPush(t *testing.T) {
+	res := runResolveWithInvalidReport(t, remoteSHAScript(
+		[]string{"old1", "stranger9"}, "old1", true, "c1\n", "a.go\n"))
+
+	rr := res["resolve_result"].(map[string]any)
+	if asBool(rr["pushed"]) {
+		t.Error("pushed must stay false: the new remote tip is not this workspace's HEAD")
+	}
+	if !asBool(rr["remote_advanced"]) {
+		t.Error("remote_advanced must record that the branch moved")
+	}
+	if !asBool(rr["report_invalid"]) {
+		t.Error("report_invalid must be surfaced")
+	}
+	if len(asStrList(rr["commit_shas"])) != 0 || len(asStrList(rr["files_changed"])) != 0 {
+		t.Error("a third party's commits must not be described as ours")
+	}
+	if asBool(res["success"]) {
+		t.Error("overall success must be false")
+	}
+}
+
+func TestResolveInvalidReportRemoteUnchangedClaimsNothing(t *testing.T) {
+	res := runResolveWithInvalidReport(t, remoteSHAScript(
+		[]string{"old1", "old1"}, "old1", true, "", ""))
+
+	rr := res["resolve_result"].(map[string]any)
+	if asBool(rr["pushed"]) || asBool(rr["remote_advanced"]) {
+		t.Error("an unmoved remote proves nothing landed")
+	}
+	if !asBool(rr["report_invalid"]) {
+		t.Error("report_invalid must be surfaced even when the remote did not move")
 	}
 }

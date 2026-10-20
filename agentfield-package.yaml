@@ -43,6 +43,10 @@ user_environment:
           description: OpenRouter API key (DeepSeek/Qwen/Llama/… — 200+ models)
           type: secret
           scope: global
+        - name: INFRON_API_KEY
+          description: Infron API key (OpenAI-compatible gateway, standard <provider>/<model> ids)
+          type: secret
+          scope: global
   optional:
     # `gh`/`git` read this token for authentication (see prompts/github_pr.py).
     # Optional so an LLM key is the only secret needed to get started: builds

@@ -64,6 +64,102 @@ def test_codex_unrelated_error_is_unchanged() -> None:
     assert _augment_codex_error_message("plain error", "plain error") == "plain error"
 
 
+def test_apply_codex_harness_patch_installs_subprocess_activity_hooks(
+    monkeypatch,
+) -> None:
+    """The production patch must install the hooks used by all providers."""
+    from agentfield.agent import Agent
+    from agentfield.harness import _runner, _schema
+    from agentfield.harness.providers.codex import CodexProvider
+
+    import swe_af.runtime.codex_harness_patch as patch_module
+
+    original_harness = Agent.harness
+    original_runner_suffix = _runner.build_prompt_suffix
+    original_schema_suffix = _schema.build_prompt_suffix
+    original_codex_execute = CodexProvider.execute
+    original_patched = patch_module._PATCHED
+    original_suffix = patch_module._ORIGINAL_BUILD_PROMPT_SUFFIX
+    hook_calls: list[bool] = []
+
+    monkeypatch.setattr(patch_module, "_PATCHED", False)
+    monkeypatch.setattr(
+        patch_module,
+        "install_subprocess_activity_hooks",
+        lambda: hook_calls.append(True),
+    )
+    try:
+        patch_module.apply_codex_harness_patch()
+        assert hook_calls == [True]
+    finally:
+        Agent.harness = original_harness
+        _runner.build_prompt_suffix = original_runner_suffix
+        _schema.build_prompt_suffix = original_schema_suffix
+        CodexProvider.execute = original_codex_execute
+        patch_module._PATCHED = original_patched
+        patch_module._ORIGINAL_BUILD_PROMPT_SUFFIX = original_suffix
+
+
+def test_app_harness_routes_through_activity_heartbeat() -> None:
+    """The production app instance must run its harness waits through the
+    heartbeat wrapper.
+
+    ``swe_af/app.py`` captures ``app.harness`` at import time and overrides the
+    instance attribute, so the heartbeat survives only while the reasoners
+    import applies the patch before that capture.  Run the production import
+    sequence in a fresh interpreter with the SDK base harness stubbed, and
+    assert ``app.harness`` reaches ``run_with_activity_heartbeat``.  A
+    passthrough wrapper or an import-order regression leaves ``calls`` empty
+    and fails this test.
+    """
+    import os
+    import subprocess
+    import sys
+
+    code = """
+import asyncio
+
+from agentfield.agent import Agent
+
+
+async def fake_base_harness(self, prompt, *args, **kwargs):
+    return "base-result"
+
+Agent.harness = fake_base_harness
+
+import swe_af.runtime.codex_harness_patch as patch
+
+calls = []
+
+
+async def spy(awaitable, *, note_fn, activity, interval_seconds=90.0):
+    calls.append(activity)
+    return await awaitable
+
+patch.run_with_activity_heartbeat = spy
+
+import swe_af.app as app_module
+
+result = asyncio.run(app_module.app.harness("prompt", provider="codex"))
+assert result == "base-result", result
+assert len(calls) == 1, calls
+print("heartbeat-wired")
+"""
+    env = dict(os.environ)
+    env["AGENTFIELD_SERVER"] = "http://localhost:9999"
+    env["NODE_ID"] = "swe-planner"
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, f"subprocess failed: {result.stderr}"
+    assert "heartbeat-wired" in result.stdout
+
+
 def test_codex_prompt_suffix_uses_final_json_not_write_tool(tmp_path) -> None:
     from agentfield.harness import _schema
 

@@ -40,7 +40,8 @@ services:
       - NODE_ID=swe-planner
       - PORT=8003
       - AGENT_CALLBACK_URL=http://swe-agent:8003
-      # Empty = auto: aforge when OpenRouter is available, else claude_code.
+      # Empty = auto: aforge with OpenRouter, open_code with only Infron,
+      # else claude_code. Explicit runtime overrides always win.
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - AGENTFIELD_AFORGE_COMMAND=${AGENTFIELD_AFORGE_COMMAND:-exec}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
@@ -50,6 +51,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - INFRON_API_KEY=${INFRON_API_KEY:-}
       - GH_TOKEN=${GH_TOKEN:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DATABASE_URL_TEST=${DATABASE_URL_TEST:-postgres://builder:builder@build-db:5432/buildtest}
@@ -81,10 +83,12 @@ services:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - GH_TOKEN=${GH_TOKEN:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - INFRON_API_KEY=${INFRON_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - OPENCODE_MODEL=${OPENCODE_MODEL:-}
-      # Empty = auto: aforge when OpenRouter is available, else claude_code.
+      # Empty = auto: aforge with OpenRouter, open_code with only Infron,
+      # else claude_code. Explicit runtime overrides always win.
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - AGENTFIELD_AFORGE_COMMAND=${AGENTFIELD_AFORGE_COMMAND:-exec}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}

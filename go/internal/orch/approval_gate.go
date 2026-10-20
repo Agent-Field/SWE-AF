@@ -175,11 +175,17 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 				revisionIter, runeTruncate(feedback, 200)),
 				"build", "approval", "request_changes")
 
-			revised, err := replanWithFeedback(ctx, req, planResult, feedback)
+			revised, revisionErr, err := replanWithFeedback(ctx, req, planResult, feedback)
 			if err != nil {
 				return ApprovalOutcome{}, err
 			}
 			planResult = revised
+			if revisionErr != "" {
+				revisionHistory[len(revisionHistory)-1]["revision_error"] = revisionErr
+				deps.Note(ctx,
+					"Architecture revision did not complete — re-submitting the last completed plan for review rather than building past the approval gate",
+					"build", "approval", "revision", "degraded")
+			}
 			continue
 		}
 
@@ -259,17 +265,30 @@ func pauseForApproval(
 }
 
 // replanWithFeedback re-runs Architect → Tech Lead loop → Sprint Planner with
-// the reviewer feedback and returns the revised plan_result (app.py:881-951).
-// PM is skipped (the PRD/scope is fixed).
-func replanWithFeedback(ctx context.Context, req ApprovalRequest, planResult map[string]any, feedback string) (map[string]any, error) {
+// the reviewer feedback and returns the revised plan_result plus any degraded
+// revision reason (app.py:881-951). PM is skipped (the PRD/scope is fixed).
+func replanWithFeedback(
+	ctx context.Context,
+	req ApprovalRequest,
+	planResult map[string]any,
+	feedback string,
+) (map[string]any, string, error) {
 	deps := req.Deps
 	cfg := req.Cfg
 	resolved := req.Resolved
 	prd := mapGet(planResult, "prd", map[string]any{})
 	manifest := req.ManifestMap
 	provider := cfg.AIProvider()
+	architecturePath := architectureArtifactPath(req.RepoPath, req.ArtifactsDir)
+	arch, _ := mapGet(planResult, "architecture", map[string]any{}).(map[string]any)
+	if arch == nil {
+		arch = map[string]any{}
+	}
+	review, _ := planResult["review"].(map[string]any)
+	revisionErr := ""
 
-	arch, err := deps.Call(ctx, "run_architect", map[string]any{
+	architectureSnapshot := snapshotArchitectureBeforeRevision(ctx, deps, architecturePath)
+	revisedArch, err := deps.Call(ctx, "run_architect", map[string]any{
 		"prd":                prd,
 		"repo_path":          req.RepoPath,
 		"artifacts_dir":      req.ArtifactsDir,
@@ -280,47 +299,81 @@ func replanWithFeedback(ctx context.Context, req ApprovalRequest, planResult map
 		"workspace_manifest": manifest,
 	}, "run_architect (human revision)")
 	if err != nil {
-		return nil, err
+		if isNonDegradableRevisionError(err) {
+			return nil, "", err
+		}
+		restoreArchitectureAfterFailedRevision(ctx, deps, architecturePath, architectureSnapshot)
+		revisionErr = truncateRevisionError(err.Error())
+		deps.Note(ctx,
+			"Architecture revision did not complete; keeping the last completed architecture: "+revisionErr,
+			"pipeline", "revision", "degraded")
+	} else {
+		arch = revisedArch
+		review = nil
 	}
 
-	var review map[string]any
-	for tlIter := 0; tlIter <= cfg.MaxReviewIterations; tlIter++ {
-		review, err = deps.Call(ctx, "run_tech_lead", map[string]any{
-			"prd":                prd,
-			"repo_path":          req.RepoPath,
-			"artifacts_dir":      req.ArtifactsDir,
-			"revision_number":    tlIter,
-			"model":              resolved["tech_lead_model"],
-			"permission_mode":    cfg.PermissionMode,
-			"ai_provider":        provider,
-			"workspace_manifest": manifest,
-		}, "run_tech_lead")
-		if err != nil {
-			return nil, err
-		}
-		if asBool(review["approved"]) {
-			break
-		}
-		if tlIter < cfg.MaxReviewIterations {
-			arch, err = deps.Call(ctx, "run_architect", map[string]any{
+	if revisionErr == "" {
+		for tlIter := 0; tlIter <= cfg.MaxReviewIterations; tlIter++ {
+			review, err = deps.Call(ctx, "run_tech_lead", map[string]any{
 				"prd":                prd,
 				"repo_path":          req.RepoPath,
 				"artifacts_dir":      req.ArtifactsDir,
-				"feedback":           mapStr(review, "feedback", ""),
-				"model":              resolved["architect_model"],
+				"revision_number":    tlIter,
+				"model":              resolved["tech_lead_model"],
 				"permission_mode":    cfg.PermissionMode,
 				"ai_provider":        provider,
 				"workspace_manifest": manifest,
-			}, "run_architect (tech lead revision)")
+			}, "run_tech_lead")
 			if err != nil {
-				return nil, err
+				return nil, "", err
+			}
+			if asBool(review["approved"]) {
+				break
+			}
+			if tlIter < cfg.MaxReviewIterations {
+				architectureSnapshot = snapshotArchitectureBeforeRevision(ctx, deps, architecturePath)
+				revisedArch, err = deps.Call(ctx, "run_architect", map[string]any{
+					"prd":                prd,
+					"repo_path":          req.RepoPath,
+					"artifacts_dir":      req.ArtifactsDir,
+					"feedback":           mapStr(review, "feedback", ""),
+					"model":              resolved["architect_model"],
+					"permission_mode":    cfg.PermissionMode,
+					"ai_provider":        provider,
+					"workspace_manifest": manifest,
+				}, "run_architect (tech lead revision)")
+				if err != nil {
+					if isNonDegradableRevisionError(err) {
+						return nil, "", err
+					}
+					restoreArchitectureAfterFailedRevision(ctx, deps, architecturePath, architectureSnapshot)
+					revisionErr = truncateRevisionError(err.Error())
+					deps.Note(ctx,
+						"Architecture revision did not complete; keeping the last completed architecture: "+revisionErr,
+						"pipeline", "revision", "degraded")
+					break
+				}
+				arch = revisedArch
 			}
 		}
 	}
 
-	// Auto-approve on exhaustion, mirroring the ReviewResult(...).model_dump()
-	// override at app.py:923-930.
-	if review != nil && !asBool(review["approved"]) {
+	if revisionErr != "" {
+		if review == nil {
+			review = map[string]any{}
+		}
+		auto := schemas.ReviewResult{
+			Approved:             true,
+			Feedback:             mapStr(review, "feedback", ""),
+			ScopeIssues:          asStrList(mapGet(review, "scope_issues", []any{})),
+			ComplexityAssessment: mapStr(review, "complexity_assessment", "appropriate"),
+			Summary: mapStr(review, "summary", "") +
+				" [auto-approved: architecture revision did not complete: " + revisionErr + "]",
+		}
+		review = dumpToMap(auto)
+	} else if review != nil && !asBool(review["approved"]) {
+		// Auto-approve on exhaustion, mirroring the ReviewResult(...).model_dump()
+		// override in Python build().
 		auto := schemas.ReviewResult{
 			Approved:             true,
 			Feedback:             mapStr(review, "feedback", ""),
@@ -342,7 +395,7 @@ func replanWithFeedback(ctx context.Context, req ApprovalRequest, planResult map
 		"workspace_manifest": manifest,
 	}, "run_sprint_planner (revision)")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// plan_result = {**plan_result, architecture, review, issues, rationale}.
@@ -354,7 +407,7 @@ func replanWithFeedback(ctx context.Context, req ApprovalRequest, planResult map
 	revised["review"] = review
 	revised["issues"] = mapGet(sprint, "issues", []any{})
 	revised["rationale"] = mapGet(sprint, "rationale", "")
-	return revised, nil
+	return revised, revisionErr, nil
 }
 
 // terminalOutcome builds the terminal ApprovalOutcome carrying the failure

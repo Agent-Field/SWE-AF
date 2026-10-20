@@ -3,8 +3,12 @@ package orch
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -14,6 +18,7 @@ import (
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
+	"github.com/Agent-Field/SWE-AF/go/internal/fatal"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 )
 
@@ -219,6 +224,209 @@ func TestApprovalChangesThenApproved(t *testing.T) {
 	}
 	if hits != 2 {
 		t.Fatalf("expected 2 hax requests (initial + revision), got %d", hits)
+	}
+}
+
+func TestReplanWithFeedbackRevisionFailureDegrades(t *testing.T) {
+	for _, failureAt := range []string{"human", "tech_lead"} {
+		t.Run(failureAt, func(t *testing.T) {
+			repoPath := t.TempDir()
+			architecturePath := architectureArtifactPath(repoPath, ".artifacts")
+			if err := os.MkdirAll(filepath.Dir(architecturePath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			originalBytes := []byte("# Initial completed architecture\n")
+			revisedBytes := []byte("# Human revision\n")
+			if err := os.WriteFile(architecturePath, originalBytes, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			plan := samplePlan()
+			plan["review"] = approvedReview()
+			originalArch := plan["architecture"]
+			humanArch := map[string]any{"summary": "human revision"}
+			architectCalls := 0
+			sprintCalls := 0
+			app := &mockApp{handler: func(_ context.Context, target string, input map[string]any) (map[string]any, error) {
+				switch {
+				case strings.HasSuffix(target, ".run_architect"):
+					architectCalls++
+					shouldFail := failureAt == "human" && architectCalls == 1 ||
+						failureAt == "tech_lead" && architectCalls == 2
+					if shouldFail {
+						if err := os.WriteFile(architecturePath, []byte("partial"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+						return nil, errors.New("architect subprocess crashed")
+					}
+					if err := os.WriteFile(architecturePath, revisedBytes, 0o644); err != nil {
+						t.Fatal(err)
+					}
+					return humanArch, nil
+				case strings.HasSuffix(target, ".run_tech_lead"):
+					return rejectedReview(), nil
+				case strings.HasSuffix(target, ".run_sprint_planner"):
+					sprintCalls++
+					return sprintResult(issue("i2", nil, nil)), nil
+				default:
+					return map[string]any{}, nil
+				}
+			}}
+			deps := &Deps{App: app, NodeID: "swe-planner"}
+			reqValue := req(deps, testCfg(t, 2), plan, filepath.Join(repoPath, ".artifacts"))
+			reqValue.RepoPath = repoPath
+
+			revised, revisionErr, err := replanWithFeedback(
+				context.Background(), reqValue, plan, "please fix it",
+			)
+			if err != nil {
+				t.Fatalf("replanWithFeedback: %v", err)
+			}
+			if revisionErr != "architect subprocess crashed" {
+				t.Fatalf("revision error = %q", revisionErr)
+			}
+			if sprintCalls != 1 {
+				t.Fatalf("sprint planner calls = %d, want 1", sprintCalls)
+			}
+
+			wantArch := originalArch
+			wantBytes := originalBytes
+			if failureAt == "tech_lead" {
+				wantArch = humanArch
+				wantBytes = revisedBytes
+			}
+			if !reflect.DeepEqual(revised["architecture"], wantArch) {
+				t.Errorf("architecture = %#v, want %#v", revised["architecture"], wantArch)
+			}
+			gotBytes, err := os.ReadFile(architecturePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(gotBytes, wantBytes) {
+				t.Errorf("architecture bytes = %q, want %q", gotBytes, wantBytes)
+			}
+			review, _ := revised["review"].(map[string]any)
+			if !asBool(review["approved"]) || !strings.Contains(
+				mapStr(review, "summary", ""),
+				"[auto-approved: architecture revision did not complete: architect subprocess crashed]",
+			) {
+				t.Errorf("degraded review = %#v", review)
+			}
+		})
+	}
+}
+
+func TestReplanWithFeedbackFatalAndCancellationErrorsAbort(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"fatal", &fatal.FatalHarnessError{OriginalMessage: "credit balance is too low"}},
+		{"cancelled", context.Canceled},
+		{"deadline", context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sprintCalls := 0
+			app := &mockApp{handler: func(_ context.Context, target string, _ map[string]any) (map[string]any, error) {
+				if strings.HasSuffix(target, ".run_architect") {
+					return nil, tt.err
+				}
+				if strings.HasSuffix(target, ".run_sprint_planner") {
+					sprintCalls++
+				}
+				return map[string]any{}, nil
+			}}
+			deps := &Deps{App: app, NodeID: "swe-planner"}
+			reqValue := req(deps, testCfg(t, 2), samplePlan(), t.TempDir())
+
+			_, _, err := replanWithFeedback(
+				context.Background(), reqValue, samplePlan(), "please fix it",
+			)
+			if tt.name == "fatal" {
+				var fatalErr *fatal.FatalHarnessError
+				if !errors.As(err, &fatalErr) {
+					t.Fatalf("error = %v, want fatal harness error", err)
+				}
+			} else if !errors.Is(err, tt.err) {
+				t.Fatalf("error = %v, want %v", err, tt.err)
+			}
+			if sprintCalls != 0 {
+				t.Fatalf("sprint planner called %d times after %s", sprintCalls, tt.name)
+			}
+		})
+	}
+}
+
+func TestApprovalDegradedRevisionIsResubmittedWithHistory(t *testing.T) {
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":  "req-" + itoa(len(bodies)),
+			"url": "https://hax.example/r/" + itoa(len(bodies)),
+		})
+	}))
+	defer server.Close()
+	fake := &fakePauser{
+		decisions: []string{"request_changes", "approved"},
+		feedbacks: []string{"please fix it", ""},
+	}
+	defer wireHax(t, server, fake)()
+
+	repoPath := t.TempDir()
+	architecturePath := architectureArtifactPath(repoPath, ".artifacts")
+	if err := os.MkdirAll(filepath.Dir(architecturePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalBytes := []byte("# Original architecture\n")
+	if err := os.WriteFile(architecturePath, originalBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := samplePlan()
+	plan["review"] = approvedReview()
+	app := &mockApp{handler: func(_ context.Context, target string, _ map[string]any) (map[string]any, error) {
+		switch {
+		case strings.HasSuffix(target, ".run_architect"):
+			if err := os.WriteFile(architecturePath, []byte("partial"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return nil, errors.New("architect subprocess crashed")
+		case strings.HasSuffix(target, ".run_sprint_planner"):
+			return sprintResult(issue("i2", nil, nil)), nil
+		default:
+			return map[string]any{}, nil
+		}
+	}}
+	deps := &Deps{App: app, NodeID: "swe-planner"}
+	reqValue := req(deps, testCfg(t, 2), plan, filepath.Join(repoPath, ".artifacts"))
+	reqValue.RepoPath = repoPath
+
+	out, err := PlanApprovalGate(context.Background(), reqValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Terminal || !reflect.DeepEqual(out.PlanResult["architecture"], plan["architecture"]) {
+		t.Fatalf("degraded plan was not resubmitted unchanged: %#v", out)
+	}
+	if fake.calls != 2 || len(bodies) != 2 {
+		t.Fatalf("approval calls = %d, requests = %d; want 2 each", fake.calls, len(bodies))
+	}
+	if !strings.Contains(bodies[1], "revision_error") ||
+		!strings.Contains(bodies[1], "architect subprocess crashed") {
+		t.Fatalf("second approval request lacks degraded revision history: %s", bodies[1])
+	}
+	gotBytes, err := os.ReadFile(architecturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotBytes, originalBytes) {
+		t.Errorf("architecture bytes = %q, want %q", gotBytes, originalBytes)
 	}
 }
 

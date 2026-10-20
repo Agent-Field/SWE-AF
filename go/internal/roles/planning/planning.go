@@ -24,8 +24,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"sync/atomic"
+	"time"
+	"unicode/utf16"
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
+	"github.com/Agent-Field/agentfield/sdk/go/harness"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/dagutil"
@@ -61,6 +69,16 @@ type Deps struct {
 // external test cannot seed an ExecutionContext into a ctx directly).
 var executionContextFrom = agent.ExecutionContextFrom
 
+// scopeIDFromContext resolves the process-local credential scope for this
+// execution: the run ID, falling back to the root workflow ID when the run ID
+// is empty (hitl.ScopeID). RunEnvironmentScout stores credentials under this
+// same key, so the retry-log redactor reads the row the scout wrote instead of
+// looking under an empty key.
+func scopeIDFromContext(ctx context.Context) string {
+	ec := executionContextFrom(ctx)
+	return hitl.ScopeID(ec.RunID, ec.RootWorkflowID)
+}
+
 // Handlers is the name→handler registration surface consumed by node wiring.
 // The keys are the exact Python reasoner names.
 func Handlers() map[string]Handler {
@@ -91,7 +109,7 @@ func RunProductManager(ctx context.Context, deps *Deps, input map[string]any) (a
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 	initialPrior := getPriorResponses(input)
 
-	_, paths, err := ensurePaths(repoPath, artifactsDir)
+	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -133,14 +151,16 @@ func RunProductManager(ctx context.Context, deps *Deps, input map[string]any) (a
 			SystemPrompt:   systemPrompt,
 			Cwd:            repoPath,
 		}.ToOptions()
-		parsed, res, err := harnessx.Run[schemas.PRD](ctx, deps.Harness, taskPrompt, opts)
+		parsed, err := runSchemaBoundRole[schemas.PRD](
+			ctx, deps, opts, taskPrompt,
+			filepath.Join(base, "plan", "product_manager_raw_response.txt"),
+			"PM",
+			"Product manager failed to produce a valid PRD",
+			provider, model,
+			planningRoleSchemaRetries,
+		)
 		if err != nil {
 			return nil, err
-		}
-		if res == nil || res.Parsed == nil {
-			// Parse failure: Python's _invoke_pm returns None. Signal that to
-			// the wrapper with a nil map (run_with_ask_user then returns nil).
-			return nil, nil
 		}
 		return toMap(parsed)
 	}
@@ -264,14 +284,12 @@ func RunEnvironmentScout(ctx context.Context, deps *Deps, input map[string]any) 
 		return fallback, nil
 	}
 
-	// Stash credentials in the process-local store under the build's run_id
-	// (shared across every reasoner in this build). This MUST happen before we
-	// strip them from the return value — otherwise the build() caller has no way
-	// to retrieve them.
-	scopeID := ec.RunID
-	if scopeID == "" {
-		scopeID = ec.RootWorkflowID
-	}
+	// Stash credentials in the process-local store under the build's credential
+	// scope — run ID, or root workflow ID when the run ID is empty (shared
+	// across every reasoner in this build). This MUST happen before we strip
+	// them from the return value — otherwise the build() caller has no way to
+	// retrieve them.
+	scopeID := hitl.ScopeID(ec.RunID, ec.RootWorkflowID)
 	creds := scopedCredentialsFrom(result["scoped_credentials"])
 	if scopeID != "" && len(creds) > 0 {
 		hitl.StoreScopedCredentials(scopeID, creds)
@@ -307,7 +325,7 @@ func RunArchitect(ctx context.Context, deps *Deps, input map[string]any) (any, e
 	permissionMode := getString(input, "permission_mode", "")
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 
-	_, paths, err := ensurePaths(repoPath, artifactsDir)
+	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -350,12 +368,16 @@ func RunArchitect(ctx context.Context, deps *Deps, input map[string]any) (any, e
 		SystemPrompt:   systemPrompt,
 		Cwd:            repoPath,
 	}.ToOptions()
-	parsed, res, err := harnessx.Run[schemas.Architecture](ctx, deps.Harness, taskPrompt, opts)
+	parsed, err := runSchemaBoundRole[schemas.Architecture](
+		ctx, deps, opts, taskPrompt,
+		filepath.Join(base, "plan", "architect_raw_response.txt"),
+		"Architect",
+		"Architect failed to produce a valid architecture",
+		provider, model,
+		planningRoleSchemaRetries,
+	)
 	if err != nil {
 		return nil, err
-	}
-	if res == nil || res.Parsed == nil {
-		return nil, errors.New("Architect failed to produce a valid architecture")
 	}
 
 	deps.App.Note(ctx, "Architect complete", "architect", "complete")
@@ -414,12 +436,16 @@ func RunTechLead(ctx context.Context, deps *Deps, input map[string]any) (any, er
 		SystemPrompt:   systemPrompt,
 		Cwd:            repoPath,
 	}.ToOptions()
-	parsed, res, err := harnessx.Run[schemas.ReviewResult](ctx, deps.Harness, taskPrompt, opts)
+	parsed, err := runSchemaBoundRole[schemas.ReviewResult](
+		ctx, deps, opts, taskPrompt,
+		filepath.Join(base, "plan", "tech_lead_raw_response.txt"),
+		"Tech lead",
+		"Tech lead failed to produce a valid review",
+		provider, model,
+		planningRoleSchemaRetries,
+	)
 	if err != nil {
 		return nil, err
-	}
-	if res == nil || res.Parsed == nil {
-		return nil, errors.New("Tech lead failed to produce a valid review")
 	}
 
 	review, err := toMap(parsed)
@@ -450,11 +476,420 @@ type sprintPlanOutput struct {
 	Rationale string                 `json:"rationale"`
 }
 
+// planningRoleSchemaRetries is the number of extra *outer* schema-bound harness
+// calls the product manager, architect and tech lead get when their structured
+// output does not parse/validate. These count harness() calls, not model runs:
+// the SDK retries schema failures inside one call (DEFAULT_SCHEMA_RETRIES = 2),
+// so one outer attempt can be up to three subprocess runs. Kept small on
+// purpose: each attempt is a full stage run over the PRD and architecture.
+const planningRoleSchemaRetries = 1
+
+// sprintPlannerSchemaRetries is the outer-call bound for the sprint planner.
+// Its response is a large issue set that feeds every downstream issue, and one
+// extra outer attempt than the other stages is enough; each outer attempt is
+// itself up to three subprocess runs via the SDK's in-call schema retries, so
+// the subprocess ceiling is three times these constants. Mirrors Python's
+// PLANNING_ROLE_SCHEMA_RETRIES / SPRINT_PLANNER_SCHEMA_RETRIES
+// (swe_af/reasoners/pipeline.py, #146). These are internal constants rather
+// than handler inputs because nothing passes a different value.
+const sprintPlannerSchemaRetries = 2
+
+// maxRawResponseChars caps one failed attempt's raw text in the retry log. The
+// first and last halves are kept — output-limit truncation shows at the tail,
+// malformed-JSON evidence usually at the head — and the middle is elided, so
+// the default three attempts cannot grow the log without bound.
+const maxRawResponseChars = 200_000
+
+// runSectionSeq numbers retry-log run sections. The header timestamp has
+// second granularity, so this counter is what keeps two invocations with the
+// same scope id in the same second distinguishable.
+var runSectionSeq atomic.Int64
+
+// schemaRetryContext feeds a failed attempt's parse/validation error back into
+// the retry prompt. Mirrors pipeline._schema_retry_context.
+const schemaRetryContext = "## Retry Context\n" +
+	"Your previous response could not be parsed into the required " +
+	"structured output. The validation error was:\n\n%s\n\n" +
+	"Produce the complete structured output again, correcting that error. " +
+	"Include every required field."
+
+// isEmptyCompletion reports whether a schema-bound harness call returned with
+// neither a parsed object nor any raw text. Python's
+// check_empty_harness_completion classifies that shape as a provider/model
+// mismatch rather than a schema-quality failure, so it must fail fast instead
+// of burning the retry bound. A terminal failure_type=schema is exempt: the
+// agent did produce output that failed validation, the raw text just was not
+// surfaced on the result.
+func isEmptyCompletion(result *harness.Result) bool {
+	if result == nil {
+		return true
+	}
+	if result.Parsed != nil {
+		return false
+	}
+	if strings.TrimSpace(result.Result) != "" {
+		return false
+	}
+	return result.FailureType != harness.FailureSchema
+}
+
+// describeSchemaFailure names the parser error or the failing fields for a
+// schema-bound call that produced no parsed result. Re-decoding the raw text
+// into dst makes the decode error name the offending field; the harness's own
+// ErrorMessage is appended when present. encoding/json only reports decode and
+// type errors — it does not enforce required fields — so for a structurally
+// valid response that is missing a field this leans on the harness's own
+// message. Mirrors pipeline._describe_schema_failure.
+func describeSchemaFailure(result *harness.Result, dst any) string {
+	raw := ""
+	detail := ""
+	if result != nil {
+		raw = result.Result
+		detail = strings.TrimSpace(result.ErrorMessage)
+	}
+	if strings.TrimSpace(raw) == "" {
+		if detail != "" {
+			return detail
+		}
+		return "the harness returned no parsed result and no error detail"
+	}
+	failure := "the harness returned no parsed result"
+	if err := json.Unmarshal([]byte(raw), dst); err != nil {
+		failure = fmt.Sprintf("raw response failed schema validation (%v)", err)
+	}
+	if detail != "" {
+		return fmt.Sprintf("%s; harness reported: %s", failure, detail)
+	}
+	return failure
+}
+
+// truncateRawResponse keeps the head and tail of an oversized raw response.
+func truncateRawResponse(raw string) string {
+	if len(raw) <= maxRawResponseChars {
+		return raw
+	}
+	half := maxRawResponseChars / 2
+	omitted := len(raw) - maxRawResponseChars
+	return raw[:half] + fmt.Sprintf(
+		"\n\n# ... %d characters omitted (full response was %d chars) ...\n\n",
+		omitted, len(raw),
+	) + raw[len(raw)-half:]
+}
+
+// appendArtifact appends text to a run artifact, creating its parent directory.
+func appendArtifact(path, text string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	if _, err := f.WriteString(text); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// credentialForms returns the bounded spellings a credential value can take in
+// a response: the exact value, its JSON-escaped body (a value containing " or
+// \ is written escaped inside JSON), and its percent- and form-encoded URL
+// spellings. Redacting the exact value alone misses the other spellings the log
+// path can contain. Mirrors pipeline._credential_forms.
+func credentialForms(value string) []string {
+	forms := []string{value}
+	jsonBody, _ := json.Marshal(value)
+	for _, form := range []string{
+		jsonEscapedBody(value),
+		jsonASCIIEscapedBody(value),
+		string(jsonBody[1 : len(jsonBody)-1]),
+		percentEncode(value, false),
+		percentEncode(value, true),
+	} {
+		if form != value && !slices.Contains(forms, form) {
+			forms = append(forms, form)
+		}
+	}
+	return forms
+}
+
+// jsonEscapedBody escapes value the way Python's json.dumps(value,
+// ensure_ascii=False)[1:-1] does: quote and backslash escaped, control
+// characters using JSON's short escapes or \u00XX, and non-ASCII text left raw.
+func jsonEscapedBody(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
+func jsonASCIIEscapedBody(value string) string {
+	var b strings.Builder
+	for _, r := range jsonEscapedBody(value) {
+		switch {
+		case r > 0xffff:
+			high, low := utf16.EncodeRune(r)
+			fmt.Fprintf(&b, `\u%04x\u%04x`, high, low)
+		case r >= 0x7f:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// percentEncode encodes every byte outside the RFC 3986 unreserved set (A-Z a-z
+// 0-9 - _ . ~) as %XX, matching Python's urllib.parse.quote(value, safe="").
+// When plusForSpace is true, spaces become "+" — the
+// application/x-www-form-urlencoded spelling quote_plus produces.
+func percentEncode(value string, plusForSpace bool) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z',
+			c >= '0' && c <= '9', c == '-', c == '_', c == '.', c == '~':
+			b.WriteByte(c)
+		case c == ' ' && plusForSpace:
+			b.WriteByte('+')
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&0x0f])
+		}
+	}
+	return b.String()
+}
+
+// flattenReason collapses a multi-line failure reason onto one physical log
+// line. The retry log is read by its terminal "===== outcome: ... =====" line,
+// so a newline inside an interpolated error would push the outcome text onto
+// continuation lines and hide it. Mirrors pipeline._flatten_reason.
+func flattenReason(reason string) string {
+	return strings.Join(strings.Fields(reason), " ")
+}
+
+// redactScopedCredentials replaces any negotiated credential value with a
+// marker so a response that echoes one cannot land in the archived retry log.
+// A value is matched exactly, JSON-escaped, and URL-encoded (credentialForms);
+// spellings are replaced longest-first so a shorter one cannot split a longer
+// one. Mirrors pipeline._redact_scoped_credentials.
+func redactScopedCredentials(scopeID, text string) string {
+	if text == "" || scopeID == "" {
+		return text
+	}
+	creds := hitl.GetScopedCredentials(scopeID)
+	if len(creds) == 0 {
+		return text
+	}
+	type spelling struct {
+		form string
+		name string
+	}
+	var spellings []spelling
+	for name, value := range creds {
+		if value == "" {
+			continue
+		}
+		for _, form := range credentialForms(value) {
+			spellings = append(spellings, spelling{form: form, name: name})
+		}
+	}
+	sort.Slice(spellings, func(i, j int) bool {
+		return len(spellings[i].form) > len(spellings[j].form)
+	})
+	percentEscape := regexp.MustCompile(`%[0-9a-fA-F]{2}`)
+	for _, s := range spellings {
+		pattern := percentEscape.ReplaceAllStringFunc(regexp.QuoteMeta(s.form), func(token string) string {
+			return "(?i:" + token + ")"
+		})
+		text = regexp.MustCompile(pattern).ReplaceAllStringFunc(text, func(string) string {
+			return "[REDACTED:" + s.name + "]"
+		})
+	}
+	return text
+}
+
+// persistRawResponse appends one failed attempt's raw completion to the
+// stage's retry log. Mirrors pipeline._persist_raw_response.
+func persistRawResponse(path, scopeID string, result *harness.Result, attempt, attempts int, failure string) error {
+	raw := ""
+	if result != nil {
+		raw = result.Result
+	}
+	redacted := redactScopedCredentials(scopeID, raw)
+	body := strings.TrimSpace(redacted)
+	if body != "" {
+		body = truncateRawResponse(redacted)
+	} else {
+		body = "(the harness returned no raw completion text)"
+	}
+	// Redact while the reason is still multi-line (so a value containing a
+	// newline is matched), then flatten so the attempt header stays one line.
+	header := flattenReason(redactScopedCredentials(scopeID, fmt.Sprintf(
+		"===== attempt %d/%d failed: %s =====", attempt, attempts, failure)))
+	block := header + "\n# raw completion text follows\n" + body
+	return appendArtifact(path, redactScopedCredentials(scopeID, block))
+}
+
+// recordRetryOutcome appends the terminal retry outcome to the stage's retry
+// log. Redaction runs before flattening so a credential containing a newline is
+// still matched, and the outcome always lands on one physical line.
+func recordRetryOutcome(path, scopeID, outcome string) error {
+	line := redactScopedCredentials(scopeID, "===== outcome: "+outcome+" =====")
+	return appendArtifact(path, flattenReason(line))
+}
+
+// recordOutcomeBestEffort records a terminal retry outcome without ever failing
+// the stage.
+func recordOutcomeBestEffort(ctx context.Context, deps *Deps, stage, path, scopeID, outcome string) {
+	if err := recordRetryOutcome(path, scopeID, outcome); err != nil {
+		deps.App.Note(ctx, fmt.Sprintf(
+			"%s could not write the retry outcome to %s: %v",
+			stage, path, err), "planning", "schema_retry", "artifact_error")
+	}
+}
+
+// recordRunHeaderBestEffort starts a self-describing section for this
+// invocation of the retry log. The log is append-only and keyed by repo path,
+// so a second build against the same path appends after the first; the header
+// makes each build's section identifiable without a reader having to guess
+// which outcome is current, and its section counter keeps two invocations with
+// the same scope id in the same second distinct.
+func recordRunHeaderBestEffort(ctx context.Context, deps *Deps, stage, path, scopeID string) {
+	label := scopeID
+	if label == "" {
+		label = "unknown-run"
+	}
+	if err := appendArtifact(path, fmt.Sprintf(
+		"===== run %s | %s | started %s | section %d =====",
+		label, stage, time.Now().UTC().Format(time.RFC3339), runSectionSeq.Add(1))); err != nil {
+		deps.App.Note(ctx, fmt.Sprintf(
+			"%s could not write the retry-log header to %s: %v",
+			stage, path, err), "planning", "schema_retry", "artifact_error")
+	}
+}
+
+// runSchemaBoundRole drives the bounded schema-retry loop shared by the four
+// planning stages (PM, architect, tech lead, sprint planner). It re-issues the
+// harness call with the validation error fed back into the prompt when the
+// output does not parse/validate. Each invocation starts a self-describing run
+// section and always ends it with a terminal outcome line, including when a
+// fatal API error or an empty completion ends the loop early, so the log never
+// trails off mid-sequence. Run-scoped credential values are redacted before
+// anything reaches the log. maxSchemaRetries is set per call site from
+// planningRoleSchemaRetries / sprintPlannerSchemaRetries.
+func runSchemaBoundRole[T any](
+	ctx context.Context,
+	deps *Deps,
+	opts harness.Options,
+	taskPrompt string,
+	rawResponsePath string,
+	stage string,
+	failureLabel string,
+	provider string,
+	model string,
+	maxSchemaRetries int,
+) (*T, error) {
+	attempts := maxSchemaRetries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	scopeID := scopeIDFromContext(ctx)
+	lastFailure := ""
+	persistenceError := ""
+	recordRunHeaderBestEffort(ctx, deps, stage, rawResponsePath, scopeID)
+	for attempt := 1; attempt <= attempts; attempt++ {
+		prompt := taskPrompt
+		if lastFailure != "" {
+			prompt += "\n\n" + fmt.Sprintf(schemaRetryContext, lastFailure)
+		}
+		parsed, res, err := harnessx.Run[T](ctx, deps.Harness, prompt, opts)
+		if err != nil {
+			recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath, scopeID,
+				fmt.Sprintf("FAILED after attempt %d/%d: %v", attempt, attempts, err))
+			return nil, err
+		}
+		if res != nil && res.Parsed != nil {
+			recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath, scopeID,
+				fmt.Sprintf("succeeded on attempt %d/%d", attempt, attempts))
+			return parsed, nil
+		}
+		if isEmptyCompletion(res) {
+			reason := fmt.Sprintf("empty completion (provider=%s, model=%s)", provider, model)
+			recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath, scopeID,
+				fmt.Sprintf("FAILED after attempt %d/%d: %s", attempt, attempts, reason))
+			return nil, fmt.Errorf(
+				"%s harness returned an empty completion "+
+					"(provider=%s, model=%s) — check provider auth/model compatibility",
+				stage, provider, model,
+			)
+		}
+		var zero T
+		lastFailure = describeSchemaFailure(res, &zero)
+		if err := persistRawResponse(rawResponsePath, scopeID, res, attempt, attempts, lastFailure); err != nil {
+			persistenceError = err.Error()
+			deps.App.Note(ctx, fmt.Sprintf(
+				"%s could not write the raw response to %s: %v",
+				stage, rawResponsePath, err), "planning", "schema_retry", "artifact_error")
+		}
+		if attempt < attempts {
+			deps.App.Note(ctx, fmt.Sprintf(
+				"%s structured output invalid on attempt %d/%d — retrying with the validation error",
+				stage, attempt, attempts), "planning", "schema_retry")
+		}
+	}
+	recordOutcomeBestEffort(ctx, deps, stage, rawResponsePath, scopeID,
+		fmt.Sprintf("FAILED after %d attempt(s): %s", attempts, lastFailure))
+	persistenceDetail := ""
+	if persistenceError != "" {
+		persistenceDetail = "; raw response could not be written: " + persistenceError
+	}
+	return nil, fmt.Errorf(
+		"%s after %d attempt(s) (provider=%s, model=%s; raw response: %s) — %s%s",
+		failureLabel, attempts, provider, model, rawResponsePath,
+		redactScopedCredentials(scopeID, lastFailure), persistenceDetail,
+	)
+}
+
 // RunSprintPlanner decomposes the work into executable issues. Ports
 // pipeline.py:477-549. Returns {"issues": [...], "rationale": "..."}. The pure
 // level/conflict/sequence helpers (_compute_levels, _validate_file_conflicts,
 // _assign_sequence_numbers) are applied by the plan orchestrator, NOT here — the
 // reasoner only surfaces the raw issues + rationale.
+//
+// A response that does not parse/validate is retried up to
+// sprintPlannerSchemaRetries times, each retry feeding the validation error
+// back into the task prompt. Every failed attempt and the terminal outcome are
+// appended to plan/sprint_planner_raw_response.txt.
 func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	deps.App.Note(ctx, "Sprint Planner starting", "sprint_planner", "start")
 
@@ -465,7 +900,7 @@ func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (an
 	permissionMode := getString(input, "permission_mode", "")
 	aiProvider := orResolvedDefault(getString(input, "ai_provider", ""), config.DefaultRuntime())
 
-	_, paths, err := ensurePaths(repoPath, artifactsDir)
+	base, paths, err := ensurePaths(repoPath, artifactsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -522,14 +957,17 @@ func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (an
 		SystemPrompt:   systemPrompt,
 		Cwd:            repoPath,
 	}.ToOptions()
-	parsed, res, err := harnessx.Run[sprintPlanOutput](ctx, deps.Harness, taskPrompt, opts)
+	parsed, err := runSchemaBoundRole[sprintPlanOutput](
+		ctx, deps, opts, taskPrompt,
+		filepath.Join(base, "plan", "sprint_planner_raw_response.txt"),
+		"Sprint planner",
+		"Sprint planner failed to produce valid issues",
+		provider, model,
+		sprintPlannerSchemaRetries,
+	)
 	if err != nil {
 		return nil, err
 	}
-	if res == nil || res.Parsed == nil {
-		return nil, errors.New("Sprint planner failed to produce valid issues")
-	}
-
 	issues := make([]any, 0, len(parsed.Issues))
 	for i := range parsed.Issues {
 		m, err := toMap(&parsed.Issues[i])

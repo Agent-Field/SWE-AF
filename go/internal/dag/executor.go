@@ -35,6 +35,7 @@ type ExecuteFn func(ctx context.Context, issue map[string]any, dagState *schemas
 type runOptions struct {
 	executeFn         ExecuteFn
 	noteFn            NoteFn
+	levelCompleteFn   func(int)
 	gitConfig         map[string]any
 	resume            bool
 	buildID           string
@@ -50,6 +51,11 @@ func WithExecuteFn(fn ExecuteFn) Option { return func(o *runOptions) { o.execute
 
 // WithNoteFn sets the observability callback (Python note_fn=app.note).
 func WithNoteFn(fn NoteFn) Option { return func(o *runOptions) { o.noteFn = fn } }
+
+// WithLevelCompleteFn runs fn after a DAG level's worktree cleanup completes.
+func WithLevelCompleteFn(fn func(int)) Option {
+	return func(o *runOptions) { o.levelCompleteFn = fn }
+}
 
 // WithGitConfig sets the git configuration from run_git_init (Python git_config).
 func WithGitConfig(g map[string]any) Option { return func(o *runOptions) { o.gitConfig = g } }
@@ -513,6 +519,9 @@ mainLoop:
 		// Ensure cleanup is done before advancing to next level's worktree setup.
 		if err := awaitCleanup(); err != nil {
 			return nil, err
+		}
+		if o.levelCompleteFn != nil {
+			o.levelCompleteFn(dagState.CurrentLevel)
 		}
 
 		dagState.CurrentLevel++

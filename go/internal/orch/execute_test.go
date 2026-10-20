@@ -43,6 +43,29 @@ func minimalPlan() map[string]any {
 	}
 }
 
+func TestExecutePublishesCompletedLevels(t *testing.T) {
+	defer withExecCtx("run-levels", "exec-levels")()
+	f := &fakeFurrow{}
+	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
+		return map[string]any{}, nil
+	}}, NodeID: "swe-planner", Furrow: f}
+	plan := minimalPlan()
+	plan["issues"] = []any{map[string]any{"name": "issue-1", "sequence_number": 1}}
+	plan["levels"] = []any{[]any{"issue-1"}}
+
+	_, err := ExecuteHandler(context.Background(), deps, map[string]any{
+		"plan_result":       plan,
+		"repo_path":         t.TempDir(),
+		"execute_fn_target": "coder.execute",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteHandler: %v", err)
+	}
+	if !reflect.DeepEqual(f.publishes, []string{"level 0 complete"}) {
+		t.Fatalf("publishes = %v, want level boundary", f.publishes)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Contract: config dict → ExecutionConfig with model resolution; call_fn wired;
 // plan_result / repo_path / node_id forwarded unchanged.
