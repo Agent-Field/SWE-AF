@@ -9,10 +9,13 @@ Ref: https://github.com/Agent-Field/SWE-AF/issues/49
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Optional
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from claude_agent_sdk import AssistantMessage, TextBlock, ToolResultBlock, UserMessage
+from claude_agent_sdk._internal.message_parser import parse_message
 
 from swe_af.execution.fatal_error import (
     EmptyHarnessCompletionError,
@@ -23,7 +26,6 @@ from swe_af.execution.fatal_error import (
     is_fatal_error,
     is_timeout_error,
 )
-
 
 # ---------------------------------------------------------------------------
 # is_fatal_error — pattern matching
@@ -117,6 +119,7 @@ class FakeResult:
     result: Optional[str] = None
     text: str = ""
     failure_type: Optional[str] = None
+    messages: list = field(default_factory=list)
 
 
 class TestCheckFatalHarnessError:
@@ -145,6 +148,268 @@ class TestCheckFatalHarnessError:
     def test_empty_error_message_passes(self) -> None:
         result = FakeResult(is_error=True, error_message="")
         check_fatal_harness_error(result)  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# Claude subscription caps / expired logins surfaced only as the CLI's reply
+# ---------------------------------------------------------------------------
+
+SCHEMA_FAILURE = (
+    "Schema validation failed after 2 retry attempt(s). "
+    "Last error: The output file was NOT created."
+)
+
+
+class _TextBlock:
+    """Mimics claude_agent_sdk.TextBlock as it appears in HarnessResult.messages."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def __repr__(self) -> str:
+        return f"TextBlock(text={self.text!r})"
+
+
+class TestClaudeUnavailableReplies:
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "You've hit your session limit · resets 9:50pm (UTC)",
+            "You've hit your limit · resets 3pm (UTC)",
+            "Failed to authenticate: OAuth session expired and could not be refreshed",
+        ],
+    )
+    def test_raw_completion_reply_raises(self, reply: str) -> None:
+        result = FakeResult(is_error=True, error_message=SCHEMA_FAILURE, result=reply)
+        with pytest.raises(FatalHarnessError, match="Claude unavailable"):
+            check_fatal_harness_error(result)
+
+    def test_reply_only_in_session_messages_raises(self) -> None:
+        """Planning stages can return no raw text; the reply survives in messages."""
+        reply = "You've hit your session limit · resets 1:30pm (UTC)"
+        result = FakeResult(
+            is_error=True,
+            error_message=SCHEMA_FAILURE,
+            messages=[
+                {"subtype": "init"},
+                {"content": [_TextBlock(reply)], "model": "<synthetic>"},
+            ],
+        )
+        with pytest.raises(FatalHarnessError, match="session limit"):
+            check_fatal_harness_error(result)
+
+    @pytest.mark.parametrize(
+        "prose",
+        [
+            "Added a banner for users who hit your limit of 5 retries.",
+            "Handle the case where merchants fail to authenticate.",
+        ],
+    )
+    def test_model_prose_does_not_raise(self, prose: str) -> None:
+        result = FakeResult(
+            is_error=True,
+            error_message=SCHEMA_FAILURE,
+            result=prose,
+            messages=[{"content": [_TextBlock(prose)]}],
+        )
+        check_fatal_harness_error(result)  # Should not raise
+
+    def test_successful_result_is_not_inspected(self) -> None:
+        result = FakeResult(
+            is_error=False,
+            result="You've hit your session limit · resets 9:50pm (UTC)",
+        )
+        check_fatal_harness_error(result)  # Should not raise
+
+
+# claude-agent-sdk==0.1.20 bundles CLI 2.1.9. BL9/_FH format these cap
+# replies, AG/HQD create model="<synthetic>" assistant text, and Od9 emits
+# the error at the top level of stream JSON. The SDK parser reads the error
+# from message.error instead, losing it; the synthetic model survives.
+CLAUDE_CAP_REPLIES = [
+    "You've hit your session limit · resets 9:50pm (UTC)",
+    "You've hit your session limit",
+    "You've hit your weekly limit",
+    "You've hit your Opus limit",
+    "You've hit your Sonnet limit",
+    "You've hit your usage limit",
+    "You've hit your limit",
+    "You're out of extra usage · resets 9:50pm (UTC)",
+    "You're out of extra usage",
+]
+CLAUDE_AUTH_REPLIES = [
+    "Invalid API key · Please run /login",
+    "Invalid API key · Fix external API key",
+    "OAuth token revoked · Please run /login",
+    "Your account does not have access to Claude Code. Please run /login.",
+    'API Error: 401 {"error":{"message":"OAuth token has expired"}} · Please run /login',
+]
+
+
+def _claude_message(reply, *, error="rate_limit", form="harness", model="<synthetic>"):
+    message = AssistantMessage(content=[TextBlock(reply)], model=model, error=error)
+    wire = {
+        "type": "assistant",
+        "message": {
+            "model": model,
+            "content": [{"type": "text", "text": reply}],
+        },
+        "error": error,
+    }
+    return {
+        "object": message,
+        # AgentField's Claude adapter copies msg.__dict__, retaining block objects.
+        "harness": vars(message),
+        "serialized": asdict(message),
+        "wire": wire,
+        "parsed_wire": parse_message(wire),
+    }[form]
+
+
+class TestClaudeProviderReplies:
+    @pytest.mark.parametrize("reply", CLAUDE_CAP_REPLIES + CLAUDE_AUTH_REPLIES + [
+        "Claude AI usage limit reached",
+        "Failed to authenticate: OAuth session expired and could not be refreshed",
+        "You've hit your usage limit. Try again later.",
+        "You've hit your weekly limit · resets Oct 23, 3pm (America/Toronto)",
+        "You've hit your weekly limit · resets Jan 1, 2027, 9:50pm (Etc/GMT+5)",
+    ])
+    def test_complete_raw_reply_is_fatal(self, reply):
+        with pytest.raises(FatalHarnessError):
+            check_fatal_harness_error(FakeResult(is_error=True, result=reply))
+
+    @pytest.mark.parametrize("form", ["object", "harness", "serialized", "wire", "parsed_wire"])
+    @pytest.mark.parametrize("reply", CLAUDE_CAP_REPLIES)
+    def test_messages_only_cap_is_fatal(self, reply, form):
+        result = FakeResult(
+            is_error=True, error_message=SCHEMA_FAILURE,
+            messages=[_claude_message(reply, form=form)],
+        )
+        with pytest.raises(FatalHarnessError, match="Claude unavailable"):
+            check_fatal_harness_error(result)
+
+    @pytest.mark.parametrize("form", ["harness", "wire", "parsed_wire"])
+    @pytest.mark.parametrize("reply", CLAUDE_AUTH_REPLIES)
+    def test_messages_only_auth_is_fatal(self, reply, form):
+        result = FakeResult(
+            is_error=True, error_message=SCHEMA_FAILURE,
+            messages=[_claude_message(reply, error="authentication_failed", form=form)],
+        )
+        with pytest.raises(FatalHarnessError, match="Claude unavailable"):
+            check_fatal_harness_error(result)
+
+    @pytest.mark.parametrize("reply", CLAUDE_CAP_REPLIES)
+    def test_raw_only_cap_is_fatal(self, reply):
+        with pytest.raises(FatalHarnessError, match="Claude unavailable"):
+            check_fatal_harness_error(FakeResult(is_error=True, result=reply))
+
+    @pytest.mark.parametrize("reply", CLAUDE_AUTH_REPLIES)
+    def test_raw_only_auth_is_fatal(self, reply):
+        with pytest.raises(FatalHarnessError, match="Claude unavailable"):
+            check_fatal_harness_error(FakeResult(is_error=True, result=reply))
+
+    @pytest.mark.parametrize("quote", [
+        CLAUDE_CAP_REPLIES[0],
+        "Failed to authenticate: OAuth session expired and could not be refreshed",
+    ])
+    @pytest.mark.parametrize("source", ["user", "tool", "assistant", "tool_input", "metadata"])
+    @pytest.mark.parametrize("raw_present", [False, True])
+    def test_quoted_examples_remain_recoverable(self, quote, source, raw_present):
+        messages = {
+            "user": UserMessage(content=[TextBlock(quote)]),
+            "tool": UserMessage(content=[ToolResultBlock("read-1", content=quote)]),
+            "assistant": AssistantMessage(content=[TextBlock(quote)], model="claude-sonnet-4-5"),
+            "tool_input": {
+                "type": "assistant", "model": "claude-sonnet-4-5",
+                "content": [{"type": "tool_use", "input": {"example": quote}}],
+            },
+            "metadata": {"subtype": "init", "example": quote},
+        }
+        message = messages[source]
+        check_fatal_harness_error(FakeResult(
+            is_error=True, error_message=SCHEMA_FAILURE,
+            result=quote if raw_present else None,
+            messages=[vars(message) if hasattr(message, "__dict__") else message],
+        ))
+
+    @pytest.mark.parametrize("form", ["object", "harness", "serialized", "wire", "parsed_wire"])
+    def test_ordinary_model_prose_has_no_provider_error(self, form):
+        quote = CLAUDE_CAP_REPLIES[0]
+        message = _claude_message(quote, error=None, model="claude-sonnet-4-5", form=form)
+        check_fatal_harness_error(FakeResult(
+            is_error=True, error_message=SCHEMA_FAILURE, result=quote, messages=[message],
+        ))
+
+    @pytest.mark.parametrize("reply", [
+        "API Error: Rate limit reached",  # generic 429, not a subscription cap
+        "Opus is experiencing high load, please use /model to switch to Sonnet",
+        "Request timed out",
+        "You're close to your extra usage spending limit",
+        "You're now using extra usage",
+        "Example: You've hit your session limit · resets 9:50pm (UTC)",
+    ])
+    def test_recoverable_synthetic_reply(self, reply):
+        check_fatal_harness_error(FakeResult(
+            is_error=True, error_message=SCHEMA_FAILURE,
+            messages=[_claude_message(reply)],
+        ))
+
+    def test_successful_result_with_synthetic_reply_is_ignored(self):
+        check_fatal_harness_error(FakeResult(
+            is_error=False, messages=[_claude_message(CLAUDE_CAP_REPLIES[0])],
+        ))
+
+    @pytest.mark.parametrize("block", [
+        {"type": "tool_result", "text": CLAUDE_CAP_REPLIES[0]},
+        {"type": "tool_use", "input": {"example": CLAUDE_CAP_REPLIES[0]}},
+    ])
+    def test_nontext_blocks_are_not_provider_replies(self, block):
+        check_fatal_harness_error(FakeResult(
+            is_error=True, error_message=SCHEMA_FAILURE,
+            messages=[{"model": "<synthetic>", "content": [block]}],
+        ))
+
+    def test_user_role_cannot_supply_provider_provenance(self):
+        message = _claude_message(CLAUDE_CAP_REPLIES[0], form="wire")
+        message["type"] = "user"
+        check_fatal_harness_error(FakeResult(
+            is_error=True, error_message=SCHEMA_FAILURE, messages=[message],
+        ))
+
+    @pytest.mark.parametrize("provider_error", [False, True])
+    async def test_planning_retries_quotes_but_aborts_provider_caps(
+        self, provider_error, tmp_path, monkeypatch,
+    ):
+        from pydantic import BaseModel
+
+        from swe_af.reasoners import pipeline
+
+        class Output(BaseModel):
+            value: str
+
+        reply = CLAUDE_CAP_REPLIES[0]
+        message = _claude_message(reply) if provider_error else vars(
+            UserMessage(content=[ToolResultBlock("read-1", content=reply)])
+        )
+        failed = FakeResult(
+            is_error=True, error_message=SCHEMA_FAILURE, failure_type="schema",
+            messages=[message],
+        )
+        success = FakeResult(parsed=Output(value="done"))
+        invoke = AsyncMock(side_effect=[failed, success])
+        monkeypatch.setattr(pipeline, "router", MagicMock())
+        call = pipeline._run_planning_call_with_schema_retries(
+            invoke, stage="PM", failure_label="No valid output", provider="claude",
+            model="sonnet", schema=Output, raw_response_path=str(tmp_path / "raw.txt"),
+            max_schema_retries=1,
+        )
+        if provider_error:
+            with pytest.raises(FatalHarnessError):
+                await call
+            assert invoke.await_count == 1
+        else:
+            assert await call is success
+            assert invoke.await_count == 2
 
 
 # ---------------------------------------------------------------------------
