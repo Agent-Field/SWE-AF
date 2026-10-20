@@ -197,8 +197,8 @@ Path selection from sprint-planner guidance: `needs_deeper_qa=False` → **DEFAU
 SWE-AF does **not** call `claude_agent_sdk` directly for agent work — the **agentfield SDK's `Agent.harness()`** does (SWE-AF depends on `claude-agent-sdk==0.1.20` transitively/for the harness). SWE-AF's contract with the harness is the kwargs shown in §3.1: `prompt`, `system_prompt`, `schema` (Pydantic → structured output enforced by the SDK, `result.parsed` returns the instance; `result.parsed is None` on parse failure), `provider`, `model`, `max_turns` (150), `tools` (Claude Code tool-name allowlist), `permission_mode` (string or None; from `BuildConfig.permission_mode`), `cwd` (repo or worktree — this is the agent-isolation mechanism), `env` (injected by the credentials wrapper, `app.py:83-93`).
 
 **Runtime selection** (`runtime/providers.py:5-37`, `execution/schemas.py:532-664`):
-- Canonical runtimes: `("claude_code", "open_code", "codex")`; aliases normalized (`claude`, `claude-code` → `claude_code`; `opencode` → `open_code`).
-- `runtime_to_harness_adapter`: `claude_code→"claude-code"`, `open_code→"opencode"`, `codex→"codex"` (the string passed as `provider=` to `router.harness`). `runtime_to_harness_provider` (schemas' `_runtime_to_provider`): `claude→claude`, `open_code→opencode` — used for `ai_provider` fields ("claude"|"opencode"|"codex").
+- Canonical Python runtimes: `("claude_code", "open_code", "codex", "command_code")`; aliases normalized (`claude`, `claude-code` → `claude_code`; `opencode` → `open_code`; `commandcode`, `command-code`, `cmd` → `command_code`). `command_code` is Python-node only; Go still supports the original three runtimes.
+- `runtime_to_harness_adapter`: `claude_code→"claude-code"`, `open_code→"opencode"`, `codex→"codex"`, `command_code→"command-code"` (Python node only; the string passed as `provider=` to `router.harness`). `runtime_to_harness_provider` (schemas' `_runtime_to_provider`, also used by fast builds): `claude_code→"claude"`, `open_code→"opencode"`, `codex→"codex"`, `command_code→"command_code"` — used for `ai_provider` fields. Fast builds delegate recognized runtimes to this shared mapper and retain `opencode` for unknown helper inputs.
 - `_default_runtime()` (schemas.py:584): env-driven — `SWE_DEFAULT_RUNTIME` wins; otherwise **OpenRouter-only environments** (`OPENROUTER_API_KEY` set, no `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN`, `_openrouter_only_env()` :567) auto-select `open_code`; else `claude_code`. Codex has `_codex_uses_chatgpt_auth()` (:532, `SWE_CODEX_AUTH_MODE`) and `_codex_default_model()` (:554).
 - `_default_model_from_env()` (:613): `SWE_DEFAULT_MODEL`; `_default_planning_model()` (:634) resolves planning default per runtime.
 
@@ -238,7 +238,7 @@ Speed-optimized single-pass build on node `swe-fast` (port 8004). Pipeline (`fas
 ### 8.1 `BuildConfig` (`execution/schemas.py:772-…`) — all fields/defaults
 
 ```
-runtime: Literal["claude_code","open_code","codex"] = _default_runtime()
+runtime: Literal["claude_code","open_code","codex","command_code"] = _default_runtime()  # command_code: Python node only
 models: dict[str,str] | None = None          # {"default": ..., "<role>": ...}
 max_review_iterations=2; max_plan_revision_iterations=2
 max_retries_per_issue=2; max_replans=2; enable_replanning=True
