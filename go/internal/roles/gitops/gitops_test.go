@@ -515,19 +515,47 @@ func TestNoteFormatting_GitInitStartTruncates(t *testing.T) {
 // Input defaults: absent model / ai_provider fall back to sonnet / claude-code
 // ---------------------------------------------------------------------------
 
-func TestRunRepoFinalize_DefaultModelAndProvider(t *testing.T) {
-	deps, app := newDeps(successHarness(`{"success":true,"summary":"clean"}`))
-	_, err := RunRepoFinalize(context.Background(), deps, map[string]any{"repo_path": "/repo"})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if app.lastOpts.Model != "sonnet" {
-		t.Errorf("Model = %q, want sonnet (default)", app.lastOpts.Model)
-	}
-	if app.lastOpts.Provider != "claude-code" {
-		t.Errorf("Provider = %q, want claude-code (adapter for default ai_provider=claude)", app.lastOpts.Provider)
-	}
-	if app.lastOpts.Cwd != "/repo" {
-		t.Errorf("Cwd = %q, want /repo", app.lastOpts.Cwd)
+func TestGitOperations_DefaultModelAndProvider(t *testing.T) {
+	for handlerName, handler := range Handlers() {
+		t.Run(handlerName, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, runtime, explicit, model, wantProvider, wantModel string
+				mixedKeys                                               bool
+			}{
+				{"default", "", "", "", "claude-code", "sonnet", false},
+				{"configured aforge", "aforge", "", "", "aforge", "openrouter/deepseek/deepseek-v4-flash-0731", false},
+				{"explicit aforge", "claude_code", "aforge", "", "aforge", "openrouter/deepseek/deepseek-v4-flash-0731", false},
+				{"explicit claude", "aforge", "claude", "", "claude-code", "sonnet", false},
+				{"mixed keys explicit claude", "", "claude", "", "claude-code", "sonnet", true},
+				{"explicit opencode", "aforge", "opencode", "", "opencode", "openrouter/deepseek/deepseek-v4-flash-0731", false},
+				{"explicit codex", "aforge", "codex", "", "codex", "gpt-5.3-codex", false},
+				{"caller model", "aforge", "claude", "caller-model", "claude-code", "caller-model", false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					for _, key := range []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL", "SWE_MODEL_LOW", "SWE_MODEL_MED", "SWE_MODEL_HIGH"} {
+						t.Setenv(key, "")
+					}
+					t.Setenv("SWE_DEFAULT_RUNTIME", tc.runtime)
+					t.Setenv("SWE_CODEX_AUTH_MODE", "api_key")
+					if tc.mixedKeys {
+						t.Setenv("OPENROUTER_API_KEY", "test-openrouter")
+						t.Setenv("ANTHROPIC_API_KEY", "test-anthropic")
+					}
+					deps, app := newDeps(successHarness(`{"success":true,"summary":"clean"}`))
+					_, err := handler(context.Background(), deps, map[string]any{
+						"repo_path": "/repo", "ai_provider": tc.explicit, "model": tc.model,
+					})
+					if err != nil {
+						t.Fatalf("handler error: %v", err)
+					}
+					if app.lastOpts.Model != tc.wantModel || app.lastOpts.Provider != tc.wantProvider {
+						t.Errorf("provider/model = %q/%q, want %q/%q", app.lastOpts.Provider, app.lastOpts.Model, tc.wantProvider, tc.wantModel)
+					}
+					if app.lastOpts.Cwd != "/repo" {
+						t.Errorf("Cwd = %q, want /repo", app.lastOpts.Cwd)
+					}
+				})
+			}
+		})
 	}
 }
