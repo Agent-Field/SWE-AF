@@ -10,6 +10,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - Run pinned Command Code 1.82.2 on official Node 22 in the Python image, with a build-time startup check.
 - Use official Node 22 in the Go image too, with a Claude Code startup check.
+- Restore the `nodejs` alias next to `node` in both images.
 - Route every fast-build stage to the selected Command Code runtime on the Python node.
 - Honor Command Code executable overrides and use the portable `command-code` executable by default.
 - Retry transient Command Code connection failures through the harness runner.
@@ -19,6 +20,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - Breaking V2 config migration: replaced layered model configuration (`preset`, grouped `models`, `model`, `*_model`, `ai_provider`) with `runtime + flat models` contract.
 - Public runtime values are now `claude_code` and `open_code`.
+- With official Node 22/npm, both images now read npm's global config from `/usr/local/etc/npmrc` instead of Debian npm's `/etc/npmrc`. Move existing customizations or set `NPM_CONFIG_GLOBALCONFIG=/etc/npmrc` to keep the old location; the global install prefix remains `/usr/local`.
 - Runtime/model selection is accepted only inside `config` for build/execute flows.
 
 ### Removed
