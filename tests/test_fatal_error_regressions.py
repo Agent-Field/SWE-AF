@@ -87,7 +87,7 @@ def test_cross_process_fatal_marker_survives(status, error_field, detail):
     with pytest.raises(FatalHarnessError, match="Claude unavailable"):
         unwrap_call_result({
             "status": status,
-            error_field: f"Remote reasoner failed: {remote_error}",
+            error_field: f" \n{remote_error}\n ",
         })
 
 

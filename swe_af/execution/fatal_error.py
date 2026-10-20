@@ -40,9 +40,6 @@ _FATAL_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         # default `-codex` model under ChatGPT-account auth (#82 Gap 3).
         r"not supported when using codex with a chatgpt account",
         r"requires a newer version of codex",
-        # Preserve the explicit signal when FatalHarnessError is serialized
-        # into a failed execution envelope by another process.
-        r"fatal api error \(non-retryable\):",
     )
 )
 
@@ -60,8 +57,9 @@ _CLAUDE_UNAVAILABLE_OUTPUT = re.compile(
     re.IGNORECASE,
 )
 
-# Untyped errors and raw completions can contain quoted model output. Accept
-# only a complete known reply there. CLI 2.1.9's hXH formats reset times as
+# Raw completions can contain quoted model output. Accept only a complete
+# known CLI reply there; generic error diagnoses keep the existing classifier.
+# CLI 2.1.9's hXH formats reset times as
 # "9:50pm (UTC)" or "Oct 23, 2027, 3pm (America/Toronto)" (year optional).
 _CLAUDE_UNAVAILABLE_REPLY = re.compile(
     r"(?:"
@@ -74,7 +72,8 @@ _CLAUDE_UNAVAILABLE_REPLY = re.compile(
     r"invalid api key · (?:please run /login|fix external api key)|"
     r"oauth token revoked · please run /login|"
     r"your account does not have access to claude code\. please run /login\.|"
-    r"api error: (?:401|403)(?: \{[^\r\n]*\})?(?: · please run /login)?"
+    r"api error: (?:401|403) (?:status code \(no body\)|"
+    r"oauth token has expired|\{[^\r\n]*\}) · please run /login"
     r")",
     re.IGNORECASE,
 )
@@ -211,10 +210,7 @@ def is_fatal_error(error_message: str) -> bool:
     """Return True if *error_message* matches a known fatal API error pattern."""
     if not error_message:
         return False
-    return (
-        any(p.search(error_message) for p in _FATAL_PATTERNS)
-        or _CLAUDE_UNAVAILABLE_REPLY.fullmatch(error_message.strip()) is not None
-    )
+    return any(p.search(error_message) for p in _FATAL_PATTERNS)
 
 
 def is_timeout_error(error_message: str) -> bool:

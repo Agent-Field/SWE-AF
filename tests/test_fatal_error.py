@@ -59,10 +59,6 @@ class TestIsFatalError:
             # Codex model/auth mismatches (#82 Gap 3) — non-retryable.
             "The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.",
             "The 'gpt-5.5' model requires a newer version of Codex. Please upgrade.",
-            # Claude subscription caps and expired logins — every call fails alike.
-            "You've hit your session limit · resets 9:50pm (UTC)",
-            "Claude AI usage limit reached",
-            "Failed to authenticate: OAuth session expired and could not be refreshed",
         ],
     )
     def test_fatal_patterns_detected(self, message: str) -> None:
@@ -278,9 +274,9 @@ class TestClaudeProviderReplies:
         "You've hit your weekly limit · resets Oct 23, 3pm (America/Toronto)",
         "You've hit your weekly limit · resets Jan 1, 2027, 9:50pm (Etc/GMT+5)",
     ])
-    def test_complete_error_message_reply_is_fatal(self, reply):
+    def test_complete_raw_reply_is_fatal(self, reply):
         with pytest.raises(FatalHarnessError):
-            check_fatal_harness_error(FakeResult(is_error=True, error_message=reply))
+            check_fatal_harness_error(FakeResult(is_error=True, result=reply))
 
     @pytest.mark.parametrize("form", ["object", "harness", "serialized", "wire", "parsed_wire"])
     @pytest.mark.parametrize("reply", CLAUDE_CAP_REPLIES)
