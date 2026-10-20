@@ -43,6 +43,80 @@ _FATAL_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
+# claude-agent-sdk 0.1.20 bundles CLI 2.1.9. Its BL9/_FH format cap
+# replies with an optional reset suffix; generic 429s remain recoverable.
+# Prefix matching is safe only with the synthetic-assistant provenance below.
+_CLAUDE_UNAVAILABLE_OUTPUT = re.compile(
+    r"^\s*(you've hit your (?:(?:session|weekly|opus|sonnet|usage) )?limit\b|"
+    r"claude ai usage limit reached\b|you're out of extra usage\b|"
+    r"failed to authenticate: oauth\b|"
+    r"invalid api key · (?:please run /login|fix external api key)|"
+    r"oauth token revoked · please run /login|"
+    r"your account does not have access to claude code\. please run /login\.|"
+    r"api error: (?:401|403)\b)",
+    re.IGNORECASE,
+)
+
+# Raw completions can contain quoted model output. Accept only a complete
+# known CLI reply there; generic error diagnoses keep the existing classifier.
+# CLI 2.1.9's hXH formats reset times as
+# "9:50pm (UTC)" or "Oct 23, 2027, 3pm (America/Toronto)" (year optional).
+_CLAUDE_UNAVAILABLE_REPLY = re.compile(
+    r"(?:"
+    r"(?:you've hit your (?:(?:session|weekly|opus|sonnet|usage) )?limit|"
+    r"claude ai usage limit reached|you're out of extra usage)"
+    r"(?: · resets (?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"\d{1,2}(?:, \d{4})?, )?"
+    r"(?:[1-9]|1[0-2])(?::[0-5]\d)?[ap]m \([\w/+.:\-]+\)|\. try again later\.)?|"
+    r"failed to authenticate: oauth session expired and could not be refreshed|"
+    r"invalid api key · (?:please run /login|fix external api key)|"
+    r"oauth token revoked · please run /login|"
+    r"your account does not have access to claude code\. please run /login\.|"
+    r"api error: (?:401|403) (?:status code \(no body\)|"
+    r"oauth token has expired|\{[^\r\n]*\}) · please run /login"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _claude_unavailable_reply(message) -> str:
+    """Read only synthetic assistant text, never serialized conversation data."""
+    if isinstance(message, dict):
+        # CLI stream JSON nests the assistant payload under "message".
+        # AgentField instead copies the SDK message's __dict__ (no type tag).
+        if message.get("type", "assistant") != "assistant":
+            return ""
+        body = message.get("message", message)
+        if not isinstance(body, dict):
+            return ""
+        model = body.get("model")
+        content = body.get("content")
+        error = message.get("error") or body.get("error")
+    else:
+        model = getattr(message, "model", None)
+        content = getattr(message, "content", None)
+        error = getattr(message, "error", None)
+    # CLI AG/HQD marks provider failures with model="<synthetic>". Its Od9
+    # stream serializer puts error at the top level, but the pinned SDK parser
+    # reads message.error, so AssistantMessage.error can be None. The model
+    # marker survives both that parser and AgentField's shallow conversion.
+    if model != "<synthetic>" or not isinstance(content, list):
+        return ""
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type", "text") != "text":
+                continue
+            text = block.get("text")
+        else:
+            text = getattr(block, "text", None)
+        if isinstance(text, str) and (
+            error in ("authentication_failed", "billing_error")
+            or _CLAUDE_UNAVAILABLE_OUTPUT.search(text)
+        ):
+            return text.strip()
+    return ""
+
+
 # Patterns emitted when a harness subprocess is killed by its overall or idle
 # timeout. These are only consulted for results with no parsed value and no raw
 # output, where a timeout signal cannot be confused with useful model output.
@@ -169,6 +243,20 @@ def check_fatal_harness_error(result) -> None:
     msg = getattr(result, "error_message", "") or ""
     if is_fatal_error(msg):
         raise FatalHarnessError(msg)
+    # Schema failures can have no raw completion; inspect provider provenance
+    # in the session instead. User/tool text and ordinary assistant prose can
+    # quote these replies verbatim and must remain eligible for schema retries.
+    messages = getattr(result, "messages", None) or []
+    for message in reversed(messages):
+        reply = _claude_unavailable_reply(message)
+        if reply:
+            raise FatalHarnessError(f"Claude unavailable: {reply[:200]}")
+    # Older harnesses expose only raw text. When messages are available, their
+    # provenance takes precedence over the untyped completion string.
+    if not messages:
+        output = _harness_output_text(result)
+        if _CLAUDE_UNAVAILABLE_REPLY.fullmatch(output.strip()):
+            raise FatalHarnessError(f"Claude unavailable: {output.strip()[:200]}")
 
 
 # The SDK classifies terminal harness failures on ``HarnessResult.failure_type``

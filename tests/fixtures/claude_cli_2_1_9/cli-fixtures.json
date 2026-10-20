@@ -1,0 +1,178 @@
+[
+  {
+    "label": "session-none",
+    "reply": "You've hit your session limit",
+    "kind": "cap"
+  },
+  {
+    "label": "session-soon",
+    "reply": "You've hit your session limit · resets 4:16pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "session-later",
+    "reply": "You've hit your session limit · resets Oct 22, 4pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "session-nextYear",
+    "reply": "You've hit your session limit · resets Jan 1, 2028, 3:50pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "weekly-none",
+    "reply": "You've hit your weekly limit",
+    "kind": "cap"
+  },
+  {
+    "label": "weekly-soon",
+    "reply": "You've hit your weekly limit · resets 4:16pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "weekly-later",
+    "reply": "You've hit your weekly limit · resets Oct 22, 4pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "weekly-nextYear",
+    "reply": "You've hit your weekly limit · resets Jan 1, 2028, 3:50pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "opus-none",
+    "reply": "You've hit your Opus limit",
+    "kind": "cap"
+  },
+  {
+    "label": "opus-soon",
+    "reply": "You've hit your Opus limit · resets 4:16pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "opus-later",
+    "reply": "You've hit your Opus limit · resets Oct 22, 4pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "opus-nextYear",
+    "reply": "You've hit your Opus limit · resets Jan 1, 2028, 3:50pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "sonnet-none",
+    "reply": "You've hit your Sonnet limit",
+    "kind": "cap"
+  },
+  {
+    "label": "sonnet-soon",
+    "reply": "You've hit your Sonnet limit · resets 4:16pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "sonnet-later",
+    "reply": "You've hit your Sonnet limit · resets Oct 22, 4pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "sonnet-nextYear",
+    "reply": "You've hit your Sonnet limit · resets Jan 1, 2028, 3:50pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "usage-none",
+    "reply": "You've hit your usage limit",
+    "kind": "cap"
+  },
+  {
+    "label": "usage-soon",
+    "reply": "You've hit your usage limit · resets 4:16pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "usage-later",
+    "reply": "You've hit your usage limit · resets Oct 22, 4pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "usage-nextYear",
+    "reply": "You've hit your usage limit · resets Jan 1, 2028, 3:50pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "limit-none",
+    "reply": "You've hit your limit",
+    "kind": "cap"
+  },
+  {
+    "label": "limit-soon",
+    "reply": "You've hit your limit · resets 4:16pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "limit-later",
+    "reply": "You've hit your limit · resets Oct 22, 4pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "limit-nextYear",
+    "reply": "You've hit your limit · resets Jan 1, 2028, 3:50pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "extra-none",
+    "reply": "You're out of extra usage",
+    "kind": "cap"
+  },
+  {
+    "label": "extra-soon",
+    "reply": "You're out of extra usage · resets 4:16pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "extra-later",
+    "reply": "You're out of extra usage · resets Oct 22, 4pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "extra-nextYear",
+    "reply": "You're out of extra usage · resets Jan 1, 2028, 3:50pm (UTC)",
+    "kind": "cap"
+  },
+  {
+    "label": "401-no-body",
+    "reply": "API Error: 401 status code (no body) · Please run /login",
+    "error": "authentication_failed",
+    "kind": "auth"
+  },
+  {
+    "label": "401-plain-token-expired",
+    "reply": "API Error: 401 OAuth token has expired · Please run /login",
+    "error": "authentication_failed",
+    "kind": "auth"
+  },
+  {
+    "label": "401-standard-json",
+    "reply": "API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth token has expired\"}} · Please run /login",
+    "error": "authentication_failed",
+    "kind": "auth"
+  },
+  {
+    "label": "403-no-body",
+    "reply": "API Error: 403 status code (no body) · Please run /login",
+    "error": "authentication_failed",
+    "kind": "auth"
+  },
+  {
+    "label": "403-plain-token-expired",
+    "reply": "API Error: 403 OAuth token has expired · Please run /login",
+    "error": "authentication_failed",
+    "kind": "auth"
+  },
+  {
+    "label": "403-standard-json",
+    "reply": "API Error: 403 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth token has expired\"}} · Please run /login",
+    "error": "authentication_failed",
+    "kind": "auth"
+  }
+]

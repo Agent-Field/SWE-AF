@@ -53,7 +53,12 @@ def unwrap_call_result(result, label: str = "call"):
     status = str(result.get("status", "")).lower()
     if status in ("failed", "error", "cancelled", "timeout"):
         err = result.get("error_message") or result.get("error") or "unknown"
-        if is_fatal_error(str(err)):
+        # AgentField 0.1.142 serializes raised exceptions as str(exc) in its
+        # async status callback and carries that string into error_message.
+        # Only the outer exception marker is a propagation signal. A marker
+        # quoted by pytest, a tool, or a schema diagnosis is ordinary output.
+        remote_fatal = str(err).strip().startswith("Fatal API error (non-retryable):")
+        if is_fatal_error(str(err)) or remote_fatal:
             raise FatalHarnessError(str(err))
         raise RuntimeError(f"{label} failed (status={status}): {err}")
 
