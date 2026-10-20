@@ -61,7 +61,7 @@ Unset `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` in a deployment that poi
 | `SWE_DEFAULT_RUNTIME` | Default runtime: `claude_code`, `open_code`, or `codex` | auto — `open_code` when only `OPENROUTER_API_KEY` is set, else `claude_code` |
 | `SWE_DEFAULT_MODEL` | Default model ID for every role | runtime-specific |
 
-The image registers `MiniMax-M3` and `MiniMax-M2.7` under the direct OpenAI-compatible providers `minimax-global-openai` and `minimax-cn-openai`, and under the Anthropic-compatible OpenCode provider `minimax-anthropic`. Set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above; the provider configuration appends `/v1`. Use the regional OpenAI base URLs `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`; keep the external Anthropic base URL exactly as shown without appending `/v1`.
+The image registers `MiniMax-M3.1-Flash` first and `MiniMax-M3` second under the direct OpenAI-compatible providers `minimax-global-openai` and `minimax-cn-openai`, and under the Anthropic-compatible OpenCode provider `minimax-anthropic`. Set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above; the provider configuration appends `/v1`. Use the regional OpenAI base URLs `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`; keep the external Anthropic base URL exactly as shown without appending `/v1`.
 
 `ANTHROPIC_BASE_URL` is process-wide, so one deployment cannot route Claude and MiniMax Anthropic-compatible traffic to different endpoints.
 
