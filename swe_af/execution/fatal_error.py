@@ -52,18 +52,58 @@ _FATAL_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
-# Claude CLI's synthetic replies when a subscription cap is hit; checked
-# against the raw completion text (anchored to the reply's start).
-_USAGE_LIMIT_OUTPUT = re.compile(
-    r"^\s*(you've hit your (\w+ )?limit|claude ai usage limit reached|"
-    r"you're out of extra usage|failed to authenticate: oauth)",
+# claude-agent-sdk 0.1.20 bundles CLI 2.1.9. Its BL9/_FH format cap
+# replies with an optional reset suffix; generic 429s remain recoverable.
+# Keep the older raw-only usage/auth wording for harness compatibility.
+_CLAUDE_UNAVAILABLE_OUTPUT = re.compile(
+    r"^\s*(you've hit your (?:(?:session|weekly|opus|sonnet|usage) )?limit\b|"
+    r"claude ai usage limit reached\b|you're out of extra usage\b|"
+    r"failed to authenticate: oauth\b|"
+    r"invalid api key · (?:please run /login|fix external api key)|"
+    r"oauth token revoked · please run /login|"
+    r"your account does not have access to claude code\. please run /login\.|"
+    r"api error: (?:401|403)\b)",
     re.IGNORECASE,
 )
-_USAGE_LIMIT_MESSAGE = re.compile(
-    r"(you've hit your (\w+ )?limit · resets|"
-    r"failed to authenticate: oauth)[^'\"\]]{0,60}",
-    re.IGNORECASE,
-)
+
+
+def _claude_unavailable_reply(message) -> str:
+    """Read only synthetic assistant text, never serialized conversation data."""
+    if isinstance(message, dict):
+        # CLI stream JSON nests the assistant payload under "message".
+        # AgentField instead copies the SDK message's __dict__ (no type tag).
+        if message.get("type", "assistant") != "assistant":
+            return ""
+        body = message.get("message", message)
+        if not isinstance(body, dict):
+            return ""
+        model = body.get("model")
+        content = body.get("content")
+        error = message.get("error") or body.get("error")
+    else:
+        model = getattr(message, "model", None)
+        content = getattr(message, "content", None)
+        error = getattr(message, "error", None)
+    # CLI AG/HQD marks provider failures with model="<synthetic>". Its Od9
+    # stream serializer puts error at the top level, but the pinned SDK parser
+    # reads message.error, so AssistantMessage.error can be None. The model
+    # marker survives both that parser and AgentField's shallow conversion.
+    if model != "<synthetic>" or not isinstance(content, list):
+        return ""
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type", "text") != "text":
+                continue
+            text = block.get("text")
+        else:
+            text = getattr(block, "text", None)
+        if isinstance(text, str) and (
+            error in ("authentication_failed", "billing_error")
+            or _CLAUDE_UNAVAILABLE_OUTPUT.search(text)
+        ):
+            return text.strip()
+    return ""
+
 
 # Patterns emitted when a harness subprocess is killed by its overall or idle
 # timeout. These are only consulted for results with no parsed value and no raw
@@ -191,20 +231,20 @@ def check_fatal_harness_error(result) -> None:
     msg = getattr(result, "error_message", "") or ""
     if is_fatal_error(msg):
         raise FatalHarnessError(msg)
-    # A Claude subscription cap reaches us only as the CLI's synthetic reply
-    # (e.g. "You've hit your session limit · resets 9:50pm (UTC)") while the
-    # error message just says the output file was never written. Only the
-    # limit patterns are applied to raw output, so model prose can't trip it.
-    output = _harness_output_text(result)
-    if _USAGE_LIMIT_OUTPUT.search(output):
-        raise FatalHarnessError(f"Claude unavailable: {output.strip()[:200]}")
-    # Planning stages can return no raw text at all; the synthetic reply then
-    # survives only in the session messages. Match the CLI's exact phrasing
-    # (including "· resets") so quoted prose elsewhere can't trip it.
-    for message in reversed(getattr(result, "messages", None) or []):
-        found = _USAGE_LIMIT_MESSAGE.search(str(message))
-        if found:
-            raise FatalHarnessError(f"Claude unavailable: {found.group(0)}")
+    # Schema failures can have no raw completion; inspect provider provenance
+    # in the session instead. User/tool text and ordinary assistant prose can
+    # quote these replies verbatim and must remain eligible for schema retries.
+    messages = getattr(result, "messages", None) or []
+    for message in reversed(messages):
+        reply = _claude_unavailable_reply(message)
+        if reply:
+            raise FatalHarnessError(f"Claude unavailable: {reply[:200]}")
+    # Older harnesses expose only raw text. When messages are available, their
+    # provenance takes precedence over the untyped completion string.
+    if not messages:
+        output = _harness_output_text(result)
+        if _CLAUDE_UNAVAILABLE_OUTPUT.search(output):
+            raise FatalHarnessError(f"Claude unavailable: {output.strip()[:200]}")
 
 
 # The SDK classifies terminal harness failures on ``HarnessResult.failure_type``
