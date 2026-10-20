@@ -23,6 +23,7 @@ from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.schemas import _workspace_root
 from swe_af.fast import fast_router
 from swe_af.fast.schemas import FastBuildConfig, FastBuildResult, fast_resolve_models
+from swe_af.runtime.providers import runtime_to_harness_provider
 from swe_af.surface import TAG_ENTRYPOINT
 
 NODE_ID = os.getenv("NODE_ID", "swe-fast")
@@ -57,11 +58,10 @@ def _repo_name_from_url(url: str) -> str:
 
 def _runtime_to_provider(runtime: str) -> str:
     """Map runtime string to ai_provider string, preserving legacy fast fallback."""
-    if runtime == "claude_code":
-        return "claude"
-    if runtime == "codex":
-        return "codex"
-    return "opencode"
+    try:
+        return runtime_to_harness_provider(runtime)
+    except ValueError:
+        return "opencode"
 
 
 _CREDENTIAL_URL_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")

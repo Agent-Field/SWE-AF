@@ -10,6 +10,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - Run pinned Command Code 1.82.2 on official Node 22 in the Python image, with a build-time startup check.
 - Use official Node 22 in the Go image too, with a Claude Code startup check.
+- Route every fast-build stage to the selected Command Code runtime on the Python node.
 - Honor Command Code executable overrides and use the portable `command-code` executable by default.
 - Retry transient Command Code connection failures through the harness runner.
 - Share host Command Code login credentials only through opt-in, read-only auth file mounts; keep configuration and sessions in the container.
