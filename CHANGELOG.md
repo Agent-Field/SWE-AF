@@ -19,7 +19,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Changed
 
 - Breaking V2 config migration: replaced layered model configuration (`preset`, grouped `models`, `model`, `*_model`, `ai_provider`) with `runtime + flat models` contract.
-- Public runtime values are now `claude_code` and `open_code`.
+- Public runtime values are `claude_code`, `open_code`, `codex`, and `command_code` (Python node only).
 - With official Node 22/npm, both images now read npm's global config from `/usr/local/etc/npmrc` instead of Debian npm's `/etc/npmrc`. Move existing customizations or set `NPM_CONFIG_GLOBALCONFIG=/etc/npmrc` to keep the old location; the global install prefix remains `/usr/local`.
 - Runtime/model selection is accepted only inside `config` for build/execute flows.
 

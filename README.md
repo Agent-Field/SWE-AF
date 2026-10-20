@@ -204,7 +204,7 @@ Most agent frameworks wrap a single coder loop. SWE-AF is a coordinated engineer
 
 </details>
 
-**Claude, open-source, and Codex models supported**: Run builds with any runtime and tune models per role in one flat config map.
+**Claude, OpenCode, Codex, and Command Code runtimes supported**: Run builds with any runtime and tune models per role in one flat config map.
 - `runtime: "claude_code"` maps to Claude backend.
 - `runtime: "open_code"` maps to OpenCode backend (OpenRouter/OpenAI/Google/Anthropic model IDs).
 - `runtime: "codex"` maps to the OpenAI Codex CLI backend.
@@ -861,7 +861,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
-| `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"`, `"open_code"`, or `"codex"`. The default also honors the `SWE_DEFAULT_RUNTIME` env var when no `runtime` is passed in `config` — set it on the deployment so callers don't need to plumb a config through. |
+| `runtime`                 | `"claude_code"` | Model runtime: `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python node only). The default also honors the `SWE_DEFAULT_RUNTIME` env var when no `runtime` is passed in `config` — set it on the deployment so callers don't need to plumb a config through. |
 | `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |

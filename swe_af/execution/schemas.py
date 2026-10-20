@@ -831,6 +831,7 @@ def _default_planning_model(runtime: str | None = None) -> str:
              - ``open_code``   → the OpenRouter auto default (OpenRouter-only
                                  env) or the ``open_code`` base default
              - ``claude_code`` → the Claude ``sonnet`` alias (historical default)
+             - ``command_code`` → blank; use the CLI default (Python node only)
 
     Env / explicit values (layers 1–2) still win verbatim — the deployer owns
     them — so only the auto default (layer 3) is made runtime-aware.
