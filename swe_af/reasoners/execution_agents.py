@@ -1256,6 +1256,13 @@ async def run_qa_synthesizer(
     # runtime credentials (e.g. a Claude subscription login) instead of a direct
     # provider API call that needs its own key.
     provider = runtime_to_harness_adapter(ai_provider)
+    # Existing per-role overrides may use LiteLLM's provider-qualified IDs.
+    # Native harnesses need the model name without that routing prefix;
+    # OpenCode still needs its provider/model form.
+    if provider == "claude-code":
+        model = model.removeprefix("anthropic/")
+    elif provider == "codex":
+        model = model.removeprefix("openai/")
 
     try:
         result = await router.harness(
