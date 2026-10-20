@@ -444,6 +444,13 @@ Runtime defaults:
 | `open_code` | `openrouter/deepseek/deepseek-v4-flash-0731` | none |
 | `codex` | `gpt-5.3-codex` | none |
 
+The QA synthesizer uses the same runtime harness and credentials as the coding
+and review roles. Existing `models.qa_synthesizer` overrides using LiteLLM's
+`anthropic/<model>` or `openai/<model>` IDs remain supported: the synthesizer
+removes the matching provider prefix for `claude_code` or `codex`, respectively.
+OpenCode keeps its provider-qualified model IDs. No separate direct-LLM API key
+is required for the Python synthesizer.
+
 The `open_code` default applies both when the runtime is auto-selected (only
 `OPENROUTER_API_KEY` present — no `ANTHROPIC_API_KEY`, no
 `SWE_DEFAULT_RUNTIME`) and when `SWE_DEFAULT_RUNTIME=open_code` is set

@@ -9,15 +9,15 @@ ROOT = Path(__file__).resolve().parent.parent
 OPENCODE_CONFIG = ROOT / "opencode.json"
 DOCKERFILES = (ROOT / "Dockerfile", ROOT / "go" / "Dockerfile")
 
-MODEL_IDS = {"MiniMax-M3", "MiniMax-M2.7"}
+MODEL_IDS = ["MiniMax-M3.1-Flash", "MiniMax-M3"]
 OPENAI_PROVIDERS = {
     "minimax-global-openai": "https://api.minimax.io/v1",
     "minimax-cn-openai": "https://api.minimaxi.com/v1",
 }
 ANTHROPIC_PROVIDER = "minimax-anthropic"
-MODEL_LIMITS = {
-    "MiniMax-M3": {"context": 1000000, "output": 512000},
-    "MiniMax-M2.7": {"context": 204800, "output": 196608},
+MODEL_COSTS = {
+    "MiniMax-M3.1-Flash": {"input": 0.15, "output": 0.6, "cache_read": 0.015},
+    "MiniMax-M3": {"input": 0.3, "output": 1.2, "cache_read": 0.06},
 }
 
 
@@ -46,7 +46,7 @@ def test_minimax_openai_provider_registry(
         "apiKey": "{env:MINIMAX_API_KEY}",
         "baseURL": base_url,
     }
-    assert set(provider["models"]) == MODEL_IDS
+    assert list(provider["models"]) == MODEL_IDS
 
 
 def test_minimax_anthropic_provider_registry(
@@ -62,7 +62,7 @@ def test_minimax_anthropic_provider_registry(
         "apiKey": "{env:MINIMAX_API_KEY}",
         "baseURL": "{env:ANTHROPIC_BASE_URL}/v1",
     }
-    assert set(provider["models"]) == MODEL_IDS
+    assert list(provider["models"]) == MODEL_IDS
 
 
 def test_minimax_model_metadata_matches_target_config(
@@ -73,29 +73,64 @@ def test_minimax_model_metadata_matches_target_config(
 
     for provider_id in (*OPENAI_PROVIDERS, ANTHROPIC_PROVIDER):
         models = providers[provider_id]["models"]
-        assert {
-            model_id: models[model_id]["limit"] for model_id in MODEL_IDS
-        } == MODEL_LIMITS
-        assert models["MiniMax-M3"]["cost"] == {
-            "input": 0.3,
-            "output": 1.2,
-            "cache_read": 0.06,
-        }
-        assert models["MiniMax-M3"]["modalities"]["input"] == [
-            "text",
-            "image",
-            "video",
-        ]
-        assert models["MiniMax-M3"]["reasoning"] is True
+        for model_id in MODEL_IDS:
+            metadata = {
+                key: value
+                for key, value in models[model_id].items()
+                if key not in {"options", "variants"}
+            }
+            assert metadata == {
+                "id": model_id,
+                "name": model_id,
+                "attachment": True,
+                "reasoning": True,
+                "limit": {"context": 1000000, "output": 524288},
+                "cost": MODEL_COSTS[model_id],
+                "modalities": {
+                    "input": ["text", "image", "video"],
+                    "output": ["text"],
+                },
+            }
 
-        assert models["MiniMax-M2.7"]["cost"] == {
-            "input": 0.3,
-            "output": 1.2,
-            "cache_read": 0.06,
-            "cache_write": 0.375,
-        }
-        assert models["MiniMax-M2.7"]["modalities"]["input"] == ["text"]
-        assert models["MiniMax-M2.7"]["reasoning"] is True
+
+@pytest.mark.parametrize("provider_id", (*OPENAI_PROVIDERS, ANTHROPIC_PROVIDER))
+def test_flash_variants_cannot_disable_thinking(
+    opencode_config: dict[str, object], provider_id: str
+) -> None:
+    models = opencode_config["provider"][provider_id]["models"]
+    flash = models["MiniMax-M3.1-Flash"]
+    effort_key = "effort" if provider_id == ANTHROPIC_PROVIDER else "reasoningEffort"
+    assert flash["options"] == {
+        "thinking": {"type": "adaptive"},
+        effort_key: "max",
+    }
+    # OpenCode merges generated M3 variants before removing disabled entries.
+    assert flash["variants"]["none"] == {"disabled": True}
+    assert flash["variants"]["thinking"] == {"disabled": True}
+    active = {
+        name: options
+        for name, options in flash["variants"].items()
+        if not options.get("disabled")
+    }
+    assert list(active) == ["low", "medium", "high", "xhigh", "max"]
+    for effort, options in active.items():
+        assert options == {"thinking": {"type": "adaptive"}, effort_key: effort}
+    # Preserve M3's runtime defaults and adaptive/disabled toggle, without effort.
+    assert "options" not in models["MiniMax-M3"]
+    assert "variants" not in models["MiniMax-M3"]
+
+
+def test_gateway_catalog_removes_old_minimax_text_without_fabricating_routes(
+    opencode_config: dict[str, object],
+) -> None:
+    providers = opencode_config["provider"]
+    minimax_routes = [
+        model_id
+        for model_id in providers["infron"]["models"]
+        if model_id.startswith("minimax/")
+    ]
+    assert minimax_routes == ["minimax/minimax-m3"]
+    assert "models" not in providers["openrouter"]
 
 
 def test_minimax_anthropic_endpoints_and_model_ids_are_documented() -> None:
@@ -104,22 +139,36 @@ def test_minimax_anthropic_endpoints_and_model_ids_are_documented() -> None:
     for value in (
         "https://api.minimax.io/anthropic",
         "https://api.minimaxi.com/anthropic",
+        "minimax-anthropic/MiniMax-M3.1-Flash",
         "minimax-anthropic/MiniMax-M3",
-        "minimax-anthropic/MiniMax-M2.7",
         "claude_code",
         "1,000,000",
-        "204,800",
+        "524,288",
         "adaptive or disabled",
-        "always on",
-        "$0.30 / $1.20 / $0.06 / not charged",
-        "$0.30 / $1.20 / $0.06 / $0.375",
+        "always adaptive",
+        "$0.15 / $0.60 / $0.015",
+        "$0.30 / $1.20 / $0.06",
         "over 512K input tokens are billed at $0.60 / $2.40 / $0.12",
+        "Priority pricing is 1.5× Standard",
+        "Cache-write pricing is unspecified and omitted",
     ):
         assert value in docs
 
-    assert "minimax/MiniMax-M3" not in docs
-    assert "minimax/MiniMax-M2.7" not in docs
-    assert "minimax-cn/MiniMax-M3" not in docs
-    assert "minimax-cn/MiniMax-M2.7" not in docs
+    for model_id in MODEL_IDS:
+        assert f"minimax/{model_id}" not in docs
+        assert f"minimax-cn/{model_id}" not in docs
+    assert "MiniMax-M2.7" not in docs
     assert "https://api.minimax.io/anthropic/v1" not in docs
     assert "https://api.minimaxi.com/anthropic/v1" not in docs
+
+
+def test_minimax_examples_select_flash_without_replacing_harness_overrides(
+    opencode_config: dict[str, object],
+) -> None:
+    assert opencode_config["model"] == "{env:HARNESS_MODEL}"
+    assert opencode_config["small_model"] == "{env:HARNESS_MODEL}"
+    env_example = (ROOT / ".env.example").read_text()
+    for provider_id in (*OPENAI_PROVIDERS, ANTHROPIC_PROVIDER):
+        assert f"SWE_DEFAULT_MODEL={provider_id}/MiniMax-M3.1-Flash" in env_example
+    assert "HARNESS_MODEL=minimax-global-openai/MiniMax-M3.1-Flash" in env_example
+    assert "SWE_DEFAULT_MODEL=MiniMax-M3.1-Flash" in env_example
