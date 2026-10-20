@@ -1,4 +1,4 @@
-"""Command Code (`cmd`) harness provider for AgentField.
+"""Command Code (``command-code``) harness provider for AgentField.
 
 AgentField ships a fixed provider set (``claude-code``, ``codex``, ``opencode``,
 ``gemini``, …) resolved by :func:`agentfield.harness.providers._factory.build_provider`,
@@ -9,7 +9,7 @@ without touching AgentField: it adds the name to that set and wraps the factory
 
 The provider drives Command Code's headless mode:
 
-    cmd -p "<prompt>" --output-format json --yolo -m <model> -t ...
+    command-code -p "<prompt>" --output-format json --yolo -m <model> -t ...
 
 Model ids are never baked in here: a blank model omits ``-m``, so Command Code
 uses whatever model it is configured with — every model Command Code supports
@@ -144,7 +144,8 @@ def _resolve_bin(options: dict[str, object]) -> str:
         candidate = options.get(key)
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
-    return os.environ.get("SWE_COMMANDCODE_BIN", "").strip() or "cmd"
+    # The npm package also publishes `cmd`, which collides with Windows' shell.
+    return os.environ.get("SWE_COMMANDCODE_BIN", "").strip() or "command-code"
 
 
 def _permission_args(options: dict[str, object]) -> list[str]:
@@ -158,10 +159,10 @@ def _permission_args(options: dict[str, object]) -> list[str]:
 
 
 class CommandCodeProvider:
-    """Invokes the Command Code CLI (``cmd``) as a subprocess."""
+    """Invokes the Command Code CLI (``command-code``) as a subprocess."""
 
     def __init__(self, bin_path: str | None = None):
-        self._bin = bin_path or "cmd"
+        self._bin = bin_path or "command-code"
 
     def _build_command(
         self, prompt: str, options: dict[str, object], *, stdin_prompt: bool
@@ -268,7 +269,7 @@ class CommandCodeProvider:
                 is_error=True,
                 error_message=(
                     f"Command Code CLI not found at '{self._bin}'. "
-                    "Install it with: npm install -g command-code"
+                    "Install it with Node 22+: npm install -g command-code@1.82.2"
                 ),
                 failure_type=FailureType.CRASH,
             )
@@ -377,7 +378,11 @@ def apply_commandcode_harness_patch() -> None:
 
     def build_provider(config: object) -> object:
         if getattr(config, "provider", None) == "command-code":
-            return CommandCodeProvider()
+            bin_options = {
+                key: getattr(config, key, None)
+                for key in ("commandcode_bin", "bin_path")
+            }
+            return CommandCodeProvider(bin_path=_resolve_bin(bin_options))
         return original_build_provider(config)
 
     # _runner does `from ..._factory import build_provider`, binding the name at

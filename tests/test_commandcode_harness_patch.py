@@ -69,7 +69,7 @@ def test_codex_patch_entrypoint_also_registers_command_code() -> None:
 
 def test_default_permission_grants_writes_and_shell() -> None:
     cmd = _provider()._build_command("do it", {}, stdin_prompt=False)
-    assert cmd[0] == "cmd"
+    assert cmd[0] == "command-code"
     assert cmd[1] == "-p"
     assert "do it" in cmd
     assert "--yolo" in cmd
@@ -225,3 +225,195 @@ def test_missing_binary_returns_crash(monkeypatch) -> None:
     assert raw.is_error is True
     assert raw.failure_type.value == "crash"
     assert "Command Code CLI not found" in raw.error_message
+
+
+@pytest.mark.parametrize(
+    "env_bin,overrides,expected",
+    [
+        (None, {}, "command-code"),
+        ("  ", {}, "command-code"),
+        (" /opt/Command Code/command-code ", {}, "/opt/Command Code/command-code"),
+        ("env-cli", {"bin_path": "/custom path/cli"}, "/custom path/cli"),
+        (
+            "env-cli",
+            {"commandcode_bin": " /specific path/cli ", "bin_path": "generic-cli"},
+            "/specific path/cli",
+        ),
+        (
+            "env-cli",
+            {"commandcode_bin": " ", "bin_path": " generic-cli "},
+            "generic-cli",
+        ),
+        ("env-cli", {"commandcode_bin": " ", "bin_path": " "}, "env-cli"),
+    ],
+)
+def test_public_runner_resolves_executable(
+    monkeypatch, tmp_path, env_bin, overrides, expected
+):
+    """Exercise the factory the SDK runner actually calls, without an LLM."""
+    from agentfield.harness import HarnessRunner
+    import agentfield.harness._cli as sdk_cli
+
+    monkeypatch.delenv("SWE_COMMANDCODE_BIN", raising=False)
+    if env_bin is not None:
+        monkeypatch.setenv("SWE_COMMANDCODE_BIN", env_bin)
+    calls = []
+
+    async def fake_run_cli(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return '{"type":"result","finalText":"OK"}', "", 0
+
+    monkeypatch.setattr(sdk_cli, "run_cli", fake_run_cli)
+    apply_commandcode_harness_patch()
+    result = asyncio.run(
+        HarnessRunner().run(
+            "prompt",
+            provider="command-code",
+            cwd=str(tmp_path),
+            max_retries=0,
+            **overrides,
+        )
+    )
+
+    assert not result.is_error
+    assert result.result == "OK"
+    assert len(calls) == 1
+    assert calls[0][0][0] == expected
+
+
+def test_public_runner_preserves_structured_output_and_process_options(
+    monkeypatch, tmp_path
+):
+    from agentfield.harness import HarnessRunner
+    from pydantic import BaseModel
+    import agentfield.harness._cli as sdk_cli
+
+    class Answer(BaseModel):
+        ok: bool
+
+    calls = []
+
+    async def fake_run_cli(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return (
+            '{"type":"result","finalText":"{\\"ok\\":true}",'
+            '"sessionId":"session-1","usage":{"inputTokens":7,"outputTokens":2}}',
+            "",
+            0,
+        )
+
+    monkeypatch.setattr(sdk_cli, "run_cli", fake_run_cli)
+    apply_commandcode_harness_patch()
+    result = asyncio.run(
+        HarnessRunner().run(
+            "prompt with $(shell metacharacters);",
+            provider="command-code",
+            schema=Answer,
+            commandcode_bin="/custom path/cli",
+            project_dir=str(tmp_path),
+            model="future/model#high",
+            system_prompt="system",
+            env={"TEST_TOKEN": "sentinel"},
+            timeout_seconds=15,
+            permission_mode="plan",
+            max_turns=4,
+            max_retries=0,
+        )
+    )
+
+    assert not result.is_error
+    assert result.parsed == Answer(ok=True)
+    assert result.input_tokens == 7
+    assert result.output_tokens == 2
+    assert result.session_id == "session-1"
+    cmd, options = calls[0]
+    assert cmd[0] == "/custom path/cli"
+    assert cmd[2].startswith("SYSTEM INSTRUCTIONS:\nsystem")
+    assert "prompt with $(shell metacharacters);" in cmd[2]
+    assert "--plan" in cmd
+    assert "--yolo" not in cmd
+    assert cmd[cmd.index("-m") + 1] == "future/model"
+    assert cmd[cmd.index("--effort") + 1] == "high"
+    assert options == {
+        "env": {"TEST_TOKEN": "sentinel"},
+        "cwd": str(tmp_path),
+        "timeout": 15.0,
+        "input_text": None,
+    }
+
+
+def test_public_runner_uses_stdin_on_windows(monkeypatch, tmp_path):
+    import os
+    from agentfield.harness import HarnessRunner
+    import agentfield.harness._cli as sdk_cli
+    import swe_af.runtime.commandcode_harness_patch as patch
+
+    calls = []
+
+    async def fake_run_cli(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return '{"type":"result","finalText":"OK"}', "", 0
+
+    monkeypatch.setattr(sdk_cli, "run_cli", fake_run_cli)
+    monkeypatch.setattr(patch, "os", SimpleNamespace(name="nt", environ=os.environ))
+    apply_commandcode_harness_patch()
+    result = asyncio.run(
+        HarnessRunner().run(
+            "long prompt " * 1000,
+            provider="command-code",
+            commandcode_bin="C:/Custom CLI/cli.cmd",
+            cwd=str(tmp_path),
+            max_retries=0,
+        )
+    )
+
+    assert not result.is_error
+    cmd, options = calls[0]
+    assert cmd[:3] == ["C:/Custom CLI/cli.cmd", "-p", "--output-format"]
+    assert options["input_text"] == "long prompt " * 1000
+
+
+
+
+
+
+def test_public_runner_launches_custom_executable_without_shell(monkeypatch, tmp_path):
+    """A real subprocess proves spaces and prompt metacharacters survive dispatch."""
+    import json
+    import os
+    import sys
+    from agentfield.harness import HarnessRunner
+
+    if os.name == "nt":
+        pytest.skip("POSIX executable fixture; Windows dispatch is covered separately")
+    executable = tmp_path / "custom cli"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "payload = {'prompt': sys.argv[2], 'cwd': os.getcwd(), "
+        "'env': os.environ.get('COMMANDCODE_TEST_VALUE')}\n"
+        "print(json.dumps({'type': 'result', 'finalText': json.dumps(payload)}))\n"
+    )
+    executable.chmod(0o700)
+    monkeypatch.setenv("SWE_COMMANDCODE_BIN", str(executable))
+    # An ignored override must fail, even if a real CLI is on the host PATH.
+    monkeypatch.setenv("PATH", str(tmp_path))
+    apply_commandcode_harness_patch()
+    prompt = "keep $(touch unexpected-file); `touch unexpected-file` literal"
+    result = asyncio.run(
+        HarnessRunner().run(
+            prompt,
+            provider="command-code",
+            cwd=str(tmp_path),
+            env={"COMMANDCODE_TEST_VALUE": "sentinel"},
+            max_retries=0,
+        )
+    )
+
+    assert not result.is_error, result.error_message
+    assert json.loads(result.result) == {
+        "prompt": prompt,
+        "cwd": str(tmp_path),
+        "env": "sentinel",
+    }
+    assert not (tmp_path / "unexpected-file").exists()
