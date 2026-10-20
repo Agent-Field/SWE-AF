@@ -51,7 +51,7 @@ user_environment:
       type: secret
       scope: global
     - name: SWE_DEFAULT_RUNTIME
-      description: Coding runtime for every role (aforge | claude_code | open_code | codex)
+      description: Coding runtime for every role (aforge | claude_code | open_code | codex); command_code is Python-only
     - name: AGENTFIELD_AFORGE_COMMAND
       description: AForge headless command
       default: exec

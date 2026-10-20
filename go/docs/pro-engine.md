@@ -91,10 +91,12 @@ The engine inherits `OPENROUTER_API_KEY` and the control-plane coordinates
 
 **OpenRouter-only deployments:** nothing to configure. The compose files leave
 `SWE_DEFAULT_RUNTIME` unset, so with an OpenRouter key as the only provider
-credential the node auto-selects the `open_code` runtime and defaults every
+credential the node auto-selects the `aforge` runtime and defaults every
 role — including the advisory and verification roles that run outside the
 engine — to `openrouter/deepseek/deepseek-v4-flash-0731`. Setting
-`SWE_DEFAULT_RUNTIME` explicitly is supported but unnecessary here.
+`SWE_DEFAULT_RUNTIME=open_code` retains OpenCode for those roles. The vendored
+coding engine and its model pools remain controlled by `SWE_PRO_*`; selecting
+a node runtime does not replace the engine.
 
 ## Control-plane inactivity sweep
 

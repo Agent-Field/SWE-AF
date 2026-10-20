@@ -172,6 +172,14 @@ loads `.env` (`env_file: .env`) and adds the per-service overrides. See
 [`.env.example`](../.env.example) at the repo root for the documented common
 set; the load-bearing ones:
 
+The Python node additionally supports `command_code`; the Go node has no
+Command Code provider and rejects that request runtime. Keep Go deployments on
+`aforge`, `claude_code`, `open_code`, or `codex`. With OpenRouter present and no
+explicit runtime, upgrading changes OpenCode (or Claude with mixed keys) to
+AForge, including the default model and billing provider. Set
+`SWE_DEFAULT_RUNTIME=open_code` or `SWE_DEFAULT_RUNTIME=claude_code` to retain
+the previous runtime; request runtime overrides take precedence.
+
 | Variable                                                  | Purpose                                              |
 |-----------------------------------------------------------|------------------------------------------------------|
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`           | Claude runtime (`claude_code`)                       |
@@ -196,7 +204,8 @@ Advanced knobs (HITL/approvals: `HAX_API_KEY`, `HAX_SDK_URL`, `HAX_SENDER_NAME`,
 flow: `SWE_AF_GIT_EMAIL`, `SWE_AF_GIT_NAME`; auth: `AGENTFIELD_API_KEY`) are
 read from the environment as well — grep `os.Getenv` under `internal/` for the
 authoritative set. The per-request build config JSON (`runtime`, `models`,
-budget/iteration knobs) is byte-identical to the Python node's — see the root
+budget/iteration knobs) follows the Python node's schema, except for the
+Python-only `command_code` runtime — see the root
 [README](../README.md) and `.env.example` for the schema and examples.
 
 ## Coding engine (beta)

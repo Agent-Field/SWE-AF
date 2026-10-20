@@ -20,14 +20,30 @@ Copy `.env.example` to `.env` and configure at least one authentication method:
 cp .env.example .env
 ```
 
-**Required — exactly one LLM provider key.** `.env.example` ships with all of
-them commented out; uncomment one. Note that any non-empty `ANTHROPIC_API_KEY`
-(including a leftover placeholder) forces the `claude_code` runtime, so leave
-it commented out unless you mean to use it.
+**Required — authentication for the selected runtime.** `.env.example` ships
+with provider keys commented out. Without an explicit runtime, a nonblank
+`OPENROUTER_API_KEY` selects `aforge`, even with Anthropic credentials present.
+On upgrade this changes existing OpenRouter deployments from OpenCode to
+AForge, and mixed OpenRouter/Anthropic deployments from Claude to AForge,
+including their default model and billing provider. Set
+`SWE_DEFAULT_RUNTIME=open_code` or `SWE_DEFAULT_RUNTIME=claude_code` to retain
+the previous runtime. Request `config.runtime` takes precedence over that setting.
+Explicit model settings still win; use a model supported by the chosen runtime.
+
+`resume_build` also resolves the runtime from its supplied config or the current
+environment; checkpoints do not freeze the original runtime. When resuming a
+pre-upgrade build, pass its previous `config.runtime` or set the deployment
+override before resuming. Existing explicit runtime configs remain valid.
+
+Railway uses this same Python Dockerfile (`railway.toml`) and the same selection
+rules. Set runtime/model overrides in service variables. For host/package
+installs, make the AForge executable available before accepting the new default,
+or retain the previous runtime explicitly.
 
 | Variable | Purpose |
 |---|---|
-| `OPENROUTER_API_KEY` | **Recommended** — OpenRouter key (200+ models). The only secret needed to get started: on its own it auto-selects the `open_code` runtime and defaults every role to `openrouter/deepseek/deepseek-v4-flash-0731` |
+| `OPENROUTER_API_KEY` | OpenRouter key. Auto-selects `aforge` when no runtime is specified, defaulting every role to `openrouter/deepseek/deepseek-v4-flash-0731`, even alongside an Anthropic key |
+| `INFRON_API_KEY` | Infron gateway key. Alone, auto-selects `open_code` on the main path; fast mode needs an explicit `open_code` runtime. In Docker set `HARNESS_MODEL` to an `infron/...` model too |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude models (`claude_code` runtime) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code subscription token (uses Pro/Max credits) |
 | `OPENAI_API_KEY` | OpenAI API key |
@@ -58,7 +74,7 @@ Unset `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` in a deployment that poi
 | `AGENTFIELD_SERVER` | Control plane URL | `http://control-plane:8080` (Docker) |
 | `NODE_ID` | Agent node identifier | `swe-planner` |
 | `PORT` | Agent listen port | `8003` |
-| `SWE_DEFAULT_RUNTIME` | Default runtime: `claude_code`, `open_code`, `codex`, or `command_code` (Python node only) | auto — `open_code` when only `OPENROUTER_API_KEY` is set, else `claude_code` |
+| `SWE_DEFAULT_RUNTIME` | Default runtime: `aforge`, `claude_code`, `open_code`, `codex`, or `command_code` (Python only, explicit opt-in) | auto — `aforge` with OpenRouter, main-path `open_code` with only Infron, else `claude_code`; request runtime wins |
 | `SWE_DEFAULT_MODEL` | Default model ID for every role | runtime-specific |
 
 The image registers `MiniMax-M3.1-Flash` first and `MiniMax-M3` second under the direct OpenAI-compatible providers `minimax-global-openai` and `minimax-cn-openai`, and under the Anthropic-compatible OpenCode provider `minimax-anthropic`. Set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above; the provider configuration appends `/v1`. Use the regional OpenAI base URLs `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`; keep the external Anthropic base URL exactly as shown without appending `/v1`.
@@ -69,8 +85,9 @@ The image registers `MiniMax-M3.1-Flash` first and `MiniMax-M3` second under the
 
 | Package | Minimum Version | Notes |
 |---|---|---|
-| `agentfield` | 0.1.67+ | Python SDK (includes opencode v1.4+ fix) |
-| `claude-agent-sdk` | 0.1.20+ | Claude runtime |
+| `agentfield` | 0.1.130+ | Python SDK with the AForge provider and environment/timeout support |
+| `claude-agent-sdk` | 0.1.20 (pinned) | Claude runtime |
+| AForge CLI | v0.1.0 | Included and checksum-verified in Docker; host/package installs need `aforge` on `PATH` or `AFORGE_BIN` |
 | opencode CLI | 1.4+ | Only if using `open_code` runtime (see Known Issues) |
 | Codex CLI | latest | Installed in the Docker image; required on host only to run `codex login` for ChatGPT subscription auth |
 
@@ -81,7 +98,7 @@ The image registers `MiniMax-M3.1-Flash` first and `MiniMax-M3` second under the
 ```bash
 git clone https://github.com/Agent-Field/SWE-AF
 cd SWE-AF
-cp .env.example .env   # uncomment exactly ONE provider key
+cp .env.example .env   # configure authentication and any runtime override
 docker compose up -d
 ```
 

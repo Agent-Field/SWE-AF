@@ -1,7 +1,9 @@
-// Package runtimex is a verbatim port of swe_af/runtime/providers.py: the
+// Package runtimex ports the Go-supported subset of swe_af/runtime/providers.py:
 // shared runtime/provider normalization and mapping utilities.
 //
-// Four canonical runtimes exist (RuntimeValues). Callers pass user-facing
+// Four canonical Go runtimes exist (RuntimeValues). Python additionally supports
+// command_code through a local SDK patch; that provider is unavailable in Go.
+// Callers pass user-facing
 // aliases ("claude", "claude-code", "opencode", "aforge-v2", ...) which
 // NormalizeRuntimeProvider folds to a canonical value. Two separate mappings
 // then translate a canonical runtime to the string the harness expects — and
@@ -15,8 +17,8 @@ import (
 	"strings"
 )
 
-// RuntimeValues is the tuple of canonical runtime values, ported verbatim from
-// Python's RUNTIME_VALUES = ("aforge", "claude_code", "open_code", "codex").
+// RuntimeValues is the tuple of canonical Go runtime values. Python's
+// RUNTIME_VALUES also includes the Python-only command_code runtime.
 // Order matters: it is joined verbatim into the "Valid runtimes: ..." error.
 var RuntimeValues = [...]string{"aforge", "claude_code", "open_code", "codex"}
 

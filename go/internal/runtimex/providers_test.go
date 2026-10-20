@@ -2,7 +2,8 @@ package runtimex
 
 import "testing"
 
-// Contract: RuntimeValues is exactly the Python RUNTIME_VALUES tuple, in order.
+// Contract: RuntimeValues is the Go-supported runtime tuple, in order.
+// command_code is Python-only and must not be advertised as a Go provider.
 func TestRuntimeValues(t *testing.T) {
 	want := [...]string{"aforge", "claude_code", "open_code", "codex"}
 	if RuntimeValues != want {

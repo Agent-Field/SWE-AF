@@ -8,6 +8,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- Keep Go git-role model defaults aligned with an explicit runtime, including when OpenRouter auto-selects AForge for the deployment.
 - Run pinned Command Code 1.82.2 on official Node 22 in the Python image, with a build-time startup check.
 - Use official Node 22 in the Go image too, with a Claude Code startup check.
 - Restore the `nodejs` alias next to `node` in both images.
@@ -19,7 +20,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Changed
 
 - Breaking V2 config migration: replaced layered model configuration (`preset`, grouped `models`, `model`, `*_model`, `ai_provider`) with `runtime + flat models` contract.
-- Public runtime values are `claude_code`, `open_code`, `codex`, and `command_code` (Python node only).
+- Public runtime values are `aforge`, `claude_code`, `open_code`, `codex`, and `command_code` (Python only, explicit opt-in).
+- With a nonblank OpenRouter key and no runtime override, Python and Go now default to AForge, including deployments with Anthropic credentials. This changes the harness, default model, and billing provider; set `SWE_DEFAULT_RUNTIME=open_code` or `SWE_DEFAULT_RUNTIME=claude_code` to retain the previous runtime. Request runtime overrides still win.
 - With official Node 22/npm, both images now read npm's global config from `/usr/local/etc/npmrc` instead of Debian npm's `/etc/npmrc`. Move existing customizations or set `NPM_CONFIG_GLOBALCONFIG=/etc/npmrc` to keep the old location; the global install prefix remains `/usr/local`.
 - Runtime/model selection is accepted only inside `config` for build/execute flows.
 

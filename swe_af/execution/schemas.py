@@ -827,6 +827,7 @@ def _default_planning_model(runtime: str | None = None) -> str:
         2. deployer env (``SWE_DEFAULT_MODEL`` → ``AI_MODEL`` →
            ``HARNESS_MODEL``, the latter only on ``open_code``)
         3. the runtime's own auto/base default:
+             - ``aforge``      → the OpenRouter DeepSeek default
              - ``codex``       → a codex-native model (never ``openrouter/…``)
              - ``open_code``   → the OpenRouter auto default (OpenRouter-only
                                  env) or the ``open_code`` base default
