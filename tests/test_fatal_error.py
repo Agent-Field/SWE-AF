@@ -271,6 +271,17 @@ def _claude_message(reply, *, error="rate_limit", form="harness", model="<synthe
 
 
 class TestClaudeProviderReplies:
+    @pytest.mark.parametrize("reply", CLAUDE_CAP_REPLIES + CLAUDE_AUTH_REPLIES + [
+        "Claude AI usage limit reached",
+        "Failed to authenticate: OAuth session expired and could not be refreshed",
+        "You've hit your usage limit. Try again later.",
+        "You've hit your weekly limit · resets Oct 23, 3pm (America/Toronto)",
+        "You've hit your weekly limit · resets Jan 1, 2027, 9:50pm (Etc/GMT+5)",
+    ])
+    def test_complete_error_message_reply_is_fatal(self, reply):
+        with pytest.raises(FatalHarnessError):
+            check_fatal_harness_error(FakeResult(is_error=True, error_message=reply))
+
     @pytest.mark.parametrize("form", ["object", "harness", "serialized", "wire", "parsed_wire"])
     @pytest.mark.parametrize("reply", CLAUDE_CAP_REPLIES)
     def test_messages_only_cap_is_fatal(self, reply, form):

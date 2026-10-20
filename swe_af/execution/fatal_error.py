@@ -34,27 +34,21 @@ _FATAL_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"account.{0,10}is disabled",
         r"unauthorized",
         r"quota.{0,20}exceeded",
-        # Claude subscription usage caps: retrying before the reset only burns
-        # the retry budget. Fail fast so the build can be resumed later.
-        r"usage limit reached",
-        r"hit your (\w+ )?limit",
-        r"out of extra usage",
-        # Expired/unrefreshable Claude subscription login: every call fails
-        # identically until someone re-authenticates.
-        r"failed to authenticate",
-        r"oauth session expired",
         # Codex model/auth mismatches: retrying with the same model + auth mode
         # fails identically. Treating these as fatal surfaces the real reason
         # (instead of a silent empty build that burns the retry cap) — e.g. the
         # default `-codex` model under ChatGPT-account auth (#82 Gap 3).
         r"not supported when using codex with a chatgpt account",
         r"requires a newer version of codex",
+        # Preserve the explicit signal when FatalHarnessError is serialized
+        # into a failed execution envelope by another process.
+        r"fatal api error \(non-retryable\):",
     )
 )
 
 # claude-agent-sdk 0.1.20 bundles CLI 2.1.9. Its BL9/_FH format cap
 # replies with an optional reset suffix; generic 429s remain recoverable.
-# Keep the older raw-only usage/auth wording for harness compatibility.
+# Prefix matching is safe only with the synthetic-assistant provenance below.
 _CLAUDE_UNAVAILABLE_OUTPUT = re.compile(
     r"^\s*(you've hit your (?:(?:session|weekly|opus|sonnet|usage) )?limit\b|"
     r"claude ai usage limit reached\b|you're out of extra usage\b|"
@@ -63,6 +57,25 @@ _CLAUDE_UNAVAILABLE_OUTPUT = re.compile(
     r"oauth token revoked · please run /login|"
     r"your account does not have access to claude code\. please run /login\.|"
     r"api error: (?:401|403)\b)",
+    re.IGNORECASE,
+)
+
+# Untyped errors and raw completions can contain quoted model output. Accept
+# only a complete known reply there. CLI 2.1.9's hXH formats reset times as
+# "9:50pm (UTC)" or "Oct 23, 2027, 3pm (America/Toronto)" (year optional).
+_CLAUDE_UNAVAILABLE_REPLY = re.compile(
+    r"(?:"
+    r"(?:you've hit your (?:(?:session|weekly|opus|sonnet|usage) )?limit|"
+    r"claude ai usage limit reached|you're out of extra usage)"
+    r"(?: · resets (?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"\d{1,2}(?:, \d{4})?, )?"
+    r"(?:[1-9]|1[0-2])(?::[0-5]\d)?[ap]m \([\w/+.:\-]+\)|\. try again later\.)?|"
+    r"failed to authenticate: oauth session expired and could not be refreshed|"
+    r"invalid api key · (?:please run /login|fix external api key)|"
+    r"oauth token revoked · please run /login|"
+    r"your account does not have access to claude code\. please run /login\.|"
+    r"api error: (?:401|403)(?: \{[^\r\n]*\})?(?: · please run /login)?"
+    r")",
     re.IGNORECASE,
 )
 
@@ -198,7 +211,10 @@ def is_fatal_error(error_message: str) -> bool:
     """Return True if *error_message* matches a known fatal API error pattern."""
     if not error_message:
         return False
-    return any(p.search(error_message) for p in _FATAL_PATTERNS)
+    return (
+        any(p.search(error_message) for p in _FATAL_PATTERNS)
+        or _CLAUDE_UNAVAILABLE_REPLY.fullmatch(error_message.strip()) is not None
+    )
 
 
 def is_timeout_error(error_message: str) -> bool:
@@ -243,7 +259,7 @@ def check_fatal_harness_error(result) -> None:
     # provenance takes precedence over the untyped completion string.
     if not messages:
         output = _harness_output_text(result)
-        if _CLAUDE_UNAVAILABLE_OUTPUT.search(output):
+        if _CLAUDE_UNAVAILABLE_REPLY.fullmatch(output.strip()):
             raise FatalHarnessError(f"Claude unavailable: {output.strip()[:200]}")
 
 
