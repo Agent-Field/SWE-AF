@@ -49,7 +49,7 @@ _EXIT_MESSAGES: dict[int, str] = {
     _EXIT_AUTH_ERROR: "Command Code authentication failed",
     _EXIT_PERMISSION_DENIED: "Command Code permission denied",
     _EXIT_RATE_LIMITED: "Command Code rate limit exceeded",
-    _EXIT_CONNECTION_ERROR: "Command Code connection error",
+    _EXIT_CONNECTION_ERROR: "Command Code connection error (temporarily unavailable)",
     _EXIT_SERVER_ERROR: "Command Code API server error (503)",
     _EXIT_MAX_TURNS_REACHED: "Command Code reached --max-turns before a final answer",
     _EXIT_NO_RESPONSE: "Command Code model produced no response",

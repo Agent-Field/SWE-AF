@@ -10,6 +10,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - Run pinned Command Code 1.82.2 on official Node 22 in the Python image, with a build-time startup check.
 - Honor Command Code executable overrides and use the portable `command-code` executable by default.
+- Retry transient Command Code connection failures through the harness runner.
 
 ### Changed
 

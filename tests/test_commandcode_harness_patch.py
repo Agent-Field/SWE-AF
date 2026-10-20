@@ -373,8 +373,65 @@ def test_public_runner_uses_stdin_on_windows(monkeypatch, tmp_path):
     assert options["input_text"] == "long prompt " * 1000
 
 
+@pytest.mark.parametrize("code", [5, 6, 7])
+def test_public_runner_retries_transient_exit_codes(monkeypatch, tmp_path, code):
+    from agentfield.harness import HarnessRunner
+    import agentfield.harness._cli as sdk_cli
+
+    calls = []
+
+    async def fake_run_cli(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return "", "", code
+        return '{"type":"result","finalText":"recovered"}', "", 0
+
+    monkeypatch.setattr(sdk_cli, "run_cli", fake_run_cli)
+    apply_commandcode_harness_patch()
+    result = asyncio.run(
+        HarnessRunner().run(
+            "prompt",
+            provider="command-code",
+            cwd=str(tmp_path),
+            max_retries=1,
+            initial_delay=0,
+            max_delay=0,
+        )
+    )
+
+    assert not result.is_error
+    assert result.result == "recovered"
+    assert len(calls) == 2
 
 
+@pytest.mark.parametrize("code", [3, 4, 10])
+def test_public_runner_does_not_retry_auth_permission_or_credit_errors(
+    monkeypatch, tmp_path, code
+):
+    from agentfield.harness import HarnessRunner
+    import agentfield.harness._cli as sdk_cli
+
+    calls = []
+
+    async def fake_run_cli(cmd, **kwargs):
+        calls.append(cmd)
+        return "", "", code
+
+    monkeypatch.setattr(sdk_cli, "run_cli", fake_run_cli)
+    apply_commandcode_harness_patch()
+    result = asyncio.run(
+        HarnessRunner().run(
+            "prompt",
+            provider="command-code",
+            cwd=str(tmp_path),
+            max_retries=1,
+            initial_delay=0,
+            max_delay=0,
+        )
+    )
+
+    assert result.is_error
+    assert len(calls) == 1
 
 
 def test_public_runner_launches_custom_executable_without_shell(monkeypatch, tmp_path):
