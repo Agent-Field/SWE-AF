@@ -128,10 +128,10 @@ def clean_model_env(monkeypatch):
         ),
         (
             "open_code",
-            {"qa_synthesizer": "minimax-global-openai/MiniMax-M3"},
+            {"qa_synthesizer": "minimax-global-openai/MiniMax-M3.1-Flash"},
             {},
             "opencode",
-            "minimax-global-openai/MiniMax-M3",
+            "minimax-global-openai/MiniMax-M3.1-Flash",
         ),
         ("codex", {"qa_synthesizer": "gpt-5.5"}, {}, "codex", "gpt-5.5"),
         ("claude_code", None, {"SWE_DEFAULT_MODEL": "sonnet"}, "claude-code", "sonnet"),
