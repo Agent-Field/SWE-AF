@@ -75,7 +75,7 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 
 | Key | Values | Description |
 |-----|--------|-------------|
-| `runtime` | `"claude_code"`, `"open_code"`, `"codex"` | AI backend to use |
+| `runtime` | `"claude_code"`, `"open_code"`, `"codex"`, `"command_code"` | AI backend to use; `command_code` is Python-node only |
 | `models.default` | model ID string | Default model for all agents |
 | `models.coder` | model ID string | Override for coder role |
 | `models.qa` | model ID string | Override for QA role |
@@ -153,6 +153,13 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 1. Codex CLI installed and in PATH.
 2. For ChatGPT subscription auth: run `codex login` on the host, set `SWE_CODEX_AUTH_MODE=chatgpt` or `auto`, and leave `OPENAI_API_KEY` unset for the agent process.
 3. For OpenAI API-platform billing: set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
+
+## Requirements for command_code Runtime (Python node only)
+
+1. Node 22+ and `npm install -g command-code@1.82.2`; the executable is `command-code`.
+2. Run `command-code login`, or configure dedicated BYOK credentials.
+3. Select `runtime: "command_code"`; omit `models` to use the CLI's configured default. The Go node does not support this runtime.
+4. For Docker login sharing, use the opt-in auth-file overlays described in [deployment notes](deployment.md).
 
 ## Monitoring
 

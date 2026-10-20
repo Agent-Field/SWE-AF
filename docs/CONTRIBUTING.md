@@ -6,7 +6,7 @@ Thanks for contributing to SWE-AF.
 
 - Python 3.12+
 - AgentField control plane (`af`)
-- Access to an AI runtime used by your run (`claude_code`, `open_code`, or `codex`)
+- Access to an AI runtime used by your run (`claude_code`, `open_code`, `codex`, or `command_code`; Command Code is Python-node only)
 
 ## Local setup
 
