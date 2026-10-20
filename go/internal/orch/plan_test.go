@@ -758,3 +758,23 @@ func keysOf(m map[string]any) []string {
 	}
 	return out
 }
+
+func TestPlanConfiguredAforgeModelDefault(t *testing.T) {
+	for _, key := range []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL", "SWE_MODEL_HIGH"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("SWE_DEFAULT_RUNTIME", "aforge")
+	deps, m := planApp(sprintResult(issue("my-issue", nil, []any{"thing.py"})))
+	if _, err := Plan(context.Background(), deps, map[string]any{
+		"goal": "test aforge", "repo_path": t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	calls := m.callsFor("run_product_manager")
+	if len(calls) != 1 {
+		t.Fatalf("PM calls = %d", len(calls))
+	}
+	if got := mapStr(calls[0].input, "model", ""); got != "openrouter/deepseek/deepseek-v4-flash-0731" {
+		t.Fatalf("configured AForge PM model = %q", got)
+	}
+}

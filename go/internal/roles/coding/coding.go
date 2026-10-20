@@ -413,7 +413,7 @@ func resolveRoleDefaults(aiProvider, model *string, role string) error {
 		*aiProvider = config.DefaultRuntime()
 	}
 	if *model == "" {
-		resolved, err := config.DefaultRoleModel(role)
+		resolved, err := config.DefaultRoleModel(role, *aiProvider)
 		if err != nil {
 			return err
 		}

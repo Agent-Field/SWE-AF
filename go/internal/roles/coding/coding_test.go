@@ -186,6 +186,25 @@ func TestRunCoderDirectCallRuntimeDefaults(t *testing.T) {
 	}
 }
 
+func TestRunCoderExplicitAforgeModelDefault(t *testing.T) {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "INFRON_API_KEY", "SWE_MODEL_MED", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("SWE_DEFAULT_RUNTIME", "claude_code")
+	mh := &mockHarness{fn: func(dest any) (*harness.Result, error) {
+		return &harness.Result{Parsed: dest}, nil
+	}}
+	if _, err := RunCoder(context.Background(), newDeps(mh, nil, &noteRecorder{}), map[string]any{
+		"issue": map[string]any{"name": "explicit"}, "worktree_path": "/wt",
+		"ai_provider": "aforge",
+	}); err != nil {
+		t.Fatalf("RunCoder: %v", err)
+	}
+	if mh.gotOpts.Provider != "aforge" || mh.gotOpts.Model != "openrouter/deepseek/deepseek-v4-flash-0731" {
+		t.Fatalf("explicit AForge = provider %q, model %q", mh.gotOpts.Provider, mh.gotOpts.Model)
+	}
+}
+
 func TestRunCoderExplicitRuntimeValuesUntouched(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	t.Setenv("ANTHROPIC_API_KEY", "")

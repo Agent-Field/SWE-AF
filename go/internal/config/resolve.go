@@ -302,36 +302,37 @@ func tierModelsFromEnv() map[string]string {
 	return tiers
 }
 
-// DefaultPlanningModel ports _default_planning_model: SWE_MODEL_HIGH first
-// (the planning reasoners are high-tier roles, see RoleToTier — the same
-// relative precedence tier env vars have in ResolveRuntimeModels), then the
-// env cascade, then the gateway default when only a gateway key is present,
-// else "sonnet".
-func DefaultPlanningModel() string {
-	if highModel := tierModelsFromEnv()["high"]; highModel != "" {
-		return highModel
+// DefaultPlanningModel resolves the high-tier PM model for the selected runtime.
+// Omitting the runtime uses deployment auto-selection, matching Python's
+// _default_planning_model. Explicit runtime overrides must select that runtime's
+// model family as well as its harness provider.
+func DefaultPlanningModel(runtime ...string) string {
+	model, err := DefaultRoleModel("pm", runtime...)
+	if err != nil {
+		// Invalid providers are rejected by the harness adapter mapping.
+		return "sonnet"
 	}
-	if envModel := defaultModelFromEnv(DefaultRuntime()); envModel != "" {
-		return envModel
-	}
-	if openRouterOnlyEnv() {
-		return openRouterAutoDefaultModel
-	}
-	if infronOnlyEnv() {
-		return infronAutoDefaultModel
-	}
-	return "sonnet"
+	return model
 }
 
 // DefaultRoleModel resolves the configured call-time default for one role.
 // It uses the same runtime base, environment cascade, and tier precedence as
 // ResolveRuntimeModels, without introducing a separate direct-call policy.
-func DefaultRoleModel(role string) (string, error) {
+// An explicit runtime takes precedence over deployment auto-selection.
+func DefaultRoleModel(role string, runtime ...string) (string, error) {
 	field, ok := RoleToModelField[role]
 	if !ok {
 		return "", fmt.Errorf("unknown role %s", pyRepr(role))
 	}
-	resolved, err := ResolveRuntimeModels(DefaultRuntime(), nil, []string{field})
+	selected := DefaultRuntime()
+	if len(runtime) > 0 && runtime[0] != "" {
+		selected = runtime[0]
+	}
+	selected, err := runtimex.NormalizeRuntimeProvider(selected)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := ResolveRuntimeModels(selected, nil, []string{field})
 	if err != nil {
 		return "", err
 	}

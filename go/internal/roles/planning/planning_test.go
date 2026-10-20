@@ -218,6 +218,26 @@ func TestProductManagerDirectCallRuntimeDefaults(t *testing.T) {
 			t.Fatalf("defaults = provider %q, model %q", opts.Provider, opts.Model)
 		}
 	})
+	for _, tc := range []struct {
+		name         string
+		envRuntime   string
+		provider     string
+		wantProvider string
+		wantModel    string
+	}{
+		{"configured aforge", "aforge", "", "aforge", "openrouter/deepseek/deepseek-v4-flash-0731"},
+		{"explicit aforge", "claude_code", "aforge", "aforge", "openrouter/deepseek/deepseek-v4-flash-0731"},
+		{"explicit claude", "aforge", "claude", "claude-code", "sonnet"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearRuntimeEnv(t)
+			t.Setenv("SWE_DEFAULT_RUNTIME", tc.envRuntime)
+			opts := run(t, map[string]any{"ai_provider": tc.provider})
+			if opts.Provider != tc.wantProvider || opts.Model != tc.wantModel {
+				t.Fatalf("defaults = provider %q, model %q; want %q, %q", opts.Provider, opts.Model, tc.wantProvider, tc.wantModel)
+			}
+		})
+	}
 	t.Run("configured codex", func(t *testing.T) {
 		clearRuntimeEnv(t)
 		t.Setenv("SWE_DEFAULT_RUNTIME", "codex")

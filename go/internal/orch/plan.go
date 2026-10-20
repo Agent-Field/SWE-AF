@@ -157,7 +157,7 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	if aiProvider == "" {
 		aiProvider = config.DefaultRuntime()
 	}
-	defaultModel := config.DefaultPlanningModel()
+	defaultModel := config.DefaultPlanningModel(aiProvider)
 	pmModel := firstNonEmpty(in.PMModel, defaultModel)
 	architectModel := firstNonEmpty(in.ArchitectModel, defaultModel)
 	techLeadModel := firstNonEmpty(in.TechLeadModel, defaultModel)
