@@ -118,6 +118,7 @@ def clean_model_env(monkeypatch):
             "openrouter/deepseek/deepseek-v4-flash-0731",
         ),
         ("codex", None, {}, "codex", "gpt-5.3-codex"),
+        ("command_code", None, {}, "command-code", ""),
         ("codex", None, {"SWE_CODEX_AUTH_MODE": "chatgpt"}, "codex", "gpt-5.5"),
         (
             "claude_code",

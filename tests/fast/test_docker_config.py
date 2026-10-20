@@ -3,6 +3,7 @@
 import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).parent.parent.parent
@@ -89,6 +90,36 @@ def test_codex_volume_mount_in_swe_agent_and_swe_fast():
     expected = "${HOME}/.codex:/root/.codex"
     assert expected in _service_volumes("swe-agent")
     assert expected in _service_volumes("swe-fast")
+
+
+@pytest.mark.parametrize("filename", ["docker-compose.yml", "docker-compose.local.yml"])
+def test_commandcode_host_credentials_are_opt_in(filename):
+    compose = yaml.safe_load((REPO_ROOT / filename).read_text())
+    for service in compose["services"].values():
+        for mount in service.get("volumes", []):
+            assert ".commandcode" not in str(mount)
+
+
+@pytest.mark.parametrize(
+    "filename,services",
+    [
+        ("docker-compose.commandcode.yml", ["swe-agent", "swe-fast"]),
+        ("docker-compose.commandcode.local.yml", ["swe-agent"]),
+    ],
+)
+def test_commandcode_overlay_exposes_only_read_only_auth_file(filename, services):
+    compose = yaml.safe_load((REPO_ROOT / filename).read_text())
+    assert set(compose["services"]) == set(services)
+    for service in services:
+        assert compose["services"][service]["volumes"] == [
+            {
+                "type": "bind",
+                "source": "${HOME}/.commandcode/auth.json",
+                "target": "/root/.commandcode/auth.json",
+                "read_only": True,
+                "bind": {"create_host_path": False},
+            }
+        ]
 
 
 def test_codex_auth_mode_env_in_swe_agent_and_swe_fast():

@@ -1,0 +1,18 @@
+# Opt in to host login credentials for the Python agent services:
+# docker compose -f docker-compose.yml -f docker-compose.commandcode.yml up -d
+# Run `command-code login` on the host first. Sessions/config stay in-container.
+x-commandcode-auth: &commandcode-auth
+  type: bind
+  source: ${HOME}/.commandcode/auth.json
+  target: /root/.commandcode/auth.json
+  read_only: true
+  bind:
+    create_host_path: false
+
+services:
+  swe-agent:
+    volumes:
+      - *commandcode-auth
+  swe-fast:
+    volumes:
+      - *commandcode-auth

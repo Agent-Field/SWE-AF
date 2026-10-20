@@ -54,6 +54,9 @@ RUN set -eu; \
     rm -f aforge.gz checksums.txt aforge.sha256
 
 
+# External CLIs require Node 22; keep the runtime aligned with the Python image.
+FROM node:22-bookworm-slim AS node
+
 # ---------------------------------------------------------------------------
 # Stage 1 — builder: clone the SDK at a pinned ref, build both static binaries.
 # ---------------------------------------------------------------------------
@@ -103,16 +106,22 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/swe-planner ./cmd/swe-planner &&
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
 
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s node /usr/local/bin/nodejs && \
+    ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # System deps: git (worktrees, branches), curl (healthcheck + installers),
 # ca-certificates (HTTPS for gh/opencode/npm), jq (agent bash), openssh-client
-# (optional SSH git), nodejs+npm (codex + claude-code CLIs), gh CLI (draft PRs),
+# (optional SSH git), Node runtime libraries, gh CLI (draft PRs),
 # OpenCode CLI (open_code runtime), Codex CLI (codex runtime), Claude Code CLI
 # (claude_code runtime). The AForge CLI (aforge runtime) is copied in from
 # stage 0 rather than installed here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates openssh-client jq nodejs npm \
+    git curl ca-certificates openssh-client jq libstdc++6 libatomic1 \
     # Python test tooling: repos under build are frequently Python, and both
     # the verifier role and evidence-based audits need a runnable pytest —
     # without it, Python-repo verification is impossible in this image.
@@ -127,6 +136,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl -fsSL https://opencode.ai/install | bash && \
     # Claude Code CLI for the claude_code runtime (Go harness spawns `claude`)
     npm install -g @anthropic-ai/claude-code && \
+    # Credential-free startup check for the CLI's Node runtime requirement.
+    claude --version && \
     # Codex CLI for the codex runtime, wrapped to honor SWE_CODEX_AUTH_MODE
     npm install -g @openai/codex && \
     codex_path="$(command -v codex)" && \

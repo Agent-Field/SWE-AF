@@ -422,7 +422,7 @@ SWE-AF orchestrates 22 specialized agents across four phases. Each agent is a re
 
 Every build now uses a single V2 model contract:
 
-- `runtime`: `claude_code`, `open_code`, or `codex`
+- `runtime`: `claude_code`, `open_code`, `codex`, or `command_code` (Python node only)
 - `models`: flat role map (`default` + explicit role keys)
 
 Supported role keys:
@@ -443,6 +443,7 @@ Runtime defaults:
 | `claude_code` | `sonnet` | `qa_synthesizer=haiku` |
 | `open_code` | `openrouter/deepseek/deepseek-v4-flash-0731` | none |
 | `codex` | `gpt-5.3-codex` | none |
+| `command_code` (Python node only) | CLI-configured default (blank model) | no baked-in model IDs |
 
 The QA synthesizer uses the same runtime harness and credentials as the coding
 and review roles. Existing `models.qa_synthesizer` overrides using LiteLLM's

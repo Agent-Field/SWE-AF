@@ -50,7 +50,7 @@ SWE-AF calls sibling reasoners via `app.call("{NODE_ID}.reasoner", **kwargs)` (`
 
 ## 3. AI / harness
 
-SWE-AF **does not** call `claude_agent_sdk` directly anymore — zero imports of `claude_agent_sdk`/`ClaudeAgentOptions` in `swe_af/` (grep verified). All AI execution goes through the AgentField SDK harness: `await router.harness(prompt=..., schema=PRD, provider=..., model=..., max_turns=..., tools=["Read","Write","Glob","Grep","Bash"], permission_mode=..., system_prompt=..., cwd=repo_path)` (`pipeline.py:208-218` and ~4 more sites; heavy use in `reasoners/execution_agents.py` consuming `result.parsed`, e.g. :180-186, :273, :503-508). Runtime switch: `swe_af/runtime/providers.py:5-27` — runtimes `claude_code | open_code | codex` → harness providers `claude | opencode | codex`; wired via `execution/schemas.py:559-560`.
+SWE-AF **does not** call `claude_agent_sdk` directly anymore — zero imports of `claude_agent_sdk`/`ClaudeAgentOptions` in `swe_af/` (grep verified). All AI execution goes through the AgentField SDK harness: `await router.harness(prompt=..., schema=PRD, provider=..., model=..., max_turns=..., tools=["Read","Write","Glob","Grep","Bash"], permission_mode=..., system_prompt=..., cwd=repo_path)` (`pipeline.py:208-218` and ~4 more sites; heavy use in `reasoners/execution_agents.py` consuming `result.parsed`, e.g. :180-186, :273, :503-508). Runtime switch: `swe_af/runtime/providers.py:5-27` — Python runtimes `claude_code | open_code | codex | command_code` → application providers `claude | opencode | codex | command_code` (`command_code` uses the `command-code` harness adapter and is Python-node only); wired via `execution/schemas.py:559-560`.
 
 Python harness signature: `Agent.harness(prompt, *, schema, provider, model, max_turns, max_budget_usd, tools, permission_mode, system_prompt, env, cwd, project_dir, schema_mode, **kwargs)` (`agent.py:3472-3489`).
 
@@ -59,6 +59,7 @@ Go harness: providers `claude-code`, `codex`, `opencode`, `gemini` (`harness/pro
 | SWE-AF harness feature | SWE-AF evidence | Go harness evidence | Status | Notes |
 |---|---|---|---|---|
 | `provider` claude_code / opencode / codex | `runtime/providers.py:5-27` | `provider.go:6-13`, `factory.go` | SUPPORTED | Name mapping: `claude` → `claude-code` |
+| `provider` command_code (Python node only) | `runtime/commandcode_harness_patch.py` | No registered provider | UNSUPPORTED | Go rejects this runtime |
 | `model` per call (per-role model map) | `pipeline.py:211`; `execution/schemas.py:466+` | `Options.Model`, `claudecode.go:35-37` | SUPPORTED | |
 | `max_turns` | `pipeline.py:213` | `Options.MaxTurns`, `claudecode.go:39-41` | SUPPORTED | |
 | `permission_mode` ("auto"→bypassPermissions) | `pipeline.py:216` | `permissionMap` `claudecode.go:26-30, 43-49` | SUPPORTED | |

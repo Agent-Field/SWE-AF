@@ -12,6 +12,18 @@ def test_runtime_to_harness_adapter_supports_aforge_aliases() -> None:
     assert runtime_to_harness_adapter("aforge-v2") == "aforge"
 
 
+def test_runtime_to_harness_adapter_supports_command_code() -> None:
+    assert runtime_to_harness_adapter("command_code") == "command-code"
+    assert runtime_to_harness_adapter("cmd") == "command-code"
+
+
+def test_normalize_runtime_provider_accepts_command_code_aliases() -> None:
+    from swe_af.runtime.providers import normalize_runtime_provider
+
+    for alias in ("command_code", "commandcode", "command-code", "cmd"):
+        assert normalize_runtime_provider(alias) == "command_code"
+
+
 def test_execution_agents_source_uses_shared_runtime_adapter() -> None:
     import inspect
     import swe_af.reasoners.execution_agents as execution_agents

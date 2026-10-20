@@ -204,10 +204,11 @@ Most agent frameworks wrap a single coder loop. SWE-AF is a coordinated engineer
 
 </details>
 
-**Claude, open-source, and Codex models supported**: Run builds with any runtime and tune models per role in one flat config map.
+**Claude, OpenCode, Codex, and Command Code runtimes supported**: Run builds with any runtime and tune models per role in one flat config map.
 - `runtime: "claude_code"` maps to Claude backend.
 - `runtime: "open_code"` maps to OpenCode backend (OpenRouter/OpenAI/Google/Anthropic model IDs).
 - `runtime: "codex"` maps to the OpenAI Codex CLI backend.
+- `runtime: "command_code"` maps to the Command Code CLI backend (`command-code -p`, headless) on the Python node. No model ids are baked in: without `models`, Command Code's own default model is used, and any id it supports passes through verbatim. The Go node does not support this runtime.
 
 ## Adaptive Factory Control
 
@@ -453,6 +454,8 @@ For the Anthropic-compatible Claude path, set `ANTHROPIC_AUTH_TOKEN`, set `ANTHR
 `ANTHROPIC_BASE_URL` is process-wide, so one deployment cannot route Claude and MiniMax Anthropic-compatible traffic to different endpoints.
 
 For Codex with ChatGPT subscription auth, install the Codex CLI on the host, run `codex login`, leave `OPENAI_API_KEY` unset for this process, and set `SWE_CODEX_AUTH_MODE=chatgpt` or `auto`. For OpenAI API-platform billing, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
+
+For Command Code on the Python node, install Node 22+ and `npm install -g command-code@1.82.2`, run `command-code login`, and set `runtime: "command_code"`. To share that login with Docker, use `docker compose -f docker-compose.yml -f docker-compose.commandcode.yml up -d` (for the host control plane, use `docker-compose.local.yml` with `docker-compose.commandcode.local.yml`). These opt-in overlays mount only `~/.commandcode/auth.json`, read-only; the file must already exist. Session history and configuration remain in the container. See [deployment notes](docs/deployment.md) for credential access and BYOK configuration.
 
 > The Docker image bakes `HARNESS_MODEL=openrouter/deepseek/deepseek-v4-flash-0731` so OpenCode's `small_model` config interpolation always has a value. `HARNESS_MODEL` only affects the `open_code` runtime — `claude_code` and `codex` deployments resolve their own runtime defaults (codex picks its model by auth mode) and can override per role via `SWE_DEFAULT_MODEL` / `models` as usual.
 
@@ -895,7 +898,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
-| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, or `"codex"`. With OpenRouter available the default is `"aforge"`; with only Infron it is `"open_code"`; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide. |
+| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python only, explicit opt-in). With OpenRouter available the default is `"aforge"`; with only Infron it is `"open_code"` on the main path; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide; request `runtime` wins over that. |
 | `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |

@@ -38,9 +38,18 @@ RUN set -eu; \
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 — runtime: the SWE-AF Python node.
+# Stage 2 — Node 22 tooling; stage 3 — the SWE-AF Python node.
 # ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS node
 FROM python:3.12-slim
+
+# Use the official Node 22 distribution, including npm. Debian's nodejs
+# package can be too old for Command Code (which requires Node >=22).
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s node /usr/local/bin/nodejs && \
+    ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -50,7 +59,7 @@ WORKDIR /app
 # System deps: git (worktrees, branches), curl (healthcheck), jq (agent bash),
 # openssh-client (optional SSH git), gh CLI (draft PRs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates openssh-client jq nodejs npm && \
+    git curl ca-certificates openssh-client jq libstdc++6 libatomic1 && \
     # Install GitHub CLI
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
@@ -61,6 +70,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl -fsSL https://opencode.ai/install | bash && \
     # Install Codex CLI for codex runtime provider
     npm install -g @openai/codex && \
+    # Install Command Code CLI for command_code runtime provider
+    npm install -g command-code@1.82.2 && \
+    # Credential-free startup check: fail the build on incompatible Node/CLI.
+    command-code --version && \
     codex_path="$(command -v codex)" && \
     mv "${codex_path}" /usr/local/bin/codex-real && \
     printf '%s\n' \
