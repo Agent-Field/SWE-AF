@@ -1,0 +1,11 @@
+# Opt in to host login credentials when using the host control plane:
+# docker compose -f docker-compose.local.yml -f docker-compose.commandcode.local.yml up -d
+services:
+  swe-agent:
+    volumes:
+      - type: bind
+        source: ${HOME}/.commandcode/auth.json
+        target: /root/.commandcode/auth.json
+        read_only: true
+        bind:
+          create_host_path: false

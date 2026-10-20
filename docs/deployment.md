@@ -92,7 +92,13 @@ This starts:
 
 To use Codex with a ChatGPT subscription, run `codex login` on the host before starting Docker and leave `OPENAI_API_KEY` unset for this process. The compose files mount `~/.codex` into both agent containers. To use OpenAI API billing instead, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
-To use Command Code, run `cmd login` on the host before starting Docker. The compose files mount `~/.commandcode` into both agent containers, so no in-container login is needed.
+To use Command Code on the Python node, install Node 22+ and `npm install -g command-code@1.82.2` on the host, run `command-code login`, and select `runtime: "command_code"`. Start with `docker compose -f docker-compose.yml -f docker-compose.commandcode.yml up -d` to share the host login with both Python agent services. For a host control plane, use `docker compose -f docker-compose.local.yml -f docker-compose.commandcode.local.yml up -d`. The Go node does not support `command_code`.
+
+The overlays require an existing `~/.commandcode/auth.json` and mount only that file read-only. Normal Compose startup exposes no Command Code host files. The container can write its own configuration and sessions under `/root/.commandcode`; host settings, MCP servers, skills, file history, and transcripts are not imported. For BYOK, supply a dedicated `providers.json` at `/root/.commandcode/providers.json` using a read-only file mount or container configuration, with the provider's required environment variables. Credentials that need refreshing must be refreshed on the host; recreate containers if the host replaces the auth file.
+
+Command Code runs with `--trust` and defaults to `--yolo`, allowing writes and shell commands. Set `permission_mode: "plan"` for read-only planning. This runtime does not enforce the SDK's per-call `tools` allowlist; permissions are governed by the CLI's permission mode.
+
+Use a dedicated login with only the access needed for these builds. An agent with shell access can read the mounted auth file and subprocess environment. CLI events, final text, and error diagnostics are returned to callers and may be saved in build logs, so tool output containing credentials can reach those outputs. A read-only mount protects the host file from modification; it does not hide its contents from the agent. Avoid mounting your entire host `~/.commandcode` directory.
 
 ### Agent Only (connect to existing control plane)
 

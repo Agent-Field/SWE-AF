@@ -60,7 +60,6 @@ services:
     volumes:
       - workspaces:/workspaces
       - ${HOME}/.codex:/root/.codex
-      - ${HOME}/.commandcode:/root/.commandcode
     depends_on:
       control-plane:
         condition: service_started
@@ -99,7 +98,6 @@ services:
     volumes:
       - workspaces:/workspaces
       - ${HOME}/.codex:/root/.codex
-      - ${HOME}/.commandcode:/root/.commandcode
     depends_on:
       control-plane:
         condition: service_started
