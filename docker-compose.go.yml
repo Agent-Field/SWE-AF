@@ -48,9 +48,8 @@ services:
       - NODE_ID=swe-planner-go
       - PORT=8005
       - AGENT_CALLBACK_URL=http://swe-agent-go:8005
-      # Empty = auto: open_code when only an OpenRouter or Infron key is
-      # present, else claude_code. A baked claude_code fallback here would
-      # break gateway-only deployments.
+      # Empty = auto: aforge with OpenRouter, open_code with only Infron,
+      # else claude_code. Explicit runtime overrides always win.
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - AGENTFIELD_AFORGE_COMMAND=${AGENTFIELD_AFORGE_COMMAND:-exec}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
@@ -112,7 +111,7 @@ services:
       - AI_BASE_URL=${AI_BASE_URL:-}
       - AI_MODEL=${AI_MODEL:-}
       - OPENCODE_MODEL=${OPENCODE_MODEL:-}
-      # Empty = auto (see swe-agent-go note).
+      # Fast path: aforge with OpenRouter, else claude_code.
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - AGENTFIELD_AFORGE_COMMAND=${AGENTFIELD_AFORGE_COMMAND:-exec}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}

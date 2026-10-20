@@ -87,8 +87,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - OPENCODE_MODEL=${OPENCODE_MODEL:-}
-      # Empty = auto: aforge with OpenRouter, open_code with only Infron,
-      # else claude_code. Explicit runtime overrides always win.
+      # Fast path: aforge with OpenRouter, else claude_code.
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - AGENTFIELD_AFORGE_COMMAND=${AGENTFIELD_AFORGE_COMMAND:-exec}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}

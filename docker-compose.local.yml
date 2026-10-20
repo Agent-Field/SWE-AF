@@ -33,9 +33,8 @@ services:
       - PORT=8003
       # Callback URL for control plane to reach this agent
       - AGENT_CALLBACK_URL=http://localhost:8003
-      # Empty = auto: open_code when only an OpenRouter or Infron key is
-      # present, else claude_code. A baked claude_code fallback here would
-      # break gateway-only deployments.
+      # Empty = auto: aforge with OpenRouter, open_code with only Infron,
+      # else claude_code. Explicit runtime overrides always win.
       - SWE_DEFAULT_RUNTIME=${SWE_DEFAULT_RUNTIME:-}
       - SWE_DEFAULT_MODEL=${SWE_DEFAULT_MODEL:-}
       - SWE_CODEX_AUTH_MODE=${SWE_CODEX_AUTH_MODE:-auto}

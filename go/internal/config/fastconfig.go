@@ -47,7 +47,7 @@ var fastValidKeys = map[string]struct{}{
 }
 
 // DefaultFastRuntime ports _default_fast_runtime, honoring SWE_DEFAULT_RUNTIME.
-// When unset (or blank), auto-selects aforge if only an OpenRouter key is
+// When unset (or blank), auto-selects aforge if an OpenRouter key is
 // present — the same detection the main path uses (openRouterOnlyEnv) — else
 // claude_code. An invalid value falls back to claude_code.
 func DefaultFastRuntime() string {

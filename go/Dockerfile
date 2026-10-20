@@ -71,7 +71,7 @@ WORKDIR /src
 
 # Clone ONLY sdk/go from the agentfield repo at the pinned SHA (single-commit
 # depth-1 fetch + cone sparse-checkout keeps the layer small). Placed as a
-# sibling of SWE-AF/ so the go.mod replace path resolves. This layer's cache
+# sibling of SWE-AF/ for SDK provenance. This layer's cache
 # key includes AGENTFIELD_SDK_REF, so it re-runs iff the ref changes.
 RUN git init -q /src/agentfield && \
     cd /src/agentfield && \
