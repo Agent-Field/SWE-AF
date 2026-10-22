@@ -620,6 +620,11 @@ _OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 # so this is the existing gateway default with the prefix swapped.
 _INFRON_AUTO_DEFAULT_MODEL = "infron/deepseek/deepseek-v4-flash-0731"
 
+# Default model for the auto-selected Cheaper Inference path (see
+# _cheaperinference_only_env). Cheaper Inference is OpenAI-compatible and serves
+# bare model ids, so the auto default is the provider prefix plus a bare id.
+_CHEAPERINFERENCE_AUTO_DEFAULT_MODEL = "cheaperinference/gpt-5.4-mini"
+
 _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "aforge": {
         **{field: _OPENROUTER_AUTO_DEFAULT_MODEL for field in ALL_MODEL_FIELDS},
@@ -707,6 +712,27 @@ def _infron_only_env() -> bool:
     return bool(os.getenv("INFRON_API_KEY", "").strip())
 
 
+def _cheaperinference_only_env() -> bool:
+    """Whether the deployer implicitly chose the Cheaper Inference runtime.
+
+    Mirrors ``_infron_only_env`` for the ``CHEAPERINFERENCE_API_KEY`` gateway: no
+    explicit ``SWE_DEFAULT_RUNTIME``, no Anthropic key, no other gateway key, but
+    a ``CHEAPERINFERENCE_API_KEY``. A gateway key that was already honored before
+    Cheaper Inference existed keeps precedence, so adding a Cheaper Inference key
+    never silently reroutes an existing deployment — to move traffic over, drop
+    the other key or set ``SWE_DEFAULT_MODEL=cheaperinference/...`` explicitly.
+    """
+    if os.getenv("SWE_DEFAULT_RUNTIME", "").strip():
+        return False
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        return False
+    if os.getenv("OPENROUTER_API_KEY", "").strip():
+        return False
+    if os.getenv("INFRON_API_KEY", "").strip():
+        return False
+    return bool(os.getenv("CHEAPERINFERENCE_API_KEY", "").strip())
+
+
 def _default_runtime() -> Literal["aforge", "claude_code", "open_code", "codex", "command_code"]:
     """Default runtime, honoring the ``SWE_DEFAULT_RUNTIME`` env var.
 
@@ -721,6 +747,8 @@ def _default_runtime() -> Literal["aforge", "claude_code", "open_code", "codex",
         if _openrouter_only_env():
             return "aforge"
         if _infron_only_env():
+            return "open_code"
+        if _cheaperinference_only_env():
             return "open_code"
         return "claude_code"
     if value in RUNTIME_VALUES:
@@ -948,6 +976,10 @@ def resolve_runtime_models(
     elif runtime == "open_code" and _infron_only_env():
         # Same rule for the Infron gateway (see _infron_only_env).
         base = {field: _INFRON_AUTO_DEFAULT_MODEL for field in base}
+    elif runtime == "open_code" and _cheaperinference_only_env():
+        # Same rule for the Cheaper Inference gateway (see
+        # _cheaperinference_only_env).
+        base = {field: _CHEAPERINFERENCE_AUTO_DEFAULT_MODEL for field in base}
     resolved: dict[str, str] = {field: base[field] for field in field_names}
 
     env_default = _default_model_from_env(runtime)

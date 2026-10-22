@@ -12,6 +12,7 @@ from swe_af.execution.schemas import (
     BuildConfig,
     ExecutionConfig,
     ROLE_TO_MODEL_FIELD,
+    _CHEAPERINFERENCE_AUTO_DEFAULT_MODEL,
     _INFRON_AUTO_DEFAULT_MODEL,
     _OPENROUTER_AUTO_DEFAULT_MODEL,
     _default_planning_model,
@@ -25,6 +26,7 @@ _PROVIDER_ENV_KEYS = (
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
     "INFRON_API_KEY",
+    "CHEAPERINFERENCE_API_KEY",
     "SWE_DEFAULT_RUNTIME",
     "SWE_DEFAULT_MODEL",
     "AI_MODEL",
@@ -215,6 +217,66 @@ class TestInfronAutoSelection(unittest.TestCase):
             _INFRON_AUTO_DEFAULT_MODEL.split("/", 1)[1],
             _OPENROUTER_AUTO_DEFAULT_MODEL.split("/", 1)[1],
         )
+
+
+class TestCheaperInferenceAutoSelection(unittest.TestCase):
+    """The Cheaper Inference gateway mirrors the existing gateway auto-selection
+    path: with only a CHEAPERINFERENCE_API_KEY present, SWE-AF picks open_code
+    and the Cheaper Inference default model. A gateway key already configured
+    keeps precedence. Cheaper Inference serves bare ids, so the default is the
+    provider prefix plus a bare id."""
+
+    def test_cheaperinference_only_auto_selects_open_code(self) -> None:
+        with _provider_env(CHEAPERINFERENCE_API_KEY="ci_live_x"):
+            self.assertEqual(_default_runtime(), "open_code")
+
+    def test_anthropic_key_keeps_claude_code(self) -> None:
+        with _provider_env(ANTHROPIC_API_KEY="sk-ant", CHEAPERINFERENCE_API_KEY="ci_live_x"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_explicit_runtime_overrides_autoselect(self) -> None:
+        with _provider_env(CHEAPERINFERENCE_API_KEY="ci_live_x", SWE_DEFAULT_RUNTIME="claude_code"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_auto_cheaperinference_defaults_to_gpt_mini(self) -> None:
+        with _provider_env(CHEAPERINFERENCE_API_KEY="ci_live_x"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "cheaperinference/gpt-5.4-mini")
+
+    def test_existing_gateway_key_keeps_precedence(self) -> None:
+        # An Infron or OpenRouter key already honored wins over a newly added
+        # Cheaper Inference key.
+        with _provider_env(INFRON_API_KEY="sk-inf", CHEAPERINFERENCE_API_KEY="ci_live_x"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], _INFRON_AUTO_DEFAULT_MODEL)
+
+    def test_harness_model_overrides_cheaperinference_auto_default(self) -> None:
+        pinned = "cheaperinference/gpt-5.4"
+        with _provider_env(CHEAPERINFERENCE_API_KEY="ci_live_x", HARNESS_MODEL=pinned):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], pinned)
+
+    def test_swe_default_model_overrides_auto(self) -> None:
+        with _provider_env(
+            CHEAPERINFERENCE_API_KEY="ci_live_x", SWE_DEFAULT_MODEL="cheaperinference/gpt-5.4"
+        ):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "cheaperinference/gpt-5.4")
+
+    def test_planning_model_uses_cheaperinference_default(self) -> None:
+        with _provider_env(CHEAPERINFERENCE_API_KEY="ci_live_x"):
+            self.assertEqual(_default_planning_model(), _CHEAPERINFERENCE_AUTO_DEFAULT_MODEL)
+
+    def test_build_config_auto_cheaperinference_end_to_end(self) -> None:
+        with _provider_env(CHEAPERINFERENCE_API_KEY="ci_live_x"):
+            cfg = BuildConfig()
+            self.assertEqual(cfg.runtime, "open_code")
+            resolved = cfg.resolved_models()
+        self.assertEqual(resolved["coder_model"], "cheaperinference/gpt-5.4-mini")
 
 
 class TestOpenRouterAutoSelection(unittest.TestCase):
