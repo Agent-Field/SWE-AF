@@ -851,6 +851,18 @@ async def test_ci_head_deadline_crossed_during_acquisition_is_error():
     assert result.status == "error"
 
 
+async def test_ci_head_deadline_before_first_observation_is_error():
+    readings = iter([0, 0, 3.999, 4, 4])
+    result, runner, clock = await _watch_commit_pages([], now=readings.__next__)
+    assert runner.calls == [["gh", "repo", "view", "--json", "id,nameWithOwner,url"]]
+    assert clock.sleeps == []
+    assert result.elapsed_seconds == 4
+    assert result.pr_number == 42
+    assert result.failed_checks == []
+    assert list(readings) == []
+    assert result.status == "error"
+
+
 @pytest.mark.parametrize("status", ["no_checks", "timed_out", "error"])
 async def test_ci_gate_preserves_terminal_nonfailure_status_without_fixer(status):
     result, dispatch, _ = await _run_gate_fixture([_successful_execution_envelope(_watch_result_payload(status))])

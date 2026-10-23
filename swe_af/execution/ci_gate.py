@@ -571,6 +571,7 @@ async def _watch_loop(reader: _CommitChecks, sha: str, poll: float, sleeper, sta
     # within the original deadline; neither can become no_checks.
     # Observed nonempty rows or positive counts permanently rule out an
     # empty-only outcome for this watcher target.
+    status = "error"
     while reader.clock() < reader.deadline:
         status, checks = _settled_checks(reader, sha)
         if status == "passed":
@@ -582,7 +583,7 @@ async def _watch_loop(reader: _CommitChecks, sha: str, poll: float, sleeper, sta
         remaining = reader.deadline - reader.clock()
         if remaining > 0:
             await sleeper(min(poll, remaining))
-    status = "no_checks" if reader.empty_only else "timed_out"
+    status = status or ("no_checks" if reader.empty_only else "timed_out")
     return _watch_result(status, reader.number, start, reader.clock, summary=f"CI observation window exhausted for {sha}")
 
 
