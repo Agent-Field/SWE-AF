@@ -12,6 +12,7 @@ import asyncio
 import os
 import subprocess
 import uuid
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -38,7 +39,8 @@ except ImportError:  # pragma: no cover - exercised only on older agentfield SDK
             super().__init__(message)
             self.result = result
             self.error_details = error_details
-from swe_af.execution.envelope import unwrap_call_result as _unwrap
+from swe_af.execution.envelope import _ENVELOPE_KEYS, unwrap_call_result as _unwrap
+from swe_af.execution import ci_gate as _ci
 from swe_af.execution.fatal_error import FatalHarnessError
 
 try:
@@ -52,6 +54,7 @@ except ImportError:  # pragma: no cover - older agentfield SDK
 from swe_af.execution.schemas import (
     BuildConfig,
     BuildResult,
+    CIWatchResult,
     RepoPRResult,
     WorkspaceManifest,
     WorkspaceRepo,
@@ -313,6 +316,68 @@ async def _clone_repos(
     )
 
 
+def _ci_watch_payload(value, pr_number: int) -> dict:
+    if isinstance(value, dict) and (_ENVELOPE_KEYS - {"status"}).intersection(value):
+        try:
+            value = _unwrap(value, "run_ci_watcher")
+        except FatalHarnessError:
+            raise
+        except RuntimeError as error:
+            if type(error) is not RuntimeError or str(value.get("status", "")).lower() not in ("failed", "error"):
+                raise
+            raise ValueError(str(error)) from error
+    value = _ci._object(value)
+    required = {"status", "pr_number", "elapsed_seconds", "failed_checks", "summary"}
+    if not required.issubset(value):
+        raise ValueError("Incomplete watcher result")
+    result = CIWatchResult.model_validate(value, strict=True)
+    if result.pr_number != pr_number or result.elapsed_seconds < 0:
+        raise ValueError("Watcher PR or elapsed time is invalid")
+    return result.model_dump()
+
+
+def _ci_gate_result(status: str, attempts: list, watch: dict) -> dict:
+    app.note(f"CI gate: {status}", tags=["ci_gate", status])
+    return {"final_status": status, "fix_attempts": attempts, "watch": watch}
+
+
+async def _ci_watch_call(repo_path: str, pr_number: int, head_sha: str, wait: int, poll: int) -> dict:
+    value = await app.call(
+        f"{NODE_ID}.run_ci_watcher", repo_path=repo_path, pr_number=pr_number,
+        wait_seconds=wait, poll_seconds=poll, head_sha=head_sha,
+    )
+    return _ci_watch_payload(value, pr_number)
+
+
+def _ci_fixer_target(fix: dict, previous: str) -> str | None:
+    fix = _ci._object(fix)
+    if type(fix.get("pushed")) is not bool:
+        raise ValueError("Fixer pushed must be a boolean")
+    if not fix["pushed"]:
+        return None
+    target = _ci._oid(fix["commit_sha"])
+    if target == previous:
+        raise ValueError("Fixer did not advance the commit")
+    return target
+
+
+async def _ci_fixer_call(repo_path, pr_number, pr_url, integration_branch, base_branch,
+                         cfg, resolved_models, goal, completed_issues, attempts, watch, cycle):
+    app.note(
+        f"CI gate: fix attempt {cycle + 1}/{cfg.max_ci_fix_cycles} — "
+        f"{len(watch['failed_checks'])} failing check(s)", tags=["ci_gate", "fix"],
+    )
+    return _unwrap(await app.call(
+        f"{NODE_ID}.run_ci_fixer", repo_path=repo_path, pr_number=pr_number,
+        pr_url=pr_url, integration_branch=integration_branch, base_branch=base_branch,
+        failed_checks=watch["failed_checks"], iteration=cycle + 1,
+        max_iterations=cfg.max_ci_fix_cycles, goal=goal, completed_issues=completed_issues,
+        previous_attempts=attempts,
+        model=resolved_models.get("ci_fixer_model", resolved_models.get("coder_model", "")),
+        permission_mode=cfg.permission_mode, ai_provider=cfg.ai_provider,
+    ), "run_ci_fixer")
+
+
 async def _run_ci_gate(
     *,
     repo_path: str,
@@ -326,122 +391,54 @@ async def _run_ci_gate(
     completed_issues: list[dict],
     head_sha: str = "",
 ) -> dict:
-    """Watch CI on the freshly-pushed PR; fix-and-repush if it fails.
+    """Watch the selected commit and advance only to a validated fixer commit.
 
-    PRs are opened ready for review (no draft phase), so this gate only does
-    the watch + fix-loop work — there's no promotion step. On terminal
-    failure the PR stays open with visible failing checks for human review.
-
-    Returns a summary dict the build can attach to its response. Bounded by
-    ``cfg.max_ci_fix_cycles`` and ``cfg.ci_wait_seconds`` per watch.
-
-    When ``head_sha`` is supplied, the watcher anchors verdicts to that
-    commit so the previous HEAD's lingering check states can't short-circuit
-    the gate. This is set by ``resolve()`` (which pushes onto a pre-existing
-    branch with prior CI history); ``build()`` leaves it empty because a
-    fresh PR has no prior checks to confuse the watcher.
+    Raw watcher payloads and successful execution envelopes share strict CI
+    validation. Every new target has fresh watcher state, and convergence
+    consumes its next watch budget. Terminal outcomes preserve no_checks.
     """
     attempts: list[dict] = []
-    last_watch: dict | None = None
-
-    for cycle in range(cfg.max_ci_fix_cycles + 1):
-        app.note(
-            f"CI gate: watch cycle {cycle + 1} for PR #{pr_number}",
-            tags=["ci_gate", "watch"],
-        )
-        watch = _unwrap(await app.call(
-            f"{NODE_ID}.run_ci_watcher",
-            repo_path=repo_path,
-            pr_number=pr_number,
-            wait_seconds=cfg.ci_wait_seconds,
-            poll_seconds=cfg.ci_poll_seconds,
-            head_sha=head_sha,
-        ), "run_ci_watcher")
-        last_watch = watch
-        status = watch.get("status", "error")
-
-        if status in ("passed", "no_checks"):
+    last_watch: dict = {}
+    try:
+        repo_path = str(Path(repo_path).resolve())
+        target = _ci._resolve_ci_target(repo_path, pr_number, head_sha, cfg.ci_wait_seconds)
+        wait = cfg.ci_wait_seconds
+        for cycle in range(cfg.max_ci_fix_cycles + 1):
             app.note(
-                f"CI gate: {status} — PR ready for review",
-                tags=["ci_gate", "ready"],
+                f"CI gate: watch cycle {cycle + 1} for PR #{pr_number}",
+                tags=["ci_gate", "watch"],
             )
-            return {
-                "final_status": "passed" if status == "passed" else "no_checks",
-                "fix_attempts": attempts,
-                "watch": watch,
-            }
+            last_watch = await _ci_watch_call(repo_path, pr_number, target, wait, cfg.ci_poll_seconds)
+            status = last_watch["status"]
+            if status != "failed":
+                return _ci_gate_result(status, attempts, last_watch)
 
-        if status in ("timed_out", "error"):
-            app.note(
-                f"CI gate: {status} — PR stays open with failing checks. "
-                f"{watch.get('summary', '')}",
-                tags=["ci_gate", status],
+            # status == "failed"
+            if cycle >= cfg.max_ci_fix_cycles:
+                return _ci_gate_result("failed_exhausted", attempts, last_watch)
+
+            _ci._guard_ci_head(repo_path, pr_number, target, cfg.ci_wait_seconds)
+            fix = await _ci_fixer_call(
+                repo_path, pr_number, pr_url, integration_branch, base_branch,
+                cfg, resolved_models, goal, completed_issues, attempts, last_watch, cycle,
             )
-            return {
-                "final_status": status,
-                "fix_attempts": attempts,
-                "watch": watch,
-            }
+            next_target = _ci_fixer_target(fix, target)
+            attempts.append(fix)
+            if next_target is None:
+                return _ci_gate_result("fixer_gave_up", attempts, last_watch)
 
-        # status == "failed"
-        if cycle >= cfg.max_ci_fix_cycles:
-            app.note(
-                f"CI gate: exhausted {cfg.max_ci_fix_cycles} fix cycle(s) — "
-                "PR stays open with failing checks",
-                tags=["ci_gate", "exhausted"],
+            # Pushed — validate the new Commit and converge before watching it.
+            # Registration delay consumes the next watcher's original budget.
+            wait = await _ci._wait_for_fixer_head(
+                repo_path, pr_number, target, next_target, cfg.ci_wait_seconds, cfg.ci_poll_seconds,
             )
-            return {
-                "final_status": "failed_exhausted",
-                "fix_attempts": attempts,
-                "watch": watch,
-            }
+            target = next_target
 
-        failed_checks = watch.get("failed_checks", [])
-        app.note(
-            f"CI gate: fix attempt {cycle + 1}/{cfg.max_ci_fix_cycles} — "
-            f"{len(failed_checks)} failing check(s)",
-            tags=["ci_gate", "fix"],
-        )
-        fix = _unwrap(await app.call(
-            f"{NODE_ID}.run_ci_fixer",
-            repo_path=repo_path,
-            pr_number=pr_number,
-            pr_url=pr_url,
-            integration_branch=integration_branch,
-            base_branch=base_branch,
-            failed_checks=failed_checks,
-            iteration=cycle + 1,
-            max_iterations=cfg.max_ci_fix_cycles,
-            goal=goal,
-            completed_issues=completed_issues,
-            previous_attempts=attempts,
-            model=resolved_models.get("ci_fixer_model", resolved_models.get("coder_model", "")),
-            permission_mode=cfg.permission_mode,
-            ai_provider=cfg.ai_provider,
-        ), "run_ci_fixer")
-        attempts.append(fix)
-
-        if not fix.get("pushed"):
-            app.note(
-                f"CI gate: fixer did not push ({fix.get('summary', 'no summary')}) — "
-                "PR stays open with failing checks",
-                tags=["ci_gate", "fixer_no_push"],
-            )
-            return {
-                "final_status": "fixer_gave_up",
-                "fix_attempts": attempts,
-                "watch": watch,
-            }
-
-        # Pushed — loop back and watch again. GitHub may take a moment to
-        # register the new run; watcher's poll_seconds covers that.
-
-    # Loop fell through (shouldn't happen because the failed branch returns).
-    return {
-        "final_status": "loop_exhausted",
-        "fix_attempts": attempts,
-        "watch": last_watch or {},
-    }
+        # Loop fell through (shouldn't happen because the failed branch returns).
+        return _ci_gate_result("loop_exhausted", attempts, last_watch)
+    except (ValueError, KeyError, TypeError, OSError, subprocess.TimeoutExpired) as error:
+        last_watch = dict(last_watch, status="error", summary=str(error)[:500])
+        return _ci_gate_result("error", attempts, last_watch)
 
 
 def _format_plan_for_approval(
