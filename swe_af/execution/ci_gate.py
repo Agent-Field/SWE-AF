@@ -314,7 +314,7 @@ def _check_run(row: dict) -> dict:
     workflow, event = _workflow(row)
     bucket, state = _check_bucket(row)
     return {"name": name, "workflow": workflow, "bucket": bucket, "state": state,
-            "identity": ("CheckRun", name, workflow, event),
+            "identity": ("CheckRun", row["id"]),
             "timestamp": _timestamp(row["startedAt"], nullable=True), "link": row["detailsUrl"]}
 
 
@@ -322,15 +322,15 @@ def _status_context(row: dict) -> dict:
     name = _text(row["context"])
     state = _text(row["state"])
     return {"name": name, "workflow": "", "bucket": _STATUS_BUCKETS[state], "state": state,
-            "identity": ("StatusContext", name), "timestamp": _timestamp(row["createdAt"]),
+            "identity": ("StatusContext", row["id"]), "timestamp": _timestamp(row["createdAt"]),
             "link": row["targetUrl"]}
 
 
 def _normalize_row(value: Any) -> dict:
     # No per-row headSha is requested or inferred. Validate every raw
-    # row before grouping reruns, including nullable workflow nesting.
-    # Distinct workflow/event identities remain separate; an absent
-    # selected field cannot silently supply a successful default.
+    # row before retaining distinct returned node identities, including
+    # nullable workflow nesting. An absent selected field cannot silently
+    # supply a successful default.
     row = _object(value)
     ident = _text(row["id"])
     normalizer = {"CheckRun": _check_run, "StatusContext": _status_context}[row["__typename"]]
@@ -566,9 +566,9 @@ def _watch_result(status: str, number: int, start: float, clock, **fields) -> CI
 async def _watch_loop(reader: _CommitChecks, sha: str, poll: float, sleeper, start: float) -> CIWatchResult:
     # When anchored to a SHA, require validated exact-Commit observations
     # before declaring a verdict. Every complete raw page is validated,
-    # then reruns are grouped by typed workflow/event identity and time.
-    # Unresolved recency and well-formed pagination movement continue
-    # within the original deadline; neither can become no_checks.
+    # then distinct returned node identities remain independently relevant.
+    # Well-formed pagination movement continues within the original
+    # deadline and cannot become no_checks.
     # Observed nonempty rows or positive counts permanently rule out an
     # empty-only outcome for this watcher target.
     status = "error"

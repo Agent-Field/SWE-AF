@@ -7,6 +7,7 @@ microseconds without invoking gh, sleeping, or hitting GitHub.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import copy
 import importlib
@@ -693,19 +694,27 @@ async def test_ci_head_repeated_instability_keeps_original_deadline():
 @pytest.mark.parametrize("kind", ["CheckRun", "StatusContext"])
 @pytest.mark.parametrize("latest_fails", [False, True])
 @pytest.mark.parametrize("reverse", [False, True])
-async def test_ci_head_latest_rerun_selected_after_raw_count_validation(kind, latest_fails, reverse):
+async def test_ci_head_distinct_node_ids_retain_failure_after_raw_count_validation(kind, latest_fails, reverse):
+    """Adversarial same-name contract double: distinct node IDs cannot supersede."""
     make = {"CheckRun": _check_run_row, "StatusContext": _status_context_row}[kind]
     old = make("old")
     new = make("new")
     field = {"CheckRun": "conclusion", "StatusContext": "state"}[kind]
     stamp = {"CheckRun": "startedAt", "StatusContext": "createdAt"}[kind]
+    link = {"CheckRun": "detailsUrl", "StatusContext": "targetUrl"}[kind]
+    base = {"CheckRun": "https://github.com/Agent-Field/SWE-AF/actions/runs/12345/job/", "StatusContext": "https://ci.example.test/build/"}[kind]
+    old[link], new[link] = base + "1", base + "2"
     old[field] = "SUCCESS" if latest_fails else "FAILURE"
     new[field] = "FAILURE" if latest_fails else "SUCCESS"
     new[stamp] = "2026-10-23T00:01:00Z"
     rows = [new, old] if reverse else [old, new]
     page = _commit_rollup_page(rows)
     result, _, _ = await _watch_commit_pages([page, page])
-    assert result.status == ("failed" if latest_fails else "passed")
+    assert result.status == "failed"
+    failed = new if latest_fails else old
+    assert len(result.failed_checks) == 1
+    assert result.failed_checks[0].details_url == failed[link]
+    assert result.failed_checks[0].logs_excerpt
 
 
 @pytest.mark.parametrize("separation", ["workflow", "event", "typed_collision"])
@@ -724,12 +733,14 @@ async def test_ci_head_other_workflow_event_and_type_remain_distinct(separation)
 
 
 @pytest.mark.parametrize("kind,stamp", [("CheckRun", None), ("CheckRun", "2026-10-23T04:00:00+04:00"), ("StatusContext", "2026-10-23T04:00:00+04:00")])
-async def test_ci_head_ambiguous_rerun_times_continue_until_timeout(kind, stamp):
+async def test_ci_head_independent_successful_nodes_need_no_recency_election(kind, stamp):
+    """Adversarial equal/null-time successes need no cross-ID recency election."""
     make, field = {"CheckRun": (_check_run_row, "startedAt"), "StatusContext": (_status_context_row, "createdAt")}[kind]
     rows = [make("old"), make("new", **{field: stamp})]
     result, _, clock = await _watch_commit_pages([_commit_rollup_page(rows)], repeat=True)
-    assert result.status == "timed_out"
-    assert clock.t == 4
+    assert result.status == "passed"
+    assert result.summary == "All 2 selected checks passed"
+    assert clock.sleeps == []
 
 
 async def test_ci_head_singleton_null_start_is_valid():
@@ -988,15 +999,19 @@ async def test_ci_head_foreign_log_url_is_not_fetched():
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-async def test_ci_head_reruns_are_selected_after_all_pages_regardless_of_order(reverse):
-    old = _check_run_row("old", conclusion="FAILURE")
-    new = _check_run_row("new", startedAt="2026-10-23T00:01:00Z")
+@pytest.mark.parametrize("kind", ["CheckRun", "StatusContext"])
+async def test_ci_head_distinct_node_failure_retained_after_all_pages_regardless_of_order(kind, reverse):
+    """Adversarial collisions span complete pages, followed by the provenance guard."""
+    make = {"CheckRun": _check_run_row, "StatusContext": _status_context_row}[kind]
+    field, stamp = {"CheckRun": ("conclusion", "startedAt"), "StatusContext": ("state", "createdAt")}[kind]
+    old, new = make("old", **{field: "FAILURE"}), make("new", **{stamp: "2026-10-23T00:01:00Z"})
     rows = [new, old] if reverse else [old, new]
-    pages = [_commit_rollup_page(rows[:1], counts=(2, 0), more=True), _commit_rollup_page(rows[1:], counts=(2, 0), cursor="cursor-2")]
-    result, runner, _ = await _watch_commit_pages(pages)
-    assert result.status == "passed"
+    counts = {"CheckRun": (2, 0), "StatusContext": (0, 2)}[kind]
+    pages = [_commit_rollup_page(rows[:1], counts=counts, more=True), _commit_rollup_page(rows[1:], counts=counts, cursor="cursor-2")]
+    result, runner, _ = await _watch_commit_pages(pages + [pages[0]])
+    assert result.status == "failed"
     assert runner.pages == []
-    assert len([cmd for cmd in runner.calls if cmd[:3] == ["gh", "api", "graphql"]]) == 2
+    assert len([cmd for cmd in runner.calls if cmd[:3] == ["gh", "api", "graphql"]]) == 3
 
 
 async def test_ci_head_group_tuple_components_cannot_collide_by_concatenation():
@@ -1010,7 +1025,7 @@ async def test_ci_head_group_tuple_components_cannot_collide_by_concatenation():
 
 
 @pytest.mark.parametrize("nesting", [{"workflowRun": None}, {"workflowRun": {"event": "push", "workflow": None}}, None])
-async def test_ci_head_nullable_workflow_nesting_supplies_empty_identity(nesting):
+async def test_ci_head_nullable_workflow_nesting_preserves_singleton_node(nesting):
     result, _, _ = await _watch_commit_pages([_commit_rollup_page([_check_run_row(checkSuite=nesting)])])
     assert result.status == "passed"
 
@@ -1058,6 +1073,133 @@ async def test_ci_head_default_subprocess_commands_receive_remaining_deadline_ti
     assert result.status == "passed"
     assert adapter.timeouts
     assert all(0 < timeout <= 4 for timeout in adapter.timeouts)
+
+
+@pytest.mark.parametrize("producer_ids,selected_run", [
+    pytest.param(({"app": "app-a", "workflow": "workflow-a", "run": "run-a", "job": "job-a"}, {"app": "app-b", "workflow": "workflow-b", "run": "run-b", "job": "job-b"}), {"event": "pull_request", "workflow": {"name": "CI"}}, id="adversarial-independent-apps"),
+    pytest.param(({"app": "app-a", "workflow": "workflow-a", "run": "run-a", "job": "job-a"}, {"app": "app-a", "workflow": "workflow-b", "run": "run-b", "job": "job-b"}), {"event": "pull_request", "workflow": {"name": "CI"}}, id="adversarial-different-workflows-same-display-name"),
+    pytest.param(({"app": "app-a", "workflow": "workflow-a", "run": "run-a", "job": "job-a"}, {"app": "app-a", "workflow": "workflow-a", "run": "run-b", "job": "job-b"}), {"event": "pull_request", "workflow": {"name": "CI"}}, id="adversarial-separate-runs-one-workflow"),
+    pytest.param(({"app": "app-a", "workflow": "workflow-a", "run": "run-a", "job": "job-a"}, {"app": "app-a", "workflow": "workflow-a", "run": "run-a", "job": "job-b"}), {"event": "pull_request", "workflow": {"name": "CI"}}, id="adversarial-same-app-workflow-run-independent-jobs"),
+    pytest.param(({"app": None, "workflow": None, "run": None, "job": "job-a"}, {"app": None, "workflow": None, "run": None, "job": "job-b"}), None, id="adversarial-null-app-external-checks"),
+    pytest.param(({"job": "job-a"}, {"job": "job-b"}), None, id="adversarial-absent-app-external-checks"),
+    pytest.param(({"app": "unknown", "job": "job-a"}, {"app": "unknown", "job": "job-b"}), None, id="adversarial-unknown-app-external-checks"),
+])
+async def test_ci_head_independent_producer_projections_retain_failure(producer_ids, selected_run):
+    """Adversarial producer IDs are metadata; only selected_run reaches the query projection."""
+    old = _check_run_row("producer-failure", conclusion="FAILURE", checkSuite={"workflowRun": selected_run})
+    new = _check_run_row("producer-success", startedAt="2026-10-23T00:01:00Z", checkSuite={"workflowRun": selected_run})
+    page = _commit_rollup_page([old, new])
+    result, _, _ = await _watch_commit_pages([page, page])
+    assert result.status == "failed"
+    assert result.failed_checks[0].details_url == old["detailsUrl"]
+    assert "contract failure" in result.failed_checks[0].logs_excerpt
+
+
+@pytest.mark.parametrize("kind", ["CheckRun", "StatusContext"])
+@pytest.mark.parametrize("pending_is_later", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_ci_head_distinct_pending_node_cannot_be_hidden_by_success(kind, pending_is_later, reverse):
+    """Adversarial same-name pending and successful nodes remain independent."""
+    make, stamp = {"CheckRun": (_check_run_row, "startedAt"), "StatusContext": (_status_context_row, "createdAt")}[kind]
+    old, new = make("old"), make("new", **{stamp: "2026-10-23T00:01:00Z"})
+    pending = new if pending_is_later else old
+    pending.update({"CheckRun": {"status": "IN_PROGRESS", "conclusion": None}, "StatusContext": {"state": "PENDING"}}[kind])
+    rows = [new, old] if reverse else [old, new]
+    result, _, clock = await _watch_commit_pages([_commit_rollup_page(rows)], repeat=True)
+    assert result.status == "timed_out"
+    assert clock.t == 4
+    assert clock.sleeps == [1, 1, 1, 1]
+
+
+@pytest.mark.parametrize("kind", ["CheckRun", "StatusContext"])
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_ci_head_both_same_name_failure_records_are_retained(kind, reverse):
+    """Adversarial same-name nodes retain both independent failure diagnostics."""
+    make, field, stamp, link = {"CheckRun": (_check_run_row, "conclusion", "startedAt", "detailsUrl"), "StatusContext": (_status_context_row, "state", "createdAt", "targetUrl")}[kind]
+    old, new = make("old", **{field: "FAILURE"}), make("new", **{field: "FAILURE", stamp: "2026-10-23T00:01:00Z"})
+    base = {"CheckRun": "https://github.com/Agent-Field/SWE-AF/actions/runs/12345/job/", "StatusContext": "https://ci.example.test/build/"}[kind]
+    old[link], new[link] = base + "1", base + "2"
+    rows = [new, old] if reverse else [old, new]
+    page = _commit_rollup_page(rows)
+    result, _, _ = await _watch_commit_pages([page, page])
+    assert result.status == "failed"
+    assert len(result.failed_checks) == 2
+    assert sorted(item.details_url for item in result.failed_checks) == sorted(row[link] for row in rows)
+
+
+@pytest.mark.parametrize("kind", ["CheckRun", "StatusContext"])
+@pytest.mark.parametrize("node_id", ["missing", None, "", " ", False, 7])
+@pytest.mark.parametrize("later_page", [False, True])
+async def test_ci_head_malformed_node_ids_are_errors_before_verdict_or_logs(kind, node_id, later_page):
+    make = {"CheckRun": _check_run_row, "StatusContext": _status_context_row}[kind]
+    row = make("invalid")
+    if node_id == "missing":
+        del row["id"]
+    else:
+        row["id"] = node_id
+    pages = [_commit_rollup_page([row])]
+    if later_page:
+        counts = {"CheckRun": (2, 0), "StatusContext": (0, 2)}[kind]
+        pages = [_commit_rollup_page([make("first")], counts=counts, more=True), _commit_rollup_page([row], counts=counts, cursor="cursor-2")]
+    result, runner, _ = await _watch_commit_pages(pages)
+    assert result.status == "error"
+    assert not any(cmd[:3] == ["gh", "run", "view"] for cmd in runner.calls)
+
+
+async def test_ci_head_status_duplicate_id_errors_despite_changing_counts():
+    first = _commit_rollup_page([_status_context_row()], counts=(0, 2), more=True)
+    second = _commit_rollup_page([_status_context_row()], counts=(0, 3), cursor="cursor-2")
+    result, _, _ = await _watch_commit_pages([first, second])
+    assert result.status == "error"
+
+
+async def test_ci_head_uv_current_attempt_actions_only_projection_passes():
+    """Reduced UV run 39934800263 attempt 2 job 120363374413 projection.
+
+    Attempt 1 job 120358827249 is absent. This Actions-only subset is not
+    the captured 65-node rollup, which fails because of CodSpeed.
+    detailsUrl null is a schema-supported fixture value, not a captured field.
+    """
+    current = _check_run_row("CR_kwDOKbIFZc8AAAAcBjdXTQ", name="all required jobs passed", startedAt="2026-10-23T10:20:12Z", detailsUrl=None)
+    result, _, _ = await _watch_commit_pages([_commit_rollup_page([current])])
+    assert result.status == "passed"
+    assert result.summary == "All 1 selected checks passed"
+
+
+async def test_ci_head_uv_historical_failure_co_present_is_not_superseded():
+    """Adversarial UV projection adds attempt 1 job 120358827249 to current attempt 2.
+
+    The historical GraphQL node ID is synthetic; REST only bound its job ID.
+    detailsUrl null is schema-supported and was not selected by the capture.
+    """
+    old = _check_run_row("contract-projection-job-120358827249", name="all required jobs passed", conclusion="FAILURE", startedAt="2026-10-23T10:08:42Z", detailsUrl=None)
+    current = _check_run_row("CR_kwDOKbIFZc8AAAAcBjdXTQ", name="all required jobs passed", startedAt="2026-10-23T10:20:12Z", detailsUrl=None)
+    page = _commit_rollup_page([old, current])
+    result, _, _ = await _watch_commit_pages([page, page])
+    assert result.status == "failed"
+    assert result.failed_checks[0].conclusion == "FAILURE"
+    assert result.failed_checks[0].details_url == ""
+
+
+async def test_ci_head_uv_projection_retains_external_codspeed_failure():
+    """Reduced two-node projection preserves the captured 65-node rollup's failure.
+
+    detailsUrl null is a schema-supported fixture value, not a captured field.
+    """
+    current = _check_run_row("CR_kwDOKbIFZc8AAAAcBjdXTQ", name="all required jobs passed", startedAt="2026-10-23T10:20:12Z", detailsUrl=None)
+    codspeed = _check_run_row("CR_kwDOKbIFZc8AAAAcBfHJ5g", name="CodSpeed Performance Analysis", conclusion="FAILURE", startedAt="2026-10-23T10:08:37Z", checkSuite={"workflowRun": None}, detailsUrl=None)
+    page = _commit_rollup_page([current, codspeed])
+    result, _, _ = await _watch_commit_pages([page, page])
+    assert result.status == "failed"
+    assert result.failed_checks[0].name == "CodSpeed Performance Analysis"
+
+
+async def test_ci_head_runner_cancellation_propagates_and_restores_environment():
+    with patch.dict(os.environ, {"GH_REPO": "outer/repo", "GH_HOST": "outer.example"}):
+        with pytest.raises(asyncio.CancelledError):
+            await _watch_commit_pages([asyncio.CancelledError()])
+        assert os.environ["GH_REPO"] == "outer/repo"
+        assert os.environ["GH_HOST"] == "outer.example"
 
 
 if __name__ == "__main__":
