@@ -318,7 +318,14 @@ async def _clone_repos(
 
 def _ci_watch_payload(value, pr_number: int) -> dict:
     if isinstance(value, dict) and (_ENVELOPE_KEYS - {"status"}).intersection(value):
-        value = _unwrap(value, "run_ci_watcher")
+        try:
+            value = _unwrap(value, "run_ci_watcher")
+        except FatalHarnessError:
+            raise
+        except RuntimeError as error:
+            if type(error) is not RuntimeError or str(value.get("status", "")).lower() not in ("failed", "error"):
+                raise
+            raise ValueError(str(error)) from error
     value = _ci._object(value)
     required = {"status", "pr_number", "elapsed_seconds", "failed_checks", "summary"}
     if not required.issubset(value):

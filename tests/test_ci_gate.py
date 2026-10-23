@@ -17,9 +17,16 @@ import subprocess
 import unittest
 from typing import Any
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
+from agentfield import Agent
+from agentfield.exceptions import (
+    AgentFieldClientError,
+    ExecutionCancelledError,
+    ExecutionFailedError,
+    ExecutionTimeoutError,
+)
 
 from swe_af.execution.ci_gate import (
     _classify,
@@ -31,6 +38,7 @@ from swe_af.execution.ci_gate import (
     watch_pr_checks,
 )
 from swe_af.execution.schemas import CIWatchResult
+from swe_af.execution.fatal_error import FatalHarnessError, is_fatal_error
 
 
 def _completed(stdout: str = "", stderr: str = "", returncode: int = 0):
@@ -543,11 +551,17 @@ class _CIGateDispatch:
             self.targets.append(arguments["head_sha"])
             self.watch_arguments.append(arguments)
             assert self.watches, "watch fixture queue exhausted"
-            return self.watches.pop(0)
+            result = self.watches.pop(0)
+            if isinstance(result, BaseException):
+                raise result
+            return result
         assert target.endswith(".run_ci_fixer"), target
         self.fixer_arguments.append(arguments)
         assert self.fixes, "fix fixture queue exhausted"
-        return self.fixes.pop(0)
+        result = self.fixes.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
     def note(self, *args, **kwargs):
         return None
@@ -894,15 +908,16 @@ async def test_ci_gate_fixer_explicit_false_gives_up():
     assert dispatch.targets == [COMMIT_A]
 
 
-@pytest.mark.parametrize("bad", [_watch_result_payload("passed", pr_number=43), _watch_result_payload("passed", elapsed_seconds=True), _watch_result_payload("passed", failed_checks="bad"), {"status": "success", "result": {"status": "unknown"}}, {"status": "failed", "execution_id": "failed", "result": _watch_result_payload()}])
+@pytest.mark.parametrize("bad", [_watch_result_payload("passed", pr_number=43), _watch_result_payload("passed", elapsed_seconds=True), _watch_result_payload("passed", failed_checks="bad"), {"status": "success", "result": {"status": "unknown"}}, {"status": "failed", "execution_id": "failed", "result": _watch_result_payload()},
+    pytest.param({"status": "failed", "execution_id": "watch-failure", "result": None, "error_message": "worker stopped"}, id="failed-sync-none"),
+    pytest.param({"status": "error", "execution_id": "watch-error", "result": None, "error_message": "worker stopped"}, id="error-sync-none")])
 async def test_ci_gate_invalid_watch_and_failed_envelopes_never_reach_fixer(bad):
-    try:
-        result, dispatch, _ = await _run_gate_fixture([bad])
-    except RuntimeError as exc:
-        assert "failed" in str(exc)
-        return
+    result, dispatch, _ = await _run_gate_fixture([bad])
     assert result["final_status"] == "error"
+    assert result["watch"]["status"] == "error"
+    assert result["fix_attempts"] == []
     assert dispatch.fixer_arguments == []
+    assert dispatch.targets == [COMMIT_A]
 
 
 @pytest.mark.parametrize("head", [COMMIT_C, COMMIT_A])
@@ -1200,6 +1215,162 @@ async def test_ci_head_runner_cancellation_propagates_and_restores_environment()
             await _watch_commit_pages([asyncio.CancelledError()])
         assert os.environ["GH_REPO"] == "outer/repo"
         assert os.environ["GH_HOST"] == "outer.example"
+
+
+@pytest.mark.parametrize("wrapped", [False, True], ids=["raw", "success-envelope"])
+async def test_ci_registered_watcher_consumes_valid_results(wrapped):
+    module = importlib.import_module("swe_af.reasoners.execution_agents")
+    arguments = {"repo_path": REPOSITORY_PATH, "pr_number": 42, "head_sha": COMMIT_A,
+                 "wait_seconds": 5, "poll_seconds": 1}
+    watch = CIWatchResult(status="passed", pr_number=42, summary="registered watcher")
+    body = AsyncMock(return_value=watch)
+    with patch.object(module, "watch_pr_checks", body), patch.object(module.router, "note"):
+        payload = await module.run_ci_watcher._original_func(**arguments)
+    body.assert_awaited_once_with(**arguments)
+    assert CIWatchResult.model_validate(payload, strict=True).model_dump() == watch.model_dump()
+    value = _successful_execution_envelope(payload) if wrapped else payload
+    result, dispatch, _ = await _run_gate_fixture([value])
+    assert result["final_status"] == "passed"
+    assert result["watch"] == payload
+    assert (result["fix_attempts"], dispatch.fixer_arguments, dispatch.targets) == ([], [], [COMMIT_A])
+    assert dispatch.watch_arguments == [arguments]
+
+
+async def test_ci_registered_watcher_converts_exception_to_error():
+    module = importlib.import_module("swe_af.reasoners.execution_agents")
+    arguments = {"repo_path": REPOSITORY_PATH, "pr_number": 42, "head_sha": COMMIT_A,
+                 "wait_seconds": 5, "poll_seconds": 1}
+    body = AsyncMock(side_effect=RuntimeError("watch body stopped"))
+    with patch.object(module, "watch_pr_checks", body), patch.object(module.router, "note"):
+        payload = await module.run_ci_watcher._original_func(**arguments)
+    body.assert_awaited_once_with(**arguments)
+    assert CIWatchResult.model_validate(payload, strict=True).status == "error"
+    assert "watch body stopped" in payload["summary"]
+    result, dispatch, _ = await _run_gate_fixture([payload])
+    assert (result["final_status"], result["watch"], result["fix_attempts"]) == ("error", payload, [])
+    assert (dispatch.targets, dispatch.fixer_arguments) == ([COMMIT_A], [])
+
+
+async def test_ci_registered_watcher_cancellation_propagates():
+    module = importlib.import_module("swe_af.reasoners.execution_agents")
+    arguments = {"repo_path": REPOSITORY_PATH, "pr_number": 42, "head_sha": COMMIT_A,
+                 "wait_seconds": 5, "poll_seconds": 1}
+    failure = asyncio.CancelledError("watch body cancelled")
+    body = AsyncMock(side_effect=failure)
+    with patch.object(module, "watch_pr_checks", body), patch.object(module.router, "note"):
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await module.run_ci_watcher._original_func(**arguments)
+    body.assert_awaited_once_with(**arguments)
+    assert caught.value is failure
+
+
+@pytest.mark.parametrize("status,inner,expected_status", [
+    pytest.param("success", _watch_result_payload("passed"), "passed", id="success-extraction"),
+    pytest.param("failed", None, "error", id="failed-sync-none"),
+    pytest.param("error", None, "error", id="error-sync-none"),
+])
+async def test_ci_sdk_sync_envelope_contract(status, inner, expected_status):
+    module = importlib.import_module("swe_af.app")
+    arguments = {"repo_path": REPOSITORY_PATH, "pr_number": 42, "head_sha": COMMIT_A,
+                 "wait_seconds": 5, "poll_seconds": 1}
+    response = {"status": status, "execution_id": "sdk-watch", "result": inner,
+                "error_message": "worker stopped"}
+    expected = response if inner is None else inner
+    execute = AsyncMock(return_value=response)
+    execute_async = AsyncMock(side_effect=AssertionError("async SDK execution forbidden"))
+    original = (module.app.agentfield_connected, module.app.async_config.enable_async_execution,
+                module.app.client.execute, module.app.client.execute_async)
+    with patch.object(module.app.client, "execute", execute), patch.object(module.app.client, "execute_async", execute_async):
+        with patch.object(module.app, "agentfield_connected", True), patch.object(module.app.async_config, "enable_async_execution", False):
+            value = await Agent.call(module.app, f"{module.NODE_ID}.run_ci_watcher", **arguments)
+    execute.assert_awaited_once_with(target=f"{module.NODE_ID}.run_ci_watcher", input_data=arguments, headers=ANY)
+    execute_async.assert_not_awaited()
+    assert value is expected
+    assert (module.app.agentfield_connected, module.app.async_config.enable_async_execution,
+            module.app.client.execute, module.app.client.execute_async) == original
+    result, dispatch, _ = await _run_gate_fixture([value])
+    assert (result["final_status"], result["watch"]["status"], result["fix_attempts"],
+            dispatch.fixer_arguments, dispatch.targets) == (expected_status, expected_status, [], [], [COMMIT_A])
+
+
+@pytest.mark.parametrize("response,error_type", [
+    pytest.param(asyncio.CancelledError("boundary control"), asyncio.CancelledError, id="direct-cancellation"),
+    pytest.param(ExecutionCancelledError("boundary control"), ExecutionCancelledError, id="sdk-cancellation"),
+    pytest.param(ExecutionFailedError("boundary control"), ExecutionFailedError, id="sdk-execution-failure"),
+    pytest.param(ExecutionTimeoutError("boundary control"), ExecutionTimeoutError, id="sdk-timeout"),
+    pytest.param(AgentFieldClientError("403 Forbidden: boundary control"), AgentFieldClientError, id="authorization"),
+    pytest.param(FatalHarnessError("boundary control"), FatalHarnessError, id="direct-fatal"),
+    pytest.param({"status": "cancelled", "execution_id": "cancelled-watch", "result": None, "error_message": "boundary control"}, RuntimeError, id="cancelled-envelope"),
+    pytest.param({"status": "timeout", "execution_id": "timed-out-watch", "result": None, "error_message": "boundary control"}, RuntimeError, id="timeout-envelope"),
+])
+async def test_ci_gate_boundary_propagates_control_failures(response, error_type):
+    dispatch = _CIGateDispatch([response], [])
+    with patch(__name__ + "._CIGateDispatch", return_value=dispatch), pytest.raises(error_type) as caught:
+        await _run_gate_fixture([])
+    assert type(caught.value) is error_type
+    assert isinstance(response, dict) or caught.value is response
+    assert str(caught.value).endswith("boundary control")
+    assert dispatch.targets == [COMMIT_A]
+    assert dispatch.fixer_arguments == []
+
+
+@pytest.mark.parametrize("status", ["failed", "error"])
+@pytest.mark.parametrize("diagnostic,regex_match", [
+    pytest.param("invalid api key", True, id="fatal-pattern"),
+    pytest.param("Fatal API error (non-retryable): worker stopped", False, id="serialized-marker"),
+])
+async def test_ci_gate_boundary_propagates_fatal_envelopes(status, diagnostic, regex_match):
+    response = {"status": status, "execution_id": "fatal-watch", "result": None, "error_message": diagnostic}
+    dispatch = _CIGateDispatch([response], [])
+    with patch(__name__ + "._CIGateDispatch", return_value=dispatch), pytest.raises(FatalHarnessError) as caught:
+        await _run_gate_fixture([])
+    assert is_fatal_error(diagnostic) is regex_match
+    assert caught.value.original_message == diagnostic
+    assert dispatch.targets == [COMMIT_A]
+    assert dispatch.fixer_arguments == []
+
+
+@pytest.mark.parametrize("response,error_type,diagnostic", [
+    pytest.param(FatalHarnessError("fixer stopped"), FatalHarnessError, "fixer stopped", id="direct-fatal"),
+    pytest.param({"status": "failed", "execution_id": "fatal-fix", "result": None, "error_message": "invalid api key"}, FatalHarnessError, "invalid api key", id="fatal-pattern"),
+    pytest.param({"status": "error", "execution_id": "fatal-fix", "result": None, "error_message": "Fatal API error (non-retryable): worker stopped"}, FatalHarnessError, "Fatal API error (non-retryable): worker stopped", id="serialized-marker"),
+    pytest.param({"status": "failed", "execution_id": "failed-fix", "result": None, "error_message": "worker stopped"}, RuntimeError, "worker stopped", id="ordinary-failed-envelope"),
+])
+async def test_ci_gate_boundary_preserves_fixer_failures(response, error_type, diagnostic):
+    dispatch = _CIGateDispatch([_watch_result_payload()], [response])
+    with patch(__name__ + "._CIGateDispatch", return_value=dispatch), pytest.raises(error_type) as caught:
+        await _run_gate_fixture([])
+    assert type(caught.value) is error_type
+    assert isinstance(response, dict) or caught.value is response
+    assert str(caught.value).endswith(diagnostic)
+    assert dispatch.targets == [COMMIT_A]
+    assert len(dispatch.fixer_arguments) == 1
+    assert dispatch.fixer_arguments[0]["failed_checks"] == _watch_result_payload()["failed_checks"]
+
+
+@pytest.mark.parametrize("origin,failure", [
+    pytest.param("call", RuntimeError("run_ci_watcher failed (status=failed): programming sentinel"), id="call-runtime"),
+    pytest.param("call", NotImplementedError("call subclass sentinel"), id="call-subclass"),
+    pytest.param("validation", RuntimeError("validation programming sentinel"), id="validation-runtime"),
+    pytest.param("validation", NotImplementedError("validation subclass sentinel"), id="validation-subclass"),
+    pytest.param("unwrap", NotImplementedError("decoder subclass sentinel"), id="decoder-subclass"),
+])
+async def test_ci_gate_boundary_runtime_error_outside_unwrap_propagates(origin, failure):
+    payload = failure if origin == "call" else _successful_execution_envelope(_watch_result_payload("passed"))
+    if origin == "unwrap":
+        payload["status"] = "failed"
+    dispatch = _CIGateDispatch([payload], [])
+    with patch(__name__ + "._CIGateDispatch", return_value=dispatch):
+        if origin == "call":
+            with pytest.raises(type(failure)) as caught:
+                await _run_gate_fixture([])
+        else:
+            target = "_unwrap" if origin == "unwrap" else "CIWatchResult.model_validate"
+            with patch("swe_af.app." + target, side_effect=failure), pytest.raises(type(failure)) as caught:
+                await _run_gate_fixture([])
+    assert caught.value is failure
+    assert dispatch.targets == [COMMIT_A]
+    assert dispatch.fixer_arguments == []
 
 
 if __name__ == "__main__":
