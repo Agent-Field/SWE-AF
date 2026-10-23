@@ -114,6 +114,20 @@ class TestOpenCodeProviders:
         assert "moonshotai/kimi-k2.6" in models
         assert "deepseek/deepseek-v4-flash-0731" in models
 
+    def test_cheaperinference_provider_is_openai_compatible(self, opencode_config: dict) -> None:
+        cheaperinference = opencode_config["provider"]["cheaperinference"]
+        assert cheaperinference["npm"] == "@ai-sdk/openai-compatible"
+        assert cheaperinference["options"]["baseURL"] == "https://api.cheaperinference.com/v1"
+        assert cheaperinference["options"]["apiKey"] == "{env:CHEAPERINFERENCE_API_KEY}"
+
+    def test_cheaperinference_declares_models(self, opencode_config: dict) -> None:
+        """openai-compatible providers are not in models.dev, so models must be
+        listed explicitly or OpenCode cannot resolve `-m cheaperinference/<id>`."""
+        models = opencode_config["provider"]["cheaperinference"]["models"]
+        assert models, "cheaperinference provider must declare at least one model"
+        # Cheaper Inference serves bare model ids (one level).
+        assert "gpt-5.4-mini" in models
+
 
 def test_docker_requirements_pin_cryptography_below_sigill_version() -> None:
     """Docker image should avoid cryptography 48 SIGILL on Linux/aarch64."""

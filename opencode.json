@@ -269,6 +269,34 @@
           "name": "GLM-5.2"
         }
       }
+    },
+    "cheaperinference": {
+      "name": "Cheaper Inference",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "{env:CHEAPERINFERENCE_API_KEY}",
+        "baseURL": "https://api.cheaperinference.com/v1"
+      },
+      "models": {
+        "gpt-5.4-mini": {
+          "name": "GPT-5.4 Mini"
+        },
+        "gpt-5.4": {
+          "name": "GPT-5.4"
+        },
+        "claude-sonnet-5": {
+          "name": "Claude Sonnet 5"
+        },
+        "gemini-3.8-flash": {
+          "name": "Gemini 3.8 Flash"
+        },
+        "deepseek-v4-flash": {
+          "name": "DeepSeek V4 Flash"
+        },
+        "glm-5.3": {
+          "name": "GLM-5.3"
+        }
+      }
     }
   }
 }
