@@ -23,6 +23,7 @@ from swe_af.execution.schemas import (
     LevelResult,
     ReplanAction,
     ReplanDecision,
+    SplitIssueSpec,
     WorkspaceManifest,
     ensure_str_list,
 )
@@ -953,6 +954,7 @@ async def _execute_single_issue(
                 config=config,
                 note_fn=note_fn,
                 memory_fn=memory_fn,
+                advisor_round=advisor_round,
             )
         elif execute_fn is not None:
             result = await _run_execute_fn(
@@ -964,10 +966,12 @@ async def _execute_single_issue(
 
         last_result = result
 
-        # Success — return with any accumulated adaptations/debt
+        # Success — return with any accumulated adaptations/debt.  Keep the
+        # debt the coding loop recorded (review findings) and add the advisor's:
+        # overwriting here is what emptied the debt register in production.
         if result.outcome in (IssueOutcome.COMPLETED, IssueOutcome.COMPLETED_WITH_DEBT):
             result.adaptations = adaptations
-            result.debt_items = debt_items
+            result.debt_items = [*result.debt_items, *debt_items]
             # ensure_str_list: attribute assignment bypasses Pydantic, so a
             # bare-string criterion from an LLM-sourced issue would poison the
             # checkpoint here and only explode on the next DAGState validation.
@@ -1105,6 +1109,24 @@ async def _execute_single_issue(
                     "severity": advisor_decision.get("debt_severity", "medium"),
                 })
 
+            # Every completed_with_debt carries at least one item: keep the
+            # coding loop's review-derived debt and fall back to the failure
+            # when neither the advisor nor the loop itemised anything.
+            accepted_debt = [*result.debt_items, *debt_items]
+            if not accepted_debt:
+                accepted_debt = [{
+                    "type": "advisor_accepted_failure",
+                    "issue_name": issue_name,
+                    "severity": advisor_decision.get("debt_severity", "medium"),
+                    "title": "Issue accepted with unresolved failure",
+                    "description": (
+                        result.error_message
+                        or result.result_summary
+                        or advisor_decision.get("summary", "")
+                    ),
+                    "justification": advisor_decision.get("rationale", ""),
+                }]
+
             return IssueResult(
                 issue_name=issue_name,
                 outcome=IssueOutcome.COMPLETED_WITH_DEBT,
@@ -1114,7 +1136,7 @@ async def _execute_single_issue(
                 attempts=result.attempts,
                 advisor_invocations=advisor_round + 1,
                 adaptations=adaptations,
-                debt_items=debt_items,
+                debt_items=accepted_debt,
                 final_acceptance_criteria=ensure_str_list(
                     current_issue.get("acceptance_criteria", [])
                 ),
@@ -1123,7 +1145,6 @@ async def _execute_single_issue(
 
         elif action == AdvisorAction.SPLIT.value:
             # Break into sub-issues — handled by the DAG split gate
-            from swe_af.execution.schemas import SplitIssueSpec
             sub_issues = [
                 SplitIssueSpec(**s) for s in advisor_decision.get("sub_issues", [])
             ]
@@ -1164,7 +1185,7 @@ async def _execute_single_issue(
     if last_result is not None:
         last_result.advisor_invocations = min(advisor_round + 1, max_advisor)
         last_result.adaptations = adaptations
-        last_result.debt_items = debt_items
+        last_result.debt_items = [*last_result.debt_items, *debt_items]
         return last_result
 
     return IssueResult(
@@ -1434,6 +1455,30 @@ async def _invoke_replanner_direct(
     """Invoke the replanner directly (backward compat, no call_fn)."""
     from swe_af.execution._replanner_compat import invoke_replanner
     return await invoke_replanner(dag_state, unrecoverable, config, note_fn)
+
+
+def _split_child_issue_dicts(
+    split_request: list[SplitIssueSpec],
+    parent_issue: dict,
+    parent_name: str,
+) -> list[dict]:
+    """Build issue dicts for an advisor split, inheriting the parent's guidance.
+
+    The advisor's split specs carry only what it wrote. The parent's routing and
+    proportionality guidance (``needs_deeper_qa``, ``needs_new_tests``,
+    ``estimated_scope``, ``testing_guidance``, ``review_focus``, ...) still
+    applies to its children, so a child that omits guidance inherits it. A child
+    that states its own guidance wins.
+    """
+    parent_guidance = parent_issue.get("guidance") or {}
+    children: list[dict] = []
+    for spec in split_request:
+        child = spec.model_dump()
+        child["parent_issue_name"] = parent_name
+        if not child.get("guidance") and parent_guidance:
+            child["guidance"] = dict(parent_guidance)
+        children.append(child)
+    return children
 
 
 async def _write_issue_files_for_replan(
@@ -1785,11 +1830,12 @@ async def run_dag(
         if split_results and call_fn:
             for sr in split_results:
                 # Build a synthetic replan from the split specs
-                new_issues = []
-                for sub in sr.split_request:
-                    sub_dict = sub.model_dump()
-                    sub_dict["parent_issue_name"] = sr.issue_name
-                    new_issues.append(sub_dict)
+                parent_issue = next(
+                    (i for i in dag_state.all_issues if i["name"] == sr.issue_name), {}
+                )
+                new_issues = _split_child_issue_dicts(
+                    sr.split_request or [], parent_issue, sr.issue_name
+                )
 
                 split_decision = ReplanDecision(
                     action=ReplanAction.MODIFY_DAG,

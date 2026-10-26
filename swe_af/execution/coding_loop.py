@@ -44,20 +44,32 @@ async def _call_with_timeout(coro, timeout: int = 2700, label: str = ""):
 # ---------------------------------------------------------------------------
 
 
-def _iteration_state_path(artifacts_dir: str, issue_name: str, build_id: str = "") -> str:
+def _iteration_state_key(issue_name: str, advisor_round: int = 0) -> str:
+    """Checkpoint key for one coding-loop window.
+
+    Each advisor round runs its own coding loop, so its iteration counter must
+    start fresh. Keying the checkpoint per round keeps crash-resume inside a
+    round working while stopping a RETRY from resuming an exhausted window
+    (which would run zero coder iterations and still report a completion).
+    Round 0 keeps the bare issue name so pre-existing checkpoints still resume.
+    """
+    return f"{issue_name}.r{advisor_round}" if advisor_round else issue_name
+
+
+def _iteration_state_path(artifacts_dir: str, state_key: str, build_id: str = "") -> str:
     if not artifacts_dir:
         return ""
     if build_id:
         # Scope iteration checkpoints by build_id so parallel/sequential builds
         # against the same repo do not resume stale state from prior runs.
         return os.path.join(
-            artifacts_dir, "execution", "iterations", build_id, f"{issue_name}.json",
+            artifacts_dir, "execution", "iterations", build_id, f"{state_key}.json",
         )
-    return os.path.join(artifacts_dir, "execution", "iterations", f"{issue_name}.json")
+    return os.path.join(artifacts_dir, "execution", "iterations", f"{state_key}.json")
 
 
-def _save_iteration_state(artifacts_dir: str, issue_name: str, state: dict, build_id: str = "") -> None:
-    path = _iteration_state_path(artifacts_dir, issue_name, build_id=build_id)
+def _save_iteration_state(artifacts_dir: str, state_key: str, state: dict, build_id: str = "") -> None:
+    path = _iteration_state_path(artifacts_dir, state_key, build_id=build_id)
     if not path:
         return
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -65,8 +77,8 @@ def _save_iteration_state(artifacts_dir: str, issue_name: str, state: dict, buil
         json.dump(state, f, indent=2, default=str)
 
 
-def _load_iteration_state(artifacts_dir: str, issue_name: str, build_id: str = "") -> dict | None:
-    path = _iteration_state_path(artifacts_dir, issue_name, build_id=build_id)
+def _load_iteration_state(artifacts_dir: str, state_key: str, build_id: str = "") -> dict | None:
+    path = _iteration_state_path(artifacts_dir, state_key, build_id=build_id)
     if not path or not os.path.exists(path):
         return None
     with open(path, "r") as f:
@@ -263,20 +275,97 @@ async def _write_memory_on_failure(
 # ---------------------------------------------------------------------------
 
 
-def _detect_stuck_loop(iteration_history: list[dict], window: int = 3) -> bool:
-    """Return True if the last ``window`` iterations are all non-blocking "fix" cycles.
+def _review_findings_key(review_result: dict | None) -> str:
+    """Stable fingerprint of a review's blocking findings.
 
-    This catches the default-path failure mode where the reviewer repeatedly
-    returns approved=False / blocking=False with similar feedback, causing the
-    coder to re-attempt the same work without converging.
+    Stuck detection needs to know whether consecutive fix iterations are still
+    fighting the *same* finding.  The reviewer itemises findings in
+    ``debt_items``; when it itemises nothing, the summary is the only signal.
+    """
+    if not review_result:
+        return ""
+    titles = sorted({
+        str(finding.get("title", "")).strip().lower()
+        for finding in review_result.get("debt_items") or []
+        if isinstance(finding, dict)
+        and finding.get("severity") == "blocking"
+        and str(finding.get("title", "")).strip()
+    })
+    if titles:
+        return " | ".join(titles)
+    return " ".join(str(review_result.get("summary", "")).split()).lower()
+
+
+def _debt_items_from_review(
+    review_result: dict | None,
+    issue_name: str,
+    iteration: int,
+    reason: str,
+) -> list[dict]:
+    """Build debt items from the last review's blocking and should-fix findings.
+
+    ``COMPLETED_WITH_DEBT`` must always record at least one item, otherwise the
+    debt register silently drops reviewer-confirmed findings (the production
+    failure that produced ``debt_items: []`` for a blocked issue).  Itemised
+    findings are carried as-is; when the reviewer itemised nothing, the review
+    summary becomes the item.
+    """
+    items: list[dict] = []
+    for finding in (review_result or {}).get("debt_items") or []:
+        if not isinstance(finding, dict):
+            continue
+        severity = str(finding.get("severity", "")).lower()
+        if severity not in ("blocking", "should_fix"):
+            continue
+        items.append({
+            "type": "review_finding",
+            "issue_name": issue_name,
+            "severity": severity,
+            "title": finding.get("title", ""),
+            "description": finding.get("description", ""),
+            "file_path": finding.get("file_path", ""),
+            "iteration": iteration,
+            "reason": reason,
+        })
+    if items:
+        return items
+
+    review = review_result or {}
+    return [{
+        "type": "unresolved_review_feedback",
+        "issue_name": issue_name,
+        "severity": "blocking" if review.get("blocking") else "should_fix",
+        "title": "Reviewer feedback not resolved",
+        "description": str(review.get("summary", "")).strip(),
+        "file_path": "",
+        "iteration": iteration,
+        "reason": reason,
+    }]
+
+
+def _detect_stuck_loop(iteration_history: list[dict], window: int = 3) -> bool:
+    """Return True if the last ``window`` iterations made no review progress.
+
+    Two failure modes count as stuck:
+
+    - consecutive non-blocking "fix" cycles: the reviewer keeps asking for
+      polish without converging (the original default-path failure mode), and
+    - consecutive blocking "fix" cycles on the *same* findings: the coder has
+      had three passes at one blocking finding and did not fix it, so another
+      pass is not going to help and the loop should escalate.
     """
     if len(iteration_history) < window:
         return False
     recent = iteration_history[-window:]
-    return all(
-        entry.get("action") == "fix" and not entry.get("review_blocking", False)
-        for entry in recent
-    )
+    if not all(entry.get("action") == "fix" for entry in recent):
+        return False
+    blocking = [bool(entry.get("review_blocking", False)) for entry in recent]
+    if not any(blocking):
+        return True
+    if not all(blocking):
+        return False
+    findings = {entry.get("review_findings", "") for entry in recent}
+    return len(findings) == 1 and "" not in findings
 
 
 # ---------------------------------------------------------------------------
@@ -343,15 +432,18 @@ async def _run_default_path(
             tags=["coding_loop", "feedback", issue_name],
         )
 
-    # Reviewer is sole gatekeeper on default path
+    # Reviewer is sole gatekeeper on default path.  "blocking" means "must be
+    # fixed before merge" (the reviewer's own severity definition), not "stop
+    # now": it becomes a fix iteration, exactly like the flagged path's
+    # synthesizer FIX.  Terminal outcomes stay with loops that cannot converge
+    # (three passes on the same blocking finding, or exhausted iterations),
+    # which is where escalation to the issue advisor belongs.
     approved = review_result.get("approved", False)
     blocking = review_result.get("blocking", False)
     summary = review_result.get("summary", "")
 
     if approved and not blocking:
         action = "approve"
-    elif blocking:
-        action = "block"
     else:
         action = "fix"
 
@@ -521,6 +613,7 @@ async def run_coding_loop(
     config: ExecutionConfig,
     note_fn: Callable | None = None,
     memory_fn: Callable | None = None,
+    advisor_round: int = 0,
 ) -> IssueResult:
     """Run the coding loop for a single issue.
 
@@ -529,6 +622,11 @@ async def run_coding_loop(
         coder → reviewer (2 LLM calls). Reviewer is sole gatekeeper.
       - Flagged (guidance.needs_deeper_qa == true):
         coder → QA + reviewer → synthesizer (4 LLM calls).
+
+    ``advisor_round`` is the issue advisor's round index (0 for the first
+    attempt). Each round gets a full iteration window and its own checkpoint
+    key, so an advisor RETRY runs coder iterations instead of resuming an
+    exhausted counter.
 
     Each iteration:
       1. Read shared memory context
@@ -545,6 +643,9 @@ async def run_coding_loop(
     max_iterations = config.max_coding_iterations
     timeout = config.agent_timeout_seconds
     permission_mode = config.permission_mode
+    # Each advisor round is a separate window: its own iteration budget and its
+    # own checkpoint key, so a RETRY actually runs coder iterations.
+    state_key = _iteration_state_key(issue_name, advisor_round)
 
     # Multi-repo context (None for single-repo builds)
     target_repo = issue.get("target_repo", "")
@@ -584,10 +685,12 @@ async def run_coding_loop(
     iteration_history: list[dict] = []
     files_changed: list[str] = []
     start_iteration = 1
+    iterations_run = 0
+    review_result: dict | None = None
     is_first_success = len(dag_state.completed_issues) == 0
 
     # Resume from iteration checkpoint if available
-    existing_state = _load_iteration_state(dag_state.artifacts_dir, issue_name, build_id=dag_state.build_id)
+    existing_state = _load_iteration_state(dag_state.artifacts_dir, state_key, build_id=dag_state.build_id)
     if existing_state:
         start_iteration = existing_state.get("iteration", 0) + 1
         feedback = existing_state.get("feedback", "")
@@ -600,6 +703,7 @@ async def run_coding_loop(
             )
 
     for iteration in range(start_iteration, max_iterations + 1):
+        iterations_run += 1
         iteration_id = str(uuid.uuid4())[:8]
 
         if note_fn:
@@ -717,6 +821,7 @@ async def run_coding_loop(
             "qa_passed": qa_result.get("passed", None) if qa_result else None,
             "review_approved": review_result.get("approved", False) if review_result else False,
             "review_blocking": review_result.get("blocking", False) if review_result else False,
+            "review_findings": _review_findings_key(review_result),
             "path": "flagged" if needs_deeper_qa else "default",
         })
 
@@ -727,7 +832,7 @@ async def run_coding_loop(
             )
 
         # Save iteration-level checkpoint
-        _save_iteration_state(dag_state.artifacts_dir, issue_name, {
+        _save_iteration_state(dag_state.artifacts_dir, state_key, {
             "iteration": iteration,
             "feedback": summary,
             "files_changed": files_changed,
@@ -781,9 +886,24 @@ async def run_coding_loop(
                 iteration_history=iteration_history,
             )
 
-        # action == "fix" — build rich feedback for the coder
+        # action == "fix" — build rich feedback for the coder.  Blocking
+        # findings come first: they are what must change before merge.
         if action == "fix":
-            feedback_parts = [summary]
+            feedback_parts: list[str] = []
+            if review_result:
+                debt = review_result.get("debt_items", [])
+                blocking_debt = [
+                    d for d in debt
+                    if isinstance(d, dict) and d.get("severity") == "blocking"
+                ]
+                if blocking_debt:
+                    feedback_parts.append("### Blocking Review Issues (fix before merge)")
+                    for d in blocking_debt:
+                        feedback_parts.append(
+                            f"- [{d.get('severity')}] {d.get('title', '?')}: {d.get('description', '')}"
+                        )
+                    feedback_parts.append("")
+            feedback_parts.append(summary)
             if qa_result:
                 test_failures = qa_result.get("test_failures", [])
                 if test_failures:
@@ -792,13 +912,6 @@ async def run_coding_loop(
                         feedback_parts.append(
                             f"- `{f.get('test_name', '?')}` in `{f.get('file', '?')}`: {f.get('error', '')}"
                         )
-            if review_result:
-                debt = review_result.get("debt_items", [])
-                blocking_debt = [d for d in debt if d.get("severity") == "blocking"]
-                if blocking_debt:
-                    feedback_parts.append("\n### Blocking Review Issues")
-                    for d in blocking_debt:
-                        feedback_parts.append(f"- [{d.get('severity')}] {d.get('title', '?')}: {d.get('description', '')}")
             feedback = "\n".join(feedback_parts)
         else:
             feedback = summary
@@ -809,23 +922,31 @@ async def run_coding_loop(
             stuck = _detect_stuck_loop(iteration_history)
 
         if stuck:
-            last_blocking = review_result.get("blocking", False) if review_result else False
+            last_blocking = bool(iteration_history[-1].get("review_blocking", False))
             if not last_blocking and files_changed:
                 # Non-blocking stuck loop with code changes → accept with debt
+                debt_items = _debt_items_from_review(
+                    review_result, issue_name, iteration, reason="stuck_loop_non_blocking",
+                )
                 if note_fn:
                     note_fn(
                         f"Coding loop STUCK (non-blocking): {issue_name} — "
-                        f"accepting with debt after {iteration} iterations",
+                        f"accepting with debt after {iteration} iterations "
+                        f"({len(debt_items)} debt item(s))",
                         tags=["coding_loop", "stuck", "accept_debt", issue_name],
                     )
                 return IssueResult(
                     issue_name=issue_name,
                     outcome=IssueOutcome.COMPLETED_WITH_DEBT,
-                    result_summary=f"Accepted with debt (stuck loop, non-blocking): {summary}",
+                    result_summary=(
+                        f"Accepted with debt (stuck loop, non-blocking): {summary} "
+                        f"[{len(debt_items)} debt item(s)]"
+                    ),
                     files_changed=files_changed,
                     branch_name=branch_name,
                     attempts=iteration,
                     iteration_history=iteration_history,
+                    debt_items=debt_items,
                 )
             else:
                 if note_fn:
@@ -846,37 +967,71 @@ async def run_coding_loop(
                     iteration_history=iteration_history,
                 )
 
-    # Loop exhausted without approval — check if we can accept with debt
-    last_review = review_result if 'review_result' in dir() else None
-    last_blocking = (last_review.get("blocking", False) if last_review else False)
+    # Loop exhausted without approval — check if we can accept with debt.
+    # `review_result` holds the last review of this window (None if the loop body
+    # never ran); `last_blocking` is derived from the recorded history so a
+    # missing review can never be read as a non-blocking one.
+    last_review = review_result
+    last_entry = iteration_history[-1] if iteration_history else None
+    last_blocking = bool(last_entry.get("review_blocking", False)) if last_entry else False
+    last_iteration = int(last_entry.get("iteration", max_iterations)) if last_entry else 0
+
+    if iterations_run == 0:
+        # A window that never ran an iteration cannot be a completion: this is
+        # the shape that reported a blocked issue as "accepted with debt" with
+        # an empty debt list.  Fail it so the advisor sees a real failure.
+        if note_fn:
+            note_fn(
+                f"Coding loop ran zero iterations: {issue_name}",
+                tags=["coding_loop", "exhausted", "zero_iterations", issue_name],
+            )
+        return IssueResult(
+            issue_name=issue_name,
+            outcome=IssueOutcome.FAILED_UNRECOVERABLE,
+            error_message=(
+                f"Coding loop ran zero iterations for {issue_name}: the iteration "
+                f"window was already exhausted when the loop started"
+            ),
+            files_changed=files_changed,
+            branch_name=branch_name,
+            attempts=0,
+            iteration_history=iteration_history,
+        )
 
     if not last_blocking and files_changed:
         # Reviewer was never blocking and coder produced changes — accept with debt
         # rather than failing entirely.  This prevents trivial tasks from stalling
-        # the whole DAG when the reviewer keeps requesting minor polish.
+        # the whole DAG when the reviewer keeps requesting minor polish.  The
+        # review's blocking/should-fix findings become recorded debt.
+        debt_items = _debt_items_from_review(
+            last_review, issue_name, last_iteration, reason="exhausted_non_blocking",
+        )
         if note_fn:
             note_fn(
                 f"Coding loop exhausted (non-blocking): {issue_name} — "
-                f"accepting with debt after {max_iterations} iterations",
+                f"accepting with debt after {last_iteration} iterations "
+                f"({len(debt_items)} debt item(s))",
                 tags=["coding_loop", "exhausted", "accept_debt", issue_name],
             )
         return IssueResult(
             issue_name=issue_name,
             outcome=IssueOutcome.COMPLETED_WITH_DEBT,
             result_summary=(
-                f"Accepted with debt after {max_iterations} iterations "
-                f"(reviewer non-blocking, code changes present)"
+                f"Accepted with debt after {last_iteration} iterations "
+                f"(reviewer non-blocking, code changes present, "
+                f"{len(debt_items)} debt item(s))"
             ),
             files_changed=files_changed,
             branch_name=branch_name,
-            attempts=max_iterations,
+            attempts=last_iteration,
             iteration_history=iteration_history,
+            debt_items=debt_items,
         )
 
     # Truly unrecoverable — reviewer was blocking or no code was produced
     if note_fn:
         note_fn(
-            f"Coding loop exhausted: {issue_name} after {max_iterations} iterations",
+            f"Coding loop exhausted: {issue_name} after {last_iteration} iterations",
             tags=["coding_loop", "exhausted", issue_name],
         )
 
@@ -887,9 +1042,9 @@ async def run_coding_loop(
     return IssueResult(
         issue_name=issue_name,
         outcome=IssueOutcome.FAILED_UNRECOVERABLE,
-        error_message=f"Coding loop exhausted after {max_iterations} iterations without approval",
+        error_message=f"Coding loop exhausted after {last_iteration} iterations without approval",
         files_changed=files_changed,
         branch_name=branch_name,
-        attempts=max_iterations,
+        attempts=last_iteration,
         iteration_history=iteration_history,
     )

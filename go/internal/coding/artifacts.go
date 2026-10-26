@@ -15,25 +15,37 @@ import (
 // JSON shapes are reproduced exactly so a build's on-disk layout is identical to
 // the Python node's (and mid-issue resume reads the same files).
 
+// iterationStateKey ports _iteration_state_key: the checkpoint key for one
+// coding-loop window. Each advisor round runs its own loop, so its iteration
+// counter must start fresh; keying per round keeps crash-resume inside a round
+// working while stopping a RETRY from resuming an exhausted window. Round 0
+// keeps the bare issue name so pre-existing checkpoints still resume.
+func iterationStateKey(issueName string, advisorRound int) string {
+	if advisorRound != 0 {
+		return fmt.Sprintf("%s.r%d", issueName, advisorRound)
+	}
+	return issueName
+}
+
 // iterationStatePath ports _iteration_state_path.
 //
 // With a build_id, iteration checkpoints are scoped by build_id so parallel /
 // sequential builds against the same repo do not resume stale state from prior
-// runs: <artifacts>/execution/iterations/<build_id>/<issue>.json. Without one:
-// <artifacts>/execution/iterations/<issue>.json. Empty artifactsDir -> "".
-func iterationStatePath(artifactsDir, issueName, buildID string) string {
+// runs: <artifacts>/execution/iterations/<build_id>/<state_key>.json. Without
+// one: <artifacts>/execution/iterations/<state_key>.json. Empty artifactsDir -> "".
+func iterationStatePath(artifactsDir, stateKey, buildID string) string {
 	if artifactsDir == "" {
 		return ""
 	}
 	if buildID != "" {
-		return filepath.Join(artifactsDir, "execution", "iterations", buildID, issueName+".json")
+		return filepath.Join(artifactsDir, "execution", "iterations", buildID, stateKey+".json")
 	}
-	return filepath.Join(artifactsDir, "execution", "iterations", issueName+".json")
+	return filepath.Join(artifactsDir, "execution", "iterations", stateKey+".json")
 }
 
 // saveIterationState ports _save_iteration_state. Writes state as indent=2 JSON.
-func saveIterationState(artifactsDir, issueName string, state map[string]any, buildID string) {
-	path := iterationStatePath(artifactsDir, issueName, buildID)
+func saveIterationState(artifactsDir, stateKey string, state map[string]any, buildID string) {
+	path := iterationStatePath(artifactsDir, stateKey, buildID)
 	if path == "" {
 		return
 	}
@@ -49,8 +61,8 @@ func saveIterationState(artifactsDir, issueName string, state map[string]any, bu
 
 // loadIterationState ports _load_iteration_state. Returns nil when the file is
 // absent, when artifactsDir is empty, or on read/parse error.
-func loadIterationState(artifactsDir, issueName, buildID string) map[string]any {
-	path := iterationStatePath(artifactsDir, issueName, buildID)
+func loadIterationState(artifactsDir, stateKey, buildID string) map[string]any {
+	path := iterationStatePath(artifactsDir, stateKey, buildID)
 	if path == "" {
 		return nil
 	}

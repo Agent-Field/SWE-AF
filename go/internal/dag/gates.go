@@ -53,7 +53,7 @@ func executeSingleIssue(
 		var err error
 		switch {
 		case executeFn == nil && callFn != nil:
-			result, err = coding.RunCodingLoop(ctx, currentIssue, dagState, callFn, nodeID, cfg, note, memoryFn)
+			result, err = coding.RunCodingLoop(ctx, currentIssue, dagState, callFn, nodeID, cfg, note, memoryFn, advisorRound)
 		case executeFn != nil:
 			result, err = runExecuteFn(ctx, executeFn, currentIssue, dagState, cfg, callFn, nodeID, issueName)
 		default:
@@ -66,10 +66,12 @@ func executeSingleIssue(
 		lastResult = result
 		haveLast = true
 
-		// Success — return with any accumulated adaptations/debt.
+		// Success — return with any accumulated adaptations/debt. Keep the debt
+		// the coding loop recorded (review findings) and add the advisor's:
+		// overwriting here is what emptied the debt register in production.
 		if result.Outcome == schemas.IssueOutcomeCompleted || result.Outcome == schemas.IssueOutcomeCompletedWithDebt {
 			result.Adaptations = adaptations
-			result.DebtItems = debtItems
+			result.DebtItems = append(result.DebtItems, debtItems...)
 			result.FinalAcceptanceCriteria = schemas.StrList(asStringSlice(currentIssue["acceptance_criteria"]))
 			return result, nil
 		}
@@ -208,6 +210,21 @@ func executeSingleIssue(
 				})
 			}
 
+			// Every completed_with_debt carries at least one item: keep the
+			// coding loop's review-derived debt and fall back to the failure
+			// when neither the advisor nor the loop itemised anything.
+			acceptedDebt := append(append([]map[string]any{}, result.DebtItems...), debtItems...)
+			if len(acceptedDebt) == 0 {
+				acceptedDebt = []map[string]any{{
+					"type":          "advisor_accepted_failure",
+					"issue_name":    issueName,
+					"severity":      mapGetStr(advisorDecision, "debt_severity", "medium"),
+					"title":         "Issue accepted with unresolved failure",
+					"description":   firstNonEmpty(result.ErrorMessage, result.ResultSummary, mapGetStr(advisorDecision, "summary", "")),
+					"justification": mapGetStr(advisorDecision, "rationale", ""),
+				}}
+			}
+
 			return schemas.IssueResult{
 				IssueName:               issueName,
 				Outcome:                 schemas.IssueOutcomeCompletedWithDebt,
@@ -217,7 +234,7 @@ func executeSingleIssue(
 				Attempts:                result.Attempts,
 				AdvisorInvocations:      advisorRound + 1,
 				Adaptations:             adaptations,
-				DebtItems:               debtItems,
+				DebtItems:               acceptedDebt,
 				FinalAcceptanceCriteria: schemas.StrList(asStringSlice(currentIssue["acceptance_criteria"])),
 				IterationHistory:        result.IterationHistory,
 			}, nil
@@ -276,7 +293,7 @@ func executeSingleIssue(
 		}
 		lastResult.AdvisorInvocations = inv
 		lastResult.Adaptations = adaptations
-		lastResult.DebtItems = debtItems
+		lastResult.DebtItems = append(lastResult.DebtItems, debtItems...)
 		return lastResult, nil
 	}
 
@@ -625,4 +642,15 @@ func asAnySlice(v any) []any {
 	default:
 		return nil
 	}
+}
+
+// firstNonEmpty returns the first non-empty string, mirroring Python's
+// `a or b or c` chain used for the accepted-failure description.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
