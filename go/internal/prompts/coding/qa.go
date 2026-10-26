@@ -86,6 +86,12 @@ func QATaskPrompt(o QATaskPromptOpts) string {
 		sections = append(sections, fmt.Sprintf("- **Testing Strategy (expected by spec)**: %s", ts))
 	}
 
+	// Sprint planner's proportional testing guidance.
+	guidance := mMap(issue, "guidance")
+	if tg := mStr(guidance, "testing_guidance", ""); tg != "" {
+		sections = append(sections, fmt.Sprintf("- **Testing Guidance (from sprint planner)**: %s", tg))
+	}
+
 	// Project context.
 	if len(projectContext) > 0 {
 		prdPath := mStr(projectContext, "prd_path", "")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swe_af.execution.schemas import WorkspaceManifest
+from swe_af.execution.schemas import WorkspaceManifest, ensure_str_list
 from swe_af.prompts._utils import workspace_context_block
 
 SYSTEM_PROMPT = """\
@@ -31,6 +31,8 @@ You work in an isolated git worktree:
    Do NOT over-test: a trivial config change needs a build check, not 50 unit tests. \
    Follow these rules:
    - If the issue has a Testing Strategy or testing_guidance section, follow it exactly.
+   - If the issue says no new tests are needed, add no test files; run the build and
+     the existing test suite only.
    - Put tests in the project's test directory (`tests/`, `test/`, `__tests__/`). \
      If the issue spec names specific test file paths, use those exact paths.
    - Name tests descriptively: `test_<module>_<behavior>` for functions.
@@ -146,6 +148,9 @@ def coder_task_prompt(
     sections.append("## Issue to Implement")
     sections.append(f"- **Name**: {issue.get('name', '(unknown)')}")
     sections.append(f"- **Title**: {issue.get('title', '(unknown)')}")
+    description = issue.get("description", "")
+    if description:
+        sections.append(f"- **Description**: {description}")
 
     ac = issue.get("acceptance_criteria", [])
     if ac:
@@ -176,6 +181,16 @@ def coder_task_prompt(
     testing_guidance = guidance.get("testing_guidance", "")
     if testing_guidance:
         sections.append(f"- **Testing Guidance (from sprint planner)**: {testing_guidance}")
+    needs_new_tests = guidance.get("needs_new_tests")
+    if needs_new_tests is False:
+        sections.append(
+            "- **New tests needed**: no — do NOT create or extend test files for this "
+            "issue. Run the build and the existing test suite only, and report their results."
+        )
+    elif needs_new_tests is True:
+        sections.append(
+            "- **New tests needed**: yes — add tests only for the behaviors this issue changes."
+        )
 
     # Project context — file paths only, agents read if needed
     if project_context:
@@ -229,6 +244,16 @@ def coder_task_prompt(
         sections.append("\n## Upstream Failure Notes")
         sections.extend(f"- {note}" for note in failure_notes)
 
+    # Upstream debt recorded by the debt gate
+    debt_notes = ensure_str_list(issue.get("debt_notes", []))
+    if debt_notes:
+        sections.append("\n## Upstream Debt Notes")
+        sections.append(
+            "Earlier issues were accepted with these known gaps. Build on their "
+            "actual state; do not re-implement work they deliberately left out."
+        )
+        sections.extend(f"- {note}" for note in debt_notes)
+
     # Integration branch context
     integration_branch = issue.get("integration_branch", "")
     if integration_branch:
@@ -238,6 +263,24 @@ def coder_task_prompt(
 
     sections.append(f"\n## Working Directory\n`{worktree_path}`")
     sections.append(f"\n## Iteration: {iteration}")
+
+    # Retry guidance recorded by the Issue Advisor
+    retry_context = issue.get("retry_context", "")
+    approach_changes = ensure_str_list(issue.get("approach_changes", []))
+    retry_diagnosis = issue.get("retry_diagnosis", "")
+    if retry_context or approach_changes or retry_diagnosis:
+        sections.append("\n## Retry Context (from Issue Advisor)")
+        sections.append(
+            "A previous attempt at this issue failed. Adopt the approach below instead "
+            "of repeating the failed one."
+        )
+        if retry_diagnosis:
+            sections.append(f"- **Diagnosis of the previous failure**: {retry_diagnosis}")
+        if retry_context:
+            sections.append(f"- **New approach**: {retry_context}")
+        if approach_changes:
+            sections.append("- **Approach changes**:")
+            sections.extend(f"  - {change}" for change in approach_changes)
 
     if feedback:
         sections.append("\n## Feedback from Previous Iteration")
@@ -254,7 +297,8 @@ def coder_task_prompt(
             "\n## Your Task\n"
             "1. Explore the codebase to understand patterns and context.\n"
             "2. Implement the solution per the acceptance criteria.\n"
-            "3. Write or update tests per the Testing Strategy/guidance.\n"
+            "3. Write or update tests per the Testing Strategy/guidance, unless the "
+            "issue says no new tests are needed.\n"
             "4. Run tests and report results (tests_passed, test_summary).\n"
             "5. Commit your changes.\n"
             "6. Report codebase_learnings and agent_retro in your output."
