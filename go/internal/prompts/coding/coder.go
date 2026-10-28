@@ -146,6 +146,32 @@ func mStr(m map[string]any, key, def string) string {
 	return def
 }
 
+// mStrList mirrors ensure_str_list(issue.get(key, [])): a bare string becomes a
+// one-element list, list elements are rendered as strings, and absent values
+// yield nil.
+func mStrList(m map[string]any, key string) []string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return nil
+	}
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			out = append(out, pyStr(e))
+		}
+		return out
+	case string:
+		if strings.TrimSpace(t) == "" {
+			return nil
+		}
+		return []string{t}
+	}
+	return nil
+}
+
 // mList mirrors dict.get(key, []) returning the raw list (or nil when absent).
 func mList(m map[string]any, key string) []any {
 	v, ok := m[key]
@@ -244,6 +270,8 @@ You work in an isolated git worktree:
 2. **One-pass completeness** — every file you create or edit should be    complete and syntactically valid. Do not leave TODOs or placeholders.
 3. **Tests are proportional** — follow the sprint planner's testing guidance    exactly. If no guidance is provided, write one test per acceptance criterion.    Do NOT over-test: a trivial config change needs a build check, not 50 unit tests.    Follow these rules:
    - If the issue has a Testing Strategy or testing_guidance section, follow it exactly.
+   - If the issue says no new tests are needed, add no test files; run the build and
+     the existing test suite only.
    - Put tests in the project's test directory (` + "`" + `tests/` + "`" + `, ` + "`" + `test/` + "`" + `, ` + "`" + `__tests__/` + "`" + `).      If the issue spec names specific test file paths, use those exact paths.
    - Name tests descriptively: ` + "`" + `test_<module>_<behavior>` + "`" + ` for functions.
    - Tests verify behavior, not implementation details.
@@ -348,6 +376,9 @@ func CoderTaskPrompt(o CoderTaskPromptOpts) string {
 	sections = append(sections, "## Issue to Implement")
 	sections = append(sections, fmt.Sprintf("- **Name**: %s", mStr(issue, "name", "(unknown)")))
 	sections = append(sections, fmt.Sprintf("- **Title**: %s", mStr(issue, "title", "(unknown)")))
+	if description := mStr(issue, "description", ""); description != "" {
+		sections = append(sections, fmt.Sprintf("- **Description**: %s", description))
+	}
 
 	if ac := mList(issue, "acceptance_criteria"); len(ac) > 0 {
 		sections = append(sections, "- **Acceptance Criteria**:")
@@ -379,6 +410,17 @@ func CoderTaskPrompt(o CoderTaskPromptOpts) string {
 	guidance := mMap(issue, "guidance")
 	if tg := mStr(guidance, "testing_guidance", ""); tg != "" {
 		sections = append(sections, fmt.Sprintf("- **Testing Guidance (from sprint planner)**: %s", tg))
+	}
+	if needsNewTests, ok := guidance["needs_new_tests"]; ok {
+		switch needsNewTests {
+		case false:
+			sections = append(sections,
+				"- **New tests needed**: no — do NOT create or extend test files for this "+
+					"issue. Run the build and the existing test suite only, and report their results.")
+		case true:
+			sections = append(sections,
+				"- **New tests needed**: yes — add tests only for the behaviors this issue changes.")
+		}
 	}
 
 	// Project context — file paths only, agents read if needed.
@@ -466,6 +508,17 @@ func CoderTaskPrompt(o CoderTaskPromptOpts) string {
 		}
 	}
 
+	// Upstream debt recorded by the debt gate.
+	if debtNotes := mStrList(issue, "debt_notes"); len(debtNotes) > 0 {
+		sections = append(sections, "\n## Upstream Debt Notes")
+		sections = append(sections,
+			"Earlier issues were accepted with these known gaps. Build on their "+
+				"actual state; do not re-implement work they deliberately left out.")
+		for _, note := range debtNotes {
+			sections = append(sections, fmt.Sprintf("- %s", note))
+		}
+	}
+
 	// Integration branch context.
 	if ib := mStr(issue, "integration_branch", ""); ib != "" {
 		sections = append(sections, "\n## Git Context")
@@ -475,6 +528,29 @@ func CoderTaskPrompt(o CoderTaskPromptOpts) string {
 
 	sections = append(sections, fmt.Sprintf("\n## Working Directory\n`%s`", o.WorktreePath))
 	sections = append(sections, fmt.Sprintf("\n## Iteration: %d", iteration))
+
+	// Retry guidance recorded by the Issue Advisor.
+	retryContext := mStr(issue, "retry_context", "")
+	approachChanges := mStrList(issue, "approach_changes")
+	retryDiagnosis := mStr(issue, "retry_diagnosis", "")
+	if retryContext != "" || len(approachChanges) > 0 || retryDiagnosis != "" {
+		sections = append(sections, "\n## Retry Context (from Issue Advisor)")
+		sections = append(sections,
+			"A previous attempt at this issue failed. Adopt the approach below instead "+
+				"of repeating the failed one.")
+		if retryDiagnosis != "" {
+			sections = append(sections, fmt.Sprintf("- **Diagnosis of the previous failure**: %s", retryDiagnosis))
+		}
+		if retryContext != "" {
+			sections = append(sections, fmt.Sprintf("- **New approach**: %s", retryContext))
+		}
+		if len(approachChanges) > 0 {
+			sections = append(sections, "- **Approach changes**:")
+			for _, change := range approachChanges {
+				sections = append(sections, fmt.Sprintf("  - %s", change))
+			}
+		}
+	}
 
 	if o.Feedback != "" {
 		sections = append(sections, "\n## Feedback from Previous Iteration")
@@ -486,7 +562,8 @@ func CoderTaskPrompt(o CoderTaskPromptOpts) string {
 		sections = append(sections, "\n## Your Task\n"+
 			"1. Explore the codebase to understand patterns and context.\n"+
 			"2. Implement the solution per the acceptance criteria.\n"+
-			"3. Write or update tests per the Testing Strategy/guidance.\n"+
+			"3. Write or update tests per the Testing Strategy/guidance, unless the "+
+			"issue says no new tests are needed.\n"+
 			"4. Run tests and report results (tests_passed, test_summary).\n"+
 			"5. Commit your changes.\n"+
 			"6. Report codebase_learnings and agent_retro in your output.")

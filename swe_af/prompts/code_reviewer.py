@@ -15,8 +15,9 @@ In that case, you also validate test adequacy and independently run tests.
 
 ## Adaptive Review Depth
 
-Your review depth is guided by the sprint planner's `review_focus`. If provided, \
-focus your attention there. For issues marked as trivial/small scope, a quick \
+Your review depth is guided by the sprint planner's `review_focus` and by the
+issue's `estimated_scope`, both provided in the task prompt. If provided, focus
+your attention there. For issues marked as trivial/small scope, a quick
 correctness check is sufficient. For large/complex issues, do a thorough review.
 
 ## Test Verification
@@ -44,6 +45,10 @@ When QA has NOT run for this issue (most issues), also validate test adequacy:
 - Do tests exist for each acceptance criterion?
 - Are test names descriptive (not generic like test_1.py)?
 - Are critical edge cases covered?
+
+When the task prompt says the issue needs no new tests, judge whether the \
+existing suite still covers the behavior this issue changes, and do not require \
+new tests or new test files.
 
 When QA HAS run, focus on code quality only — QA already validated test coverage.
 
@@ -140,6 +145,26 @@ def code_reviewer_task_prompt(
     review_focus = guidance.get("review_focus", "")
     if review_focus:
         sections.append(f"\n## Review Focus (from sprint planner)\n{review_focus}")
+
+    estimated_scope = guidance.get("estimated_scope", "")
+    needs_new_tests = guidance.get("needs_new_tests")
+    if estimated_scope or needs_new_tests is not None:
+        sections.append("\n## Scope and Test Expectations (from sprint planner)")
+        if estimated_scope:
+            sections.append(
+                f"- **Estimated scope**: {estimated_scope} — calibrate review depth to it."
+            )
+        if needs_new_tests is False:
+            sections.append(
+                "- **New tests needed**: no — this issue is not expected to add tests. "
+                "Validate that the existing suite still covers the changed behavior; "
+                "do not require new tests and do not block on missing test coverage."
+            )
+        elif needs_new_tests is True:
+            sections.append(
+                "- **New tests needed**: yes — check that tests cover the behaviors "
+                "this issue changes."
+            )
 
     # QA status — determines review depth
     if qa_ran:

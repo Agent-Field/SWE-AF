@@ -13,6 +13,7 @@ This task spans multiple repositories. Each repository is listed below with its 
   - tokenizes ints
   - handles whitespace
 - **Testing Strategy (expected by spec)**: unit tests per token type
+- **Testing Guidance (from sprint planner)**: test each token
 
 ## Project Context
 - PRD: `/a/prd.md` (read for acceptance criteria)

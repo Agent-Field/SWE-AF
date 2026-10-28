@@ -150,7 +150,7 @@ flowchart TD
     end
 ```
 
-**Inner Loop** runs up to `max_coding_iterations` (default: 5) per issue. On the default path, the coder writes code and runs tests, then the reviewer approves, requests fixes, or blocks. On the flagged path, QA and the reviewer run **in parallel** after the coder, and a synthesizer merges their feedback into a single fix/approve/block decision. The synthesizer also detects stuck loops — if the coder is cycling without progress, it breaks the loop early.
+**Inner Loop** runs up to `max_coding_iterations` (default: 5) per issue. On the default path, the coder writes code and runs tests, then the reviewer approves, requests fixes, or blocks. A block stays reserved for security, crash and data-loss concerns. A blocking finding means "must be fixed before merge", so it gets a bounded fix pass first: blocking findings lead the feedback, and the loop escalates to the Issue Advisor when the same blocking finding survives the stuck window (three fix iterations) or the iteration budget is exhausted. On the flagged path, QA and the reviewer run **in parallel** after the coder, and a synthesizer merges their feedback into a single fix/approve/block decision. The synthesizer also detects stuck loops — if the coder is cycling without progress, it breaks the loop early.
 
 **Middle Loop** — the Issue Advisor — activates when the inner loop exhausts without approval. It has five actions, each a different recovery strategy:
 
@@ -288,7 +288,7 @@ Previous replan decisions are stored in `DAGState.replan_history` and fed back t
 
 **How SWE-AF implements it.** The Sprint Planner's `IssueGuidance.needs_deeper_qa` flag routes each issue to one of two execution paths:
 
-**Default path (2 LLM calls):** Coder → Reviewer. For straightforward issues — well-scoped, low risk, familiar patterns. The reviewer approves, requests fixes, or blocks (reserved for security/crash/data-loss concerns).
+**Default path (2 LLM calls):** Coder → Reviewer. For straightforward issues — well-scoped, low risk, familiar patterns. The reviewer approves, requests fixes, or blocks (reserved for security/crash/data-loss concerns). A blocking finding has to be fixed before merge, so it is first retried as a fix iteration with the blocking findings leading the feedback, bounded by the stuck window and `max_coding_iterations`; an issue that still cannot clear it escalates to the Issue Advisor.
 
 **Flagged path (4 LLM calls):** Coder → QA + Reviewer (parallel) → Synthesizer. For complex or risky issues — touching interfaces, large scope, unfamiliar territory. QA writes and runs tests independently. The reviewer evaluates code quality. The synthesizer merges both signals into a single decision, detecting contradictions and stuck loops.
 

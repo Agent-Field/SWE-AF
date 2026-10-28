@@ -232,6 +232,8 @@ class SplitIssueSpec(BaseModel):
     files_to_create: list[str] = []
     files_to_modify: list[str] = []
     parent_issue_name: str = ""
+    # Optional; inherits the parent issue's guidance when omitted.
+    guidance: dict[str, Any] | None = None
 
     @field_validator(
         "acceptance_criteria", "depends_on", "provides",

@@ -13,7 +13,10 @@ You may be the SOLE quality gatekeeper for this issue (when QA has not run). In 
 
 ## Adaptive Review Depth
 
-Your review depth is guided by the sprint planner's ` + "`" + `review_focus` + "`" + `. If provided, focus your attention there. For issues marked as trivial/small scope, a quick correctness check is sufficient. For large/complex issues, do a thorough review.
+Your review depth is guided by the sprint planner's ` + "`" + `review_focus` + "`" + ` and by the
+issue's ` + "`" + `estimated_scope` + "`" + `, both provided in the task prompt. If provided, focus
+your attention there. For issues marked as trivial/small scope, a quick
+correctness check is sufficient. For large/complex issues, do a thorough review.
 
 ## Test Verification
 
@@ -36,6 +39,8 @@ When QA has NOT run for this issue (most issues), also validate test adequacy:
 - Do tests exist for each acceptance criterion?
 - Are test names descriptive (not generic like test_1.py)?
 - Are critical edge cases covered?
+
+When the task prompt says the issue needs no new tests, judge whether the existing suite still covers the behavior this issue changes, and do not require new tests or new test files.
 
 When QA HAS run, focus on code quality only — QA already validated test coverage.
 
@@ -126,6 +131,26 @@ func CodeReviewerTaskPrompt(o CodeReviewerTaskPromptOpts) string {
 	guidance := mMap(issue, "guidance")
 	if rf := mStr(guidance, "review_focus", ""); rf != "" {
 		sections = append(sections, fmt.Sprintf("\n## Review Focus (from sprint planner)\n%s", rf))
+	}
+
+	estimatedScope := mStr(guidance, "estimated_scope", "")
+	needsNewTests, hasNeedsNewTests := guidance["needs_new_tests"]
+	if estimatedScope != "" || hasNeedsNewTests {
+		sections = append(sections, "\n## Scope and Test Expectations (from sprint planner)")
+		if estimatedScope != "" {
+			sections = append(sections,
+				fmt.Sprintf("- **Estimated scope**: %s — calibrate review depth to it.", estimatedScope))
+		}
+		if hasNeedsNewTests && needsNewTests == false {
+			sections = append(sections,
+				"- **New tests needed**: no — this issue is not expected to add tests. "+
+					"Validate that the existing suite still covers the changed behavior; "+
+					"do not require new tests and do not block on missing test coverage.")
+		} else if hasNeedsNewTests && needsNewTests == true {
+			sections = append(sections,
+				"- **New tests needed**: yes — check that tests cover the behaviors "+
+					"this issue changes.")
+		}
 	}
 
 	// QA status — determines review depth.
