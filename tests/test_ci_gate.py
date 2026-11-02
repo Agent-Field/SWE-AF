@@ -801,6 +801,19 @@ async def test_ci_head_checkrun_conclusion_whitelist(conclusion, expected):
     assert result.status == expected
 
 
+async def test_ci_head_startup_failure_reaches_fixer():
+    """A workflow that cannot start is a CI failure with actionable diagnostics."""
+    page = _commit_rollup_page([_check_run_row(conclusion="STARTUP_FAILURE", startedAt=None)])
+    watch, _, _ = await _watch_commit_pages([page, page], repeat=True)
+    assert watch.status == "failed"
+    assert watch.failed_checks[0].conclusion == "STARTUP_FAILURE"
+    result, dispatch, _ = await _run_gate_fixture(
+        [watch.model_dump()], [{"pushed": False, "summary": "Needs workflow repair"}],
+    )
+    assert result["final_status"] == "fixer_gave_up"
+    assert dispatch.fixer_arguments[0]["failed_checks"] == watch.model_dump()["failed_checks"]
+
+
 @pytest.mark.parametrize("state,expected", [("SUCCESS", "passed"), ("FAILURE", "failed"), ("ERROR", "failed"), ("PENDING", "timed_out"), ("EXPECTED", "timed_out")])
 async def test_ci_head_status_whitelist(state, expected):
     page = _commit_rollup_page([_status_context_row(state=state)])

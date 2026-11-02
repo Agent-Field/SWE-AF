@@ -167,7 +167,7 @@ _CI_HEAD_QUERY = """query CIHeadRollup(
 
 _COMPLETED_BUCKETS = {
     "SUCCESS": "pass", "SKIPPED": "skipping", "NEUTRAL": "skipping",
-    "FAILURE": "fail", "TIMED_OUT": "fail", "ACTION_REQUIRED": "fail",
+    "FAILURE": "fail", "STARTUP_FAILURE": "fail", "TIMED_OUT": "fail", "ACTION_REQUIRED": "fail",
     "CANCELLED": "cancel", "STALE": "pending",
 }
 _STATUS_BUCKETS = {
