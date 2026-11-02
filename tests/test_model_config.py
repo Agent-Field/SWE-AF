@@ -14,6 +14,7 @@ from swe_af.execution.schemas import (
     ROLE_TO_MODEL_FIELD,
     _INFRON_AUTO_DEFAULT_MODEL,
     _OPENROUTER_AUTO_DEFAULT_MODEL,
+    _RUNCRATE_AUTO_DEFAULT_MODEL,
     _default_planning_model,
     _default_runtime,
     resolve_runtime_models,
@@ -25,6 +26,7 @@ _PROVIDER_ENV_KEYS = (
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
     "INFRON_API_KEY",
+    "RUNCRATE_API_KEY",
     "SWE_DEFAULT_RUNTIME",
     "SWE_DEFAULT_MODEL",
     "AI_MODEL",
@@ -215,6 +217,76 @@ class TestInfronAutoSelection(unittest.TestCase):
             _INFRON_AUTO_DEFAULT_MODEL.split("/", 1)[1],
             _OPENROUTER_AUTO_DEFAULT_MODEL.split("/", 1)[1],
         )
+
+
+class TestRuncrateAutoSelection(unittest.TestCase):
+    """The Runcrate gateway follows the same auto-selection path as Infron:
+    with only a RUNCRATE_API_KEY present, SWE-AF picks open_code and the
+    Runcrate default model. A gateway key already configured keeps precedence."""
+
+    def test_runcrate_only_auto_selects_open_code(self) -> None:
+        with _provider_env(RUNCRATE_API_KEY="rc-test"):
+            self.assertEqual(_default_runtime(), "open_code")
+
+    def test_anthropic_key_keeps_claude_code(self) -> None:
+        with _provider_env(ANTHROPIC_API_KEY="sk-ant", RUNCRATE_API_KEY="rc-test"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_explicit_runtime_overrides_autoselect(self) -> None:
+        with _provider_env(RUNCRATE_API_KEY="rc-test", SWE_DEFAULT_RUNTIME="claude_code"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_auto_runcrate_defaults_to_deepseek(self) -> None:
+        with _provider_env(RUNCRATE_API_KEY="rc-test"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "runcrate/deepseek-ai/DeepSeek-V4.1-Flash")
+
+    def test_explicit_open_code_uses_current_base_default(self) -> None:
+        with _provider_env(RUNCRATE_API_KEY="rc-test", SWE_DEFAULT_RUNTIME="open_code"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], _OPENROUTER_AUTO_DEFAULT_MODEL)
+
+    def test_harness_model_overrides_runcrate_auto_default(self) -> None:
+        runcrate_model = "runcrate/zai-org/GLM-5.3"
+        with _provider_env(RUNCRATE_API_KEY="rc-test", HARNESS_MODEL=runcrate_model):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], runcrate_model)
+
+    def test_swe_default_model_overrides_auto(self) -> None:
+        with _provider_env(
+            RUNCRATE_API_KEY="rc-test", SWE_DEFAULT_MODEL="runcrate/moonshotai/Kimi-K3"
+        ):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "runcrate/moonshotai/Kimi-K3")
+
+    def test_planning_model_uses_runcrate_default(self) -> None:
+        with _provider_env(RUNCRATE_API_KEY="rc-test"):
+            self.assertEqual(_default_planning_model(), _RUNCRATE_AUTO_DEFAULT_MODEL)
+
+    def test_build_config_auto_runcrate_end_to_end(self) -> None:
+        with _provider_env(RUNCRATE_API_KEY="rc-test"):
+            cfg = BuildConfig()
+            self.assertEqual(cfg.runtime, "open_code")
+            resolved = cfg.resolved_models()
+        self.assertEqual(resolved["coder_model"], _RUNCRATE_AUTO_DEFAULT_MODEL)
+
+    def test_existing_gateway_keys_keep_precedence(self) -> None:
+        # Adding a Runcrate key alongside an existing gateway key must not
+        # reroute anything.
+        with _provider_env(OPENROUTER_API_KEY="sk-or", RUNCRATE_API_KEY="rc-test"):
+            self.assertEqual(_default_runtime(), "aforge")
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], _OPENROUTER_AUTO_DEFAULT_MODEL)
+        with _provider_env(INFRON_API_KEY="sk-inf", RUNCRATE_API_KEY="rc-test"):
+            self.assertEqual(_default_runtime(), "open_code")
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], _INFRON_AUTO_DEFAULT_MODEL)
 
 
 class TestOpenRouterAutoSelection(unittest.TestCase):
