@@ -109,6 +109,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PATH="/root/.opencode/bin:${PATH}"
 # AForge CLI (aforge runtime), fetched + checksum-verified in stage 1.
 COPY --from=aforge /out/aforge /usr/local/bin/aforge
+# Stay on aforge on purpose until this product's separate CodeAF migration.
+ENV AFORGE_BIN=/usr/local/bin/aforge
 
 # Tell OpenCode to read its model AND small_model from the deployer's
 # HARNESS_MODEL env var via {env:...} interpolation. Without this config,
