@@ -15,6 +15,7 @@ The sprint planner sets `guidance.needs_deeper_qa = true` to select the flagged 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import traceback
@@ -63,6 +64,8 @@ def _iteration_state_key(issue_name: str, advisor_round: int = 0) -> str:
             len(stem) == 4 and stem[:3] in {"COM", "LPT"} and stem[3] in "123456789"
         ):
             encoded = f"%{ord(issue_name[0]):02X}{encoded[1:]}"
+        if len(encoded.encode("utf-8")) + len(".json") > 255:
+            return "!" + hashlib.sha256(issue_name.encode("utf-8")).hexdigest()
         return encoded
     return issue_name
 

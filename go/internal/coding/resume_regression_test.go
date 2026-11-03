@@ -2,6 +2,7 @@ package coding
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -383,6 +384,7 @@ func TestResumeRetryNameIsOneEncodedComponent(t *testing.T) {
 		{"CON", "%43ON"}, {"nul.txt", "%6Eul.txt"},
 		{"a<>\"|?*\x00\x1f\x7f", "a%3C%3E%22%7C%3F%2A%00%1F%7F"},
 		{"café", "caf%C3%A9"}, {"space ", "space%20"},
+		{"!", "%21"},
 	}
 	for _, tc := range names {
 		for _, buildID := range []string{"", "build"} {
@@ -419,35 +421,103 @@ func TestResumeRetryNameIsOneEncodedComponent(t *testing.T) {
 	}
 }
 
-func TestResumeVeryLongRetryNameDoesNotAlias(t *testing.T) {
-	for _, round := range []int{0, 1} {
-		root := t.TempDir()
-		name := strings.Repeat("x", 300)
-		calls := 0
-		fn := func(_ context.Context, target string, _ map[string]any) (map[string]any, error) {
-			calls++
-			if lastSeg(target) == "run_coder" {
-				return map[string]any{"files_changed": []string{"app.py"}}, nil
+func TestResumeLongRetryNameCheckpointsAndResumes(t *testing.T) {
+	for _, tc := range []struct{ label, name string }{
+		{"accent", strings.Repeat("é", 42)},
+		{"cjk", strings.Repeat("中", 28)},
+		{"percent", strings.Repeat("%", 84)},
+		{"ascii", strings.Repeat("a", 300)},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			root := t.TempDir()
+			calls := 0
+			fn := func(_ context.Context, target string, kw map[string]any) (map[string]any, error) {
+				calls++
+				if lastSeg(target) == "run_coder" {
+					if toInt(kw["iteration"]) != 1 {
+						t.Fatal("foreign iteration")
+					}
+					return map[string]any{"files_changed": []string{"app.py"}}, nil
+				}
+				return map[string]any{"approved": true, "blocking": false, "summary": tc.name}, nil
 			}
-			return map[string]any{"approved": true, "blocking": false}, nil
-		}
-		// Go's base behavior ignores checkpoint write errors. Both entries
-		// must run, rather than resume a silently truncated checkpoint.
-		resumeRun(t, root, name, 1, round, fn)
-		resumeRun(t, root, name, 1, round, fn)
-		if calls != 4 {
-			t.Fatal("long name aliased a checkpoint")
-		}
-		if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			first := resumeRun(t, root, tc.name, 1, 1, fn)
+			resumed := resumeRun(t, root, tc.name, 1, 1, fn)
+			if calls != 2 || first.Outcome != schemas.IssueOutcomeCompleted || resumed.Outcome != first.Outcome ||
+				first.Attempts != 1 || resumed.Attempts != 1 || resumed.ResultSummary != first.ResultSummary ||
+				resumed.BranchName != first.BranchName || !reflect.DeepEqual(first.FilesChanged, resumed.FilesChanged) {
+				t.Fatalf("calls=%d first=%+v resumed=%+v", calls, first, resumed)
+			}
+			expected := fmt.Sprintf("!%x", sha256.Sum256([]byte(tc.name)))
+			if tc.label == "accent" {
+				const sharedKey = "!18031931d1563e7c5f2f947822255d741e094a7c9b849fe1ae55ad3ec5707a2f"
+				if expected != sharedKey {
+					t.Fatal("digest differs from Python fixture", expected)
+				}
+			}
+			if key := iterationStateKey(tc.name, 1); key != expected || len(key) != 65 {
+				t.Fatal("unexpected hashed key", key, expected)
+			}
+			data, err := os.ReadFile(resumeExpectedPath(root, expected, 1))
 			if err != nil {
-				return err
+				t.Fatal(err)
 			}
-			if !entry.IsDir() && strings.HasSuffix(path, ".json") && strings.Contains(path, "execution") {
-				t.Fatal("truncated checkpoint", path)
+			var state map[string]any
+			if err := json.Unmarshal(data, &state); err != nil || toInt(state["iteration"]) != 1 {
+				t.Fatal("invalid checkpoint", string(data), err)
 			}
-			return nil
-		}); err != nil {
-			t.Fatal(err)
+		})
+	}
+}
+
+func TestResumeRetryKeyFilenameLengthBoundary(t *testing.T) {
+	for _, tc := range []struct{ label, name, encoded string }{
+		{"plain-fit", strings.Repeat("a", 250), strings.Repeat("a", 250)},
+		{"plain-hash", strings.Repeat("a", 251), strings.Repeat("a", 251)},
+		{"escaped-fit", strings.Repeat("%", 83) + "a", strings.Repeat("%25", 83) + "a"},
+		{"escaped-hash", strings.Repeat("%", 83) + "aa", strings.Repeat("%25", 83) + "aa"},
+		{"reserved-fit", "CON." + strings.Repeat("a", 244), "%43ON." + strings.Repeat("a", 244)},
+		{"reserved-hash", "CON." + strings.Repeat("a", 245), "%43ON." + strings.Repeat("a", 245)},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			expected := tc.encoded
+			if len(expected)+len(".json") > 255 {
+				expected = fmt.Sprintf("!%x", sha256.Sum256([]byte(tc.name)))
+			}
+			if iterationStateKey(tc.name, 1) != expected || iterationStateKey(tc.name, 0) != tc.name {
+				t.Fatal("wrong key at filename length boundary")
+			}
+		})
+	}
+}
+
+func TestResumeVeryLongRoundZeroNameDoesNotAlias(t *testing.T) {
+	root := t.TempDir()
+	name := strings.Repeat("x", 300)
+	calls := 0
+	fn := func(_ context.Context, target string, _ map[string]any) (map[string]any, error) {
+		calls++
+		if lastSeg(target) == "run_coder" {
+			return map[string]any{"files_changed": []string{"app.py"}}, nil
 		}
+		return map[string]any{"approved": true, "blocking": false}, nil
+	}
+	// Go's base behavior ignores checkpoint write errors. Both entries
+	// must run, rather than resume a silently truncated checkpoint.
+	resumeRun(t, root, name, 1, 0, fn)
+	resumeRun(t, root, name, 1, 0, fn)
+	if calls != 4 {
+		t.Fatal("long name aliased a checkpoint")
+	}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".json") && strings.Contains(path, "execution") {
+			t.Fatal("truncated checkpoint", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

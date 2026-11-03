@@ -2,6 +2,7 @@ package coding
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -36,6 +37,10 @@ func iterationStateKey(issueName string, advisorRound int) string {
 			} else {
 				fmt.Fprintf(&encoded, "%%%02X", c)
 			}
+		}
+		if encoded.Len()+len(".json") > 255 {
+			sum := sha256.Sum256([]byte(issueName))
+			return "!" + hex.EncodeToString(sum[:])
 		}
 		return encoded.String()
 	}

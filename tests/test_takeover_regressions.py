@@ -1,6 +1,7 @@
 """Model-free crash-resume, checkpoint namespace and reviewer-outage regressions."""
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from urllib.parse import quote
@@ -253,6 +254,7 @@ def test_reviewer_outage_without_unresolved_blocker_keeps_fail_open(tmp_path, cl
     ("CON", "%43ON"), ("nul.txt", "%6Eul.txt"),
     ('a<>"|?*\x00\x1f\x7f', "a%3C%3E%22%7C%3F%2A%00%1F%7F"),
     ("café", "caf%C3%A9"), ("space ", "space%20"),
+    ("!", "%21"),
 ])
 @pytest.mark.parametrize("build_id,round", [("", 1), ("build", 2)])
 def test_retry_name_is_one_encoded_component_and_resumes(tmp_path, name, encoded, build_id, round):
@@ -282,18 +284,58 @@ def test_retry_name_is_one_encoded_component_and_resumes(tmp_path, name, encoded
     assert run(_no_calls).model_dump() == first.model_dump()
 
 
-def test_very_long_retry_name_is_not_truncated_or_aliased(tmp_path):
+@pytest.mark.parametrize("name,expected", [
+    ("é" * 42, "!18031931d1563e7c5f2f947822255d741e094a7c9b849fe1ae55ad3ec5707a2f"),
+    ("中" * 28, "!" + hashlib.sha256(("中" * 28).encode("utf-8")).hexdigest()),
+    ("%" * 84, "!" + hashlib.sha256(("%" * 84).encode("utf-8")).hexdigest()),
+    ("a" * 300, "!" + hashlib.sha256(b"a" * 300).hexdigest()),
+], ids=["accent", "cjk", "percent", "ascii"])
+def test_long_retry_name_checkpoints_and_resumes(tmp_path, name, expected):
+    calls = []
+
+    async def call_fn(target, **kwargs):
+        calls.append(target)
+        if target.endswith("run_coder"):
+            assert kwargs["iteration"] == 1
+            return {"files_changed": ["app.py"]}
+        return {"approved": True, "blocking": False, "summary": name}
+
+    first = _run(tmp_path, call_fn, name=name, round=1)
+    resumed = _run(tmp_path, _no_calls, name=name, round=1)
+    assert len(calls) == 2
+    assert first.outcome == IssueOutcome.COMPLETED
+    assert resumed.model_dump() == first.model_dump()
+    assert _iteration_state_key(name, 1) == expected
+    assert expected == "!" + hashlib.sha256(name.encode("utf-8")).hexdigest()
+    assert len(expected) == 65
+    path = tmp_path / "execution" / "iteration-rounds" / "build" / "r1" / f"{expected}.json"
+    assert json.loads(path.read_text())["iteration"] == 1
+
+
+@pytest.mark.parametrize("name,encoded", [
+    ("a" * 250, "a" * 250),
+    ("a" * 251, "a" * 251),
+    ("%" * 83 + "a", "%25" * 83 + "a"),
+    ("%" * 83 + "aa", "%25" * 83 + "aa"),
+    ("CON." + "a" * 244, "%43ON." + "a" * 244),
+    ("CON." + "a" * 245, "%43ON." + "a" * 245),
+], ids=["plain-fit", "plain-hash", "escaped-fit", "escaped-hash", "reserved-fit", "reserved-hash"])
+def test_retry_key_filename_length_boundary(name, encoded):
+    expected = encoded if len(encoded) + len(".json") <= 255 else "!" + hashlib.sha256(name.encode("utf-8")).hexdigest()
+    assert _iteration_state_key(name, 1) == expected
+    assert _iteration_state_key(name, 0) == name
+
+
+def test_very_long_round_zero_name_is_not_truncated_or_aliased(tmp_path):
     name = "x" * 300
     async def call_fn(target, **kwargs):
         if target.endswith("run_coder"):
             return {"files_changed": ["app.py"]}
         return {"approved": True, "blocking": False}
 
-    # Base also rejects an overlong component. Retrying must not silently
-    # truncate it into another issue's valid checkpoint name.
-    for round in (0, 1):
-        with pytest.raises(OSError):
-            _run(tmp_path, call_fn, name=name, round=round)
+    # Round zero retains base behavior for an overlong component.
+    with pytest.raises(OSError):
+        _run(tmp_path, call_fn, name=name, round=0)
     assert not list((tmp_path / "execution").rglob("*.json"))
 
 
