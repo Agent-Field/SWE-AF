@@ -134,7 +134,11 @@ func CodeReviewerTaskPrompt(o CodeReviewerTaskPromptOpts) string {
 	}
 
 	estimatedScope := mStr(guidance, "estimated_scope", "")
+	if !truthy(guidance["estimated_scope"]) {
+		estimatedScope = ""
+	}
 	needsNewTests, hasNeedsNewTests := guidance["needs_new_tests"]
+	hasNeedsNewTests = hasNeedsNewTests && needsNewTests != nil
 	if estimatedScope != "" || hasNeedsNewTests {
 		sections = append(sections, "\n## Scope and Test Expectations (from sprint planner)")
 		if estimatedScope != "" {

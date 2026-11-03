@@ -88,7 +88,7 @@ func QATaskPrompt(o QATaskPromptOpts) string {
 
 	// Sprint planner's proportional testing guidance.
 	guidance := mMap(issue, "guidance")
-	if tg := mStr(guidance, "testing_guidance", ""); tg != "" {
+	if tg := mStr(guidance, "testing_guidance", ""); truthy(guidance["testing_guidance"]) {
 		sections = append(sections, fmt.Sprintf("- **Testing Guidance (from sprint planner)**: %s", tg))
 	}
 

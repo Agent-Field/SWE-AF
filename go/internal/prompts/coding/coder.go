@@ -376,7 +376,7 @@ func CoderTaskPrompt(o CoderTaskPromptOpts) string {
 	sections = append(sections, "## Issue to Implement")
 	sections = append(sections, fmt.Sprintf("- **Name**: %s", mStr(issue, "name", "(unknown)")))
 	sections = append(sections, fmt.Sprintf("- **Title**: %s", mStr(issue, "title", "(unknown)")))
-	if description := mStr(issue, "description", ""); description != "" {
+	if description := mStr(issue, "description", ""); truthy(issue["description"]) {
 		sections = append(sections, fmt.Sprintf("- **Description**: %s", description))
 	}
 
@@ -533,6 +533,12 @@ func CoderTaskPrompt(o CoderTaskPromptOpts) string {
 	retryContext := mStr(issue, "retry_context", "")
 	approachChanges := mStrList(issue, "approach_changes")
 	retryDiagnosis := mStr(issue, "retry_diagnosis", "")
+	if !truthy(issue["retry_context"]) {
+		retryContext = ""
+	}
+	if !truthy(issue["retry_diagnosis"]) {
+		retryDiagnosis = ""
+	}
 	if retryContext != "" || len(approachChanges) > 0 || retryDiagnosis != "" {
 		sections = append(sections, "\n## Retry Context (from Issue Advisor)")
 		sections = append(sections,
