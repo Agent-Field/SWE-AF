@@ -171,7 +171,7 @@ func (n *noteCapture) fn() NoteFn {
 
 func run(t *testing.T, issue map[string]any, ds *schemas.DAGState, callFn CallFn, cfg *config.ExecutionConfig, note NoteFn) schemas.IssueResult {
 	t.Helper()
-	res, err := RunCodingLoop(context.Background(), issue, ds, callFn, "test-node", cfg, note, nil)
+	res, err := RunCodingLoop(context.Background(), issue, ds, callFn, "test-node", cfg, note, nil, 0)
 	if err != nil {
 		t.Fatalf("RunCodingLoop returned unexpected error: %v", err)
 	}
@@ -196,7 +196,22 @@ func TestDetectStuckLoop(t *testing.T) {
 	}{
 		{"too few", []map[string]any{fix(false), fix(false)}, 3, false},
 		{"all non-blocking fix", []map[string]any{fix(false), fix(false), fix(false)}, 3, true},
-		{"blocking prevents", []map[string]any{fix(false), fix(true), fix(false)}, 3, false},
+		{"mixed blocking is not stuck", []map[string]any{fix(false), fix(true), fix(false)}, 3, false},
+		{"same blocking findings", []map[string]any{
+			{"action": "fix", "review_blocking": true, "review_findings": "unjustified changed files"},
+			{"action": "fix", "review_blocking": true, "review_findings": "unjustified changed files"},
+			{"action": "fix", "review_blocking": true, "review_findings": "unjustified changed files"},
+		}, 3, true},
+		{"different blocking findings", []map[string]any{
+			{"action": "fix", "review_blocking": true, "review_findings": "finding 1"},
+			{"action": "fix", "review_blocking": true, "review_findings": "finding 2"},
+			{"action": "fix", "review_blocking": true, "review_findings": "finding 3"},
+		}, 3, false},
+		{"blocking findings without fingerprint", []map[string]any{
+			{"action": "fix", "review_blocking": true},
+			{"action": "fix", "review_blocking": true},
+			{"action": "fix", "review_blocking": true},
+		}, 3, false},
 		{"approve prevents", []map[string]any{approve, fix(false), fix(false)}, 3, false},
 		{"only recent window", []map[string]any{approve, fix(false), fix(false), fix(false)}, 3, true},
 		{"custom window", []map[string]any{fix(false), fix(false)}, 2, true},
@@ -279,17 +294,24 @@ func TestStuckLoopNonBlockingAcceptsDebt(t *testing.T) {
 	}
 }
 
-func TestBlockingReviewFailsImmediately(t *testing.T) {
+func TestBlockingReviewGetsFixIteration(t *testing.T) {
 	b := newBuilder()
 	b.onCoder(1, []string{"src/app.py"}, "impl").onReviewer(1, false, true, "SQL injection")
+	b.onCoder(2, []string{"src/app.py"}, "impl").onReviewer(2, true, false, "Fixed")
 
 	res := run(t, makeIssue("ISSUE-1", false), makeDAGState(t.TempDir()), b.build(), makeConfig(t, nil), nil)
 
-	if res.Outcome != schemas.IssueOutcomeFailedUnrecoverable || res.Attempts != 1 {
-		t.Fatalf("outcome=%s attempts=%d, want failed_unrecoverable/1", res.Outcome, res.Attempts)
+	if res.Outcome != schemas.IssueOutcomeCompleted || res.Attempts != 2 {
+		t.Fatalf("outcome=%s attempts=%d, want completed/2", res.Outcome, res.Attempts)
 	}
-	if res.IterationHistory[0]["action"] != "block" {
-		t.Errorf("history[0].action = %v, want block", res.IterationHistory[0]["action"])
+	if res.IterationHistory[0]["action"] != "fix" {
+		t.Errorf("history[0].action = %v, want fix", res.IterationHistory[0]["action"])
+	}
+	if v, _ := res.IterationHistory[0]["review_blocking"].(bool); !v {
+		t.Errorf("history[0].review_blocking = false, want true")
+	}
+	if res.IterationHistory[1]["action"] != "approve" {
+		t.Errorf("history[1].action = %v, want approve", res.IterationHistory[1]["action"])
 	}
 }
 
@@ -347,7 +369,7 @@ func TestFatalErrorPropagates(t *testing.T) {
 		}
 		return map[string]any{}, nil
 	}
-	_, err := RunCodingLoop(context.Background(), makeIssue("ISSUE-1", false), makeDAGState(t.TempDir()), callFn, "test-node", makeConfig(t, nil), nil, nil)
+	_, err := RunCodingLoop(context.Background(), makeIssue("ISSUE-1", false), makeDAGState(t.TempDir()), callFn, "test-node", makeConfig(t, nil), nil, nil, 0)
 	var fhe *fatal.FatalHarnessError
 	if !errors.As(err, &fhe) {
 		t.Fatalf("expected *fatal.FatalHarnessError to propagate, got %v", err)

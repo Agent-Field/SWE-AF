@@ -185,7 +185,7 @@ func ImplementIssue(ctx context.Context, deps *Deps, input map[string]any) (any,
 	callFn := coding.CallFn(deps.Call)
 
 	loopResult, loopErr := coding.RunCodingLoop(
-		ctx, planned, dagState, callFn, deps.NodeID, execCfg, noteFn, nil,
+		ctx, planned, dagState, callFn, deps.NodeID, execCfg, noteFn, nil, 0,
 	)
 	if loopErr != nil && ctx.Err() != nil {
 		// Context cancellation propagates (Python does not catch CancelledError).

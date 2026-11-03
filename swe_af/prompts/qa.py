@@ -103,6 +103,12 @@ def qa_task_prompt(
     if testing_strategy:
         sections.append(f"- **Testing Strategy (expected by spec)**: {testing_strategy}")
 
+    # Sprint planner's proportional testing guidance
+    guidance = issue.get("guidance") or {}
+    testing_guidance = guidance.get("testing_guidance", "")
+    if testing_guidance:
+        sections.append(f"- **Testing Guidance (from sprint planner)**: {testing_guidance}")
+
     # Project context
     if project_context:
         prd_path = project_context.get("prd_path", "")

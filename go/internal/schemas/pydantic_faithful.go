@@ -91,6 +91,7 @@ var pydanticRequired = map[string][]string{
 // null — Go serialises an unset pointer/map as null and pydantic accepts it.
 var pydanticNullable = map[string][]string{
 	"IssueAdvisorDecision": {"ask_user_form"},
+	"SplitIssueSpec":       {"guidance"},
 	"CoderResult":          {"tests_passed"},
 	"IssueResult":          {"split_request"},
 	"ReplanDecision":       {"ask_user_form"},

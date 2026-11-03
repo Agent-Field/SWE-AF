@@ -127,6 +127,8 @@ type SplitIssueSpec struct {
 	FilesToCreate      StrList `json:"files_to_create"`
 	FilesToModify      StrList `json:"files_to_modify"`
 	ParentIssueName    string  `json:"parent_issue_name"`
+	// Optional; inherits the parent issue's guidance when omitted.
+	Guidance map[string]any `json:"guidance"`
 }
 
 // IssueAdvisorDecision is the structured output from the Issue Advisor agent.

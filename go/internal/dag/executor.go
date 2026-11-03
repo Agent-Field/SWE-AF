@@ -399,12 +399,14 @@ mainLoop:
 		}
 		if len(splitResults) > 0 && callFn != nil {
 			for _, sr := range splitResults {
-				newIssues := make([]map[string]any, 0, len(*sr.SplitRequest))
-				for _, sub := range *sr.SplitRequest {
-					subDict := dumpToMap(sub)
-					subDict["parent_issue_name"] = sr.IssueName
-					newIssues = append(newIssues, subDict)
+				parentIssue := map[string]any{}
+				for _, i := range dagState.AllIssues {
+					if asStr(i["name"]) == sr.IssueName {
+						parentIssue = i
+						break
+					}
 				}
+				newIssues := splitChildIssueDicts(*sr.SplitRequest, parentIssue, sr.IssueName)
 				var splitNames []string
 				for _, s := range *sr.SplitRequest {
 					splitNames = append(splitNames, s.Name)
@@ -607,4 +609,29 @@ func joinDebtDescriptions(debtItems []map[string]any) string {
 		out += p
 	}
 	return out
+}
+
+// splitChildIssueDicts ports _split_child_issue_dicts: build issue dicts for an
+// advisor split, inheriting the parent's guidance. The advisor's split specs
+// carry only what it wrote; the parent's routing and proportionality guidance
+// (needs_deeper_qa, needs_new_tests, estimated_scope, testing_guidance,
+// review_focus, ...) still applies to its children, so a child that omits
+// guidance inherits it. A child that states its own guidance wins.
+func splitChildIssueDicts(splitRequest []schemas.SplitIssueSpec, parentIssue map[string]any, parentName string) []map[string]any {
+	parentGuidance, _ := parentIssue["guidance"].(map[string]any)
+	children := make([]map[string]any, 0, len(splitRequest))
+	for _, spec := range splitRequest {
+		child := dumpToMap(spec)
+		child["parent_issue_name"] = parentName
+		childGuidance, _ := child["guidance"].(map[string]any)
+		if len(childGuidance) == 0 && len(parentGuidance) > 0 {
+			guidance := make(map[string]any, len(parentGuidance))
+			for k, v := range parentGuidance {
+				guidance[k] = v
+			}
+			child["guidance"] = guidance
+		}
+		children = append(children, child)
+	}
+	return children
 }

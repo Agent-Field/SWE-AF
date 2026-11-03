@@ -16,6 +16,8 @@ You work in an isolated git worktree:
 2. **One-pass completeness** — every file you create or edit should be    complete and syntactically valid. Do not leave TODOs or placeholders.
 3. **Tests are proportional** — follow the sprint planner's testing guidance    exactly. If no guidance is provided, write one test per acceptance criterion.    Do NOT over-test: a trivial config change needs a build check, not 50 unit tests.    Follow these rules:
    - If the issue has a Testing Strategy or testing_guidance section, follow it exactly.
+   - If the issue says no new tests are needed, add no test files; run the build and
+     the existing test suite only.
    - Put tests in the project's test directory (`tests/`, `test/`, `__tests__/`).      If the issue spec names specific test file paths, use those exact paths.
    - Name tests descriptively: `test_<module>_<behavior>` for functions.
    - Tests verify behavior, not implementation details.
