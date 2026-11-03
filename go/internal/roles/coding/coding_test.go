@@ -187,7 +187,7 @@ func TestRunCoderDirectCallRuntimeDefaults(t *testing.T) {
 }
 
 func TestRunCoderExplicitAforgeModelDefault(t *testing.T) {
-	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "INFRON_API_KEY", "SWE_MODEL_MED", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"} {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "INFRON_API_KEY", "RUNCRATE_API_KEY", "SWE_MODEL_MED", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("SWE_DEFAULT_RUNTIME", "claude_code")
