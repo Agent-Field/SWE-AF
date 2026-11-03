@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -20,10 +21,23 @@ import (
 // counter must start fresh; keying per round keeps crash-resume inside a round
 // working while stopping a RETRY from resuming an exhausted window. Round 0
 // keeps the bare issue name so pre-existing checkpoints still resume.
-// Later rounds use a subdirectory that cannot alias a base issue filename.
+// Later rounds encode the name as one filename component.
 func iterationStateKey(issueName string, advisorRound int) string {
 	if advisorRound != 0 {
-		return fmt.Sprintf("advisor-rounds/r%d/%s", advisorRound, issueName)
+		var encoded strings.Builder
+		stem := strings.ToUpper(strings.SplitN(issueName, ".", 2)[0])
+		reserved := stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" ||
+			(len(stem) == 4 && (stem[:3] == "COM" || stem[:3] == "LPT") && stem[3] >= '1' && stem[3] <= '9')
+		for i := 0; i < len(issueName); i++ {
+			c := issueName[i]
+			// Match urllib.parse.quote(..., safe=""): UTF-8 bytes, uppercase hex.
+			if !(reserved && i == 0) && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-._~", rune(c))) {
+				encoded.WriteByte(c)
+			} else {
+				fmt.Fprintf(&encoded, "%%%02X", c)
+			}
+		}
+		return encoded.String()
 	}
 	return issueName
 }
@@ -34,9 +48,13 @@ func iterationStateKey(issueName string, advisorRound int) string {
 // sequential builds against the same repo do not resume stale state from prior
 // runs: <artifacts>/execution/iterations/<build_id>/<state_key>.json. Without
 // one: <artifacts>/execution/iterations/<state_key>.json. Empty artifactsDir -> "".
-func iterationStatePath(artifactsDir, stateKey, buildID string) string {
+// Advisor rounds use the sibling iteration-rounds[/<build_id>]/r<k> tree.
+func iterationStatePath(artifactsDir, stateKey, buildID string, advisorRounds ...int) string {
 	if artifactsDir == "" {
 		return ""
+	}
+	if len(advisorRounds) > 0 && advisorRounds[0] != 0 {
+		return filepath.Join(artifactsDir, "execution", "iteration-rounds", buildID, fmt.Sprintf("r%d", advisorRounds[0]), stateKey+".json")
 	}
 	if buildID != "" {
 		return filepath.Join(artifactsDir, "execution", "iterations", buildID, stateKey+".json")
@@ -45,8 +63,8 @@ func iterationStatePath(artifactsDir, stateKey, buildID string) string {
 }
 
 // saveIterationState ports _save_iteration_state. Writes state as indent=2 JSON.
-func saveIterationState(artifactsDir, stateKey string, state map[string]any, buildID string) {
-	path := iterationStatePath(artifactsDir, stateKey, buildID)
+func saveIterationState(artifactsDir, stateKey string, state map[string]any, buildID string, advisorRounds ...int) {
+	path := iterationStatePath(artifactsDir, stateKey, buildID, advisorRounds...)
 	if path == "" {
 		return
 	}
@@ -62,8 +80,8 @@ func saveIterationState(artifactsDir, stateKey string, state map[string]any, bui
 
 // loadIterationState ports _load_iteration_state. Returns nil when the file is
 // absent, when artifactsDir is empty, or on read/parse error.
-func loadIterationState(artifactsDir, stateKey, buildID string) map[string]any {
-	path := iterationStatePath(artifactsDir, stateKey, buildID)
+func loadIterationState(artifactsDir, stateKey, buildID string, advisorRounds ...int) map[string]any {
+	path := iterationStatePath(artifactsDir, stateKey, buildID, advisorRounds...)
 	if path == "" {
 		return nil
 	}

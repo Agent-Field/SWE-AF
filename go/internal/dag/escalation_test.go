@@ -3,8 +3,11 @@ package dag
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
@@ -95,7 +98,7 @@ func TestAdvisorRetryRunsCoderIterations(t *testing.T) {
 		t.Errorf("attempts = %d, want 1 (the retry window's own counter)", result.Attempts)
 	}
 
-	checkpoint := filepath.Join(state.ArtifactsDir, "execution", "iterations", "build-l12", "advisor-rounds", "r1", "retry-issue.json")
+	checkpoint := filepath.Join(state.ArtifactsDir, "execution", "iteration-rounds", "build-l12", "r1", "retry-issue.json")
 	data, err := os.ReadFile(checkpoint)
 	if err != nil {
 		t.Fatalf("retry checkpoint missing at %s: %v", checkpoint, err)
@@ -246,5 +249,107 @@ func TestSplitChildInheritsParentGuidance(t *testing.T) {
 	children = splitChildIssueDicts(split, map[string]any{}, "parent")
 	if g, _ := children[0]["guidance"].(map[string]any); len(g) != 0 {
 		t.Errorf("child guidance = %v, want empty", g)
+	}
+}
+
+func TestAdvisorTerminalResultsKeepFilesFromAllWindows(t *testing.T) {
+	cases := []struct {
+		terminal string
+		outcome  schemas.IssueOutcome
+	}{
+		{"completed", schemas.IssueOutcomeCompleted},
+		{"debt", schemas.IssueOutcomeCompletedWithDebt},
+		{"failed", schemas.IssueOutcomeFailedUnrecoverable},
+		{"accept_with_debt", schemas.IssueOutcomeCompletedWithDebt},
+		{"escalate_to_replan", schemas.IssueOutcomeFailedEscalated},
+		{"split", schemas.IssueOutcomeFailedNeedsSplit},
+		{"advisor_error", schemas.IssueOutcomeFailedUnrecoverable},
+		{"unknown", schemas.IssueOutcomeFailedUnrecoverable},
+	}
+	for _, retryAction := range []string{"retry_approach", "retry_modified"} {
+		for _, tc := range cases {
+			t.Run(retryAction+"/"+tc.terminal, func(t *testing.T) {
+				state := advisorState(t)
+				round := 0
+				resumed := false
+				iterations := []int{}
+				fn := func(_ context.Context, target string, kw map[string]any) (map[string]any, error) {
+					if lastSeg(target) == "run_issue_advisor" {
+						round = kw["advisor_invocation"].(int)
+						if round == 1 {
+							return map[string]any{"action": retryAction, "modified_acceptance_criteria": []string{"Works"}}, nil
+						}
+						if tc.terminal == "advisor_error" {
+							return nil, errors.New("Advisor unavailable")
+						}
+						return map[string]any{"action": tc.terminal, "sub_issues": []map[string]any{}}, nil
+					}
+					if resumed {
+						t.Fatal("Completed coding windows must resume without agent calls")
+					}
+					if lastSeg(target) == "run_coder" {
+						iterations = append(iterations, kw["iteration"].(int))
+						files := []string{"core.py", "shared.py"}
+						if round > 0 {
+							files = []string{"fix.py", "shared.py"}
+						}
+						return map[string]any{"files_changed": files}, nil
+					}
+					return map[string]any{"approved": round > 0 && tc.terminal == "completed", "blocking": round == 0 || (tc.terminal != "completed" && tc.terminal != "debt"), "summary": "Window review"}, nil
+				}
+				maxAdvisor := 2
+				if tc.terminal == "completed" || tc.terminal == "debt" || tc.terminal == "failed" {
+					maxAdvisor = 1
+				}
+				cfg := testCfg(t, map[string]any{"max_coding_iterations": 1, "max_advisor_invocations": maxAdvisor})
+				run := func() schemas.IssueResult {
+					result, err := executeSingleIssue(context.Background(), advisorIssue("files"), state, nil, cfg, fn, "test", nil, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return result
+				}
+				result := run()
+				wantFiles := []string{"core.py", "shared.py", "fix.py"}
+				if result.Outcome != tc.outcome || !reflect.DeepEqual(result.FilesChanged, wantFiles) || result.Attempts != 1 || len(result.IterationHistory) != 1 {
+					t.Fatalf("result=%+v", result)
+				}
+				windows := 2
+				if tc.terminal == "unknown" {
+					windows = 3
+				}
+				if !reflect.DeepEqual(iterations, []int{1, 1}) && !(windows == 3 && reflect.DeepEqual(iterations, []int{1, 1, 1})) {
+					t.Fatal(iterations)
+				}
+				for window := 0; window < windows; window++ {
+					path := filepath.Join(state.ArtifactsDir, "execution", "iterations", state.BuildID, "files.json")
+					want := []string{"core.py", "shared.py"}
+					if window > 0 {
+						path = filepath.Join(state.ArtifactsDir, "execution", "iteration-rounds", state.BuildID, fmt.Sprintf("r%d", window), "files.json")
+						want = []string{"fix.py", "shared.py"}
+					}
+					data, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var saved struct {
+						Iteration    int      `json:"iteration"`
+						FilesChanged []string `json:"files_changed"`
+					}
+					if err := json.Unmarshal(data, &saved); err != nil {
+						t.Fatal(err)
+					}
+					if saved.Iteration != 1 || !reflect.DeepEqual(saved.FilesChanged, want) {
+						t.Fatal("changed per-window checkpoint", string(data))
+					}
+				}
+				round = 0
+				resumed = true
+				again := run()
+				if again.Outcome != tc.outcome || !reflect.DeepEqual(again.FilesChanged, wantFiles) {
+					t.Fatal(again)
+				}
+			})
+		}
 	}
 }

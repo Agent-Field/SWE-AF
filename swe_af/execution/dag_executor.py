@@ -939,6 +939,7 @@ async def _execute_single_issue(
     adaptations: list[IssueAdaptation] = []
     debt_items: list[dict] = []
     last_result: IssueResult | None = None
+    files_changed: list[str] = []
 
     max_advisor = config.max_advisor_invocations if config.enable_issue_advisor else 0
 
@@ -964,6 +965,10 @@ async def _execute_single_issue(
         else:
             raise ValueError("No execute_fn or call_fn — cannot execute issue")
 
+        # Keep earlier windows' files on every terminal result, without changing
+        # the per-window checkpoints or iteration counters.
+        files_changed = list(dict.fromkeys([*files_changed, *result.files_changed]))
+        result.files_changed = files_changed
         last_result = result
 
         # Success — return with any accumulated adaptations/debt.  Keep the

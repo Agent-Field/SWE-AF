@@ -37,6 +37,8 @@ func executeSingleIssue(
 	currentIssue := copyIssue(issue)
 	adaptations := []schemas.IssueAdaptation{}
 	debtItems := []map[string]any{}
+	filesChanged := []string{}
+	seenFiles := map[string]bool{}
 
 	var lastResult schemas.IssueResult
 	haveLast := false
@@ -63,6 +65,15 @@ func executeSingleIssue(
 			return schemas.IssueResult{}, err // fatal / cancellation — propagate
 		}
 
+		// Keep earlier windows' files on every terminal result, without changing
+		// the per-window checkpoints or iteration counters.
+		for _, file := range result.FilesChanged {
+			if !seenFiles[file] {
+				seenFiles[file] = true
+				filesChanged = append(filesChanged, file)
+			}
+		}
+		result.FilesChanged = filesChanged
 		lastResult = result
 		haveLast = true
 

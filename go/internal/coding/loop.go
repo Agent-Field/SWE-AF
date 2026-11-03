@@ -138,7 +138,7 @@ func RunCodingLoop(
 	isFirstSuccess := len(dagState.CompletedIssues) == 0
 
 	// Resume from iteration checkpoint if available.
-	if existingState := loadIterationState(dagState.ArtifactsDir, stateKey, dagState.BuildID); existingState != nil {
+	if existingState := loadIterationState(dagState.ArtifactsDir, stateKey, dagState.BuildID, advisorRound); existingState != nil {
 		startIteration = toInt(existingState["iteration"]) + 1
 		feedback = mapGetStr(existingState, "feedback", "")
 		if fc := toStringSlice(existingState["files_changed"]); fc != nil {
@@ -291,7 +291,7 @@ func RunCodingLoop(
 			"feedback":          summary,
 			"files_changed":     filesChanged,
 			"iteration_history": iterationHistory,
-		}, dagState.BuildID)
+		}, dagState.BuildID, advisorRound)
 
 		// --- 3. WRITE TO MEMORY ---
 		if action == "approve" {

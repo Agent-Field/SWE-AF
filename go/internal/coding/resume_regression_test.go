@@ -2,6 +2,7 @@ package coding
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -68,7 +69,14 @@ func TestResumeFinishedOneIterationWindow(t *testing.T) {
 				if !approved && (len(resumed.DebtItems) == 0 || !reflect.DeepEqual(first.DebtItems, resumed.DebtItems)) {
 					t.Fatalf("lost review debt: %+v", resumed)
 				}
-				state := loadIterationState(root, iterationStateKey("resume", round), "build")
+				data, err := os.ReadFile(resumeExpectedPath(root, "resume", round))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var state map[string]any
+				if err := json.Unmarshal(data, &state); err != nil {
+					t.Fatal(err)
+				}
 				if state["result"] != nil || state["issue"] != nil {
 					t.Fatal("whole-result replay/ownership must not be persisted")
 				}
@@ -156,7 +164,7 @@ func TestResumeAdvisorRoundAndLiteralIssueNeverShareState(t *testing.T) {
 			}
 			paths := []string{}
 			for _, w := range windows {
-				paths = append(paths, iterationStatePath(root, iterationStateKey(w.name, w.round), "build"))
+				paths = append(paths, resumeExpectedPath(root, w.name, w.round))
 				calls := 0
 				callFn := func(_ context.Context, target string, kw map[string]any) (map[string]any, error) {
 					calls++
@@ -191,7 +199,7 @@ func TestResumeAdvisorRoundAndLiteralIssueNeverShareState(t *testing.T) {
 
 func TestResumeRoundZeroPathMatchesBase(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"parent", "parent.r1", "parent%2Er1", "advisor-rounds", ".", ".."} {
+	for _, name := range []string{"parent", "parent.r1", "parent%2Er1", "advisor-rounds", ".", "..", "", "advisor-rounds/r1/victim", "../../victim", `a\b`, "C:drive", strings.Repeat("a", 300)} {
 		for _, buildID := range []string{"", "build"} {
 			want := filepath.Join(root, "execution", "iterations", buildID, name+".json")
 			if iterationStateKey(name, 0) != name || iterationStatePath(root, iterationStateKey(name, 0), buildID) != want {
@@ -201,12 +209,28 @@ func TestResumeRoundZeroPathMatchesBase(t *testing.T) {
 	}
 }
 
+// Expected paths are independent of production helpers so restoring HEAD source
+// still compiles and demonstrates behavioral failures.
+func resumeExpectedPath(root, name string, round int) string {
+	if round != 0 {
+		return filepath.Join(root, "execution", "iteration-rounds", "build", fmt.Sprintf("r%d", round), name+".json")
+	}
+	return filepath.Join(root, "execution", "iterations", "build", name+".json")
+}
+
 func TestResumeRoundPathIsBelowSeparateDirectory(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{"parent", "parent.r1", "parent%2Er1", "advisor-rounds", ".", ".."} {
-		want := filepath.Join(root, "execution", "iterations", "build", "advisor-rounds", "r1", name+".json")
-		if got := iterationStatePath(root, iterationStateKey(name, 1), "build"); got != want {
-			t.Errorf("%s: got %s want %s", name, got, want)
+	for _, tc := range []struct{ name, encoded string }{{"parent", "parent"}, {"parent.r1", "parent.r1"}, {"parent%2Er1", "parent%252Er1"}, {"advisor-rounds", "advisor-rounds"}, {".", "."}, {"..", ".."}} {
+		name := tc.name
+		root := t.TempDir()
+		fn := func(_ context.Context, target string, _ map[string]any) (map[string]any, error) {
+			if lastSeg(target) == "run_coder" {
+				return map[string]any{"files_changed": []string{"app.py"}}, nil
+			}
+			return map[string]any{"approved": true, "blocking": false}, nil
+		}
+		resumeRun(t, root, name, 1, 1, fn)
+		if _, err := os.Stat(resumeExpectedPath(root, tc.encoded, 1)); err != nil {
+			t.Fatal(err)
 		}
 	}
 }
@@ -298,5 +322,132 @@ func TestResumeReviewOutageWithoutUnresolvedBlockerKeepsFailOpen(t *testing.T) {
 				t.Fatal(result, reviews)
 			}
 		})
+	}
+}
+
+func TestResumeAdvisorRoundAliasesStayIndependent(t *testing.T) {
+	pairs := [][]struct {
+		name  string
+		round int
+	}{
+		{{"victim", 1}, {"advisor-rounds/r1/victim", 0}},
+		{{"victim", 0}, {"../../victim", 1}},
+	}
+	for i, pair := range pairs {
+		for _, reverse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("pair%d/reverse%v", i, reverse), func(t *testing.T) {
+				root := t.TempDir()
+				if err := os.MkdirAll(filepath.Join(root, "execution", "iterations", "build", "advisor-rounds", "r1"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				windows := append([]struct {
+					name  string
+					round int
+				}{}, pair...)
+				if reverse {
+					windows[0], windows[1] = windows[1], windows[0]
+				}
+				for _, w := range windows {
+					calls := 0
+					fn := func(_ context.Context, target string, kw map[string]any) (map[string]any, error) {
+						calls++
+						if lastSeg(target) == "run_coder" {
+							if toInt(kw["iteration"]) != 1 {
+								t.Fatal("foreign iteration")
+							}
+							return map[string]any{"files_changed": []string{w.name + ".py"}}, nil
+						}
+						return map[string]any{"approved": true, "blocking": false, "summary": w.name}, nil
+					}
+					result := resumeRun(t, root, w.name, 1, w.round, fn)
+					if calls != 2 || result.ResultSummary != w.name || !reflect.DeepEqual(result.FilesChanged, []string{w.name + ".py"}) {
+						t.Fatalf("calls=%d result=%+v", calls, result)
+					}
+				}
+				for _, w := range windows {
+					result := resumeRun(t, root, w.name, 1, w.round, resumeNoCalls(t))
+					if result.ResultSummary != w.name {
+						t.Fatal(result)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestResumeRetryNameIsOneEncodedComponent(t *testing.T) {
+	names := []struct{ name, encoded string }{
+		{"a/b", "a%2Fb"}, {`a\b`, "a%5Cb"}, {"a%b", "a%25b"},
+		{"C:drive", "C%3Adrive"}, {"a%2Fb", "a%252Fb"},
+		{".", "."}, {"..", ".."}, {"", ""},
+		{"CON", "%43ON"}, {"nul.txt", "%6Eul.txt"},
+		{"a<>\"|?*\x00\x1f\x7f", "a%3C%3E%22%7C%3F%2A%00%1F%7F"},
+		{"café", "caf%C3%A9"}, {"space ", "space%20"},
+	}
+	for _, tc := range names {
+		for _, buildID := range []string{"", "build"} {
+			t.Run(fmt.Sprintf("%q/build%s", tc.name, buildID), func(t *testing.T) {
+				state := makeDAGState(t.TempDir())
+				state.BuildID = buildID
+				calls := 0
+				fn := func(_ context.Context, target string, kw map[string]any) (map[string]any, error) {
+					calls++
+					if lastSeg(target) == "run_coder" {
+						if toInt(kw["iteration"]) != 1 {
+							t.Fatal("foreign iteration")
+						}
+						return map[string]any{"files_changed": []string{"app.py"}}, nil
+					}
+					return map[string]any{"approved": true, "blocking": false, "summary": tc.name}, nil
+				}
+				cfg := makeConfig(t, map[string]any{"max_coding_iterations": 1})
+				first, err := RunCodingLoop(context.Background(), map[string]any{"name": tc.name}, state, fn, "test", cfg, nil, nil, 2)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := filepath.Join(state.ArtifactsDir, "execution", "iteration-rounds", buildID, "r2", tc.encoded+".json")
+				if _, err := os.Stat(want); err != nil {
+					t.Fatal(err)
+				}
+				again, err := RunCodingLoop(context.Background(), map[string]any{"name": tc.name}, state, resumeNoCalls(t), "test", cfg, nil, nil, 2)
+				if err != nil || calls != 2 || first.Outcome != schemas.IssueOutcomeCompleted || again.Outcome != first.Outcome ||
+					again.Attempts != first.Attempts || again.ResultSummary != first.ResultSummary || !reflect.DeepEqual(first.FilesChanged, again.FilesChanged) {
+					t.Fatalf("calls=%d first=%+v again=%+v err=%v", calls, first, again, err)
+				}
+			})
+		}
+	}
+}
+
+func TestResumeVeryLongRetryNameDoesNotAlias(t *testing.T) {
+	for _, round := range []int{0, 1} {
+		root := t.TempDir()
+		name := strings.Repeat("x", 300)
+		calls := 0
+		fn := func(_ context.Context, target string, _ map[string]any) (map[string]any, error) {
+			calls++
+			if lastSeg(target) == "run_coder" {
+				return map[string]any{"files_changed": []string{"app.py"}}, nil
+			}
+			return map[string]any{"approved": true, "blocking": false}, nil
+		}
+		// Go's base behavior ignores checkpoint write errors. Both entries
+		// must run, rather than resume a silently truncated checkpoint.
+		resumeRun(t, root, name, 1, round, fn)
+		resumeRun(t, root, name, 1, round, fn)
+		if calls != 4 {
+			t.Fatal("long name aliased a checkpoint")
+		}
+		if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !entry.IsDir() && strings.HasSuffix(path, ".json") && strings.Contains(path, "execution") {
+				t.Fatal("truncated checkpoint", path)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

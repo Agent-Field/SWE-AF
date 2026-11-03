@@ -20,6 +20,7 @@ import os
 import traceback
 import uuid
 from typing import Callable
+from urllib.parse import quote
 
 
 from swe_af.execution.fatal_error import FatalHarnessError
@@ -52,16 +53,29 @@ def _iteration_state_key(issue_name: str, advisor_round: int = 0) -> str:
     round working while stopping a RETRY from resuming an exhausted window
     (which would run zero coder iterations and still report a completion).
     Round 0 keeps the bare issue name so pre-existing checkpoints still resume.
-    Later rounds use a subdirectory that cannot alias a base issue filename.
+    Later rounds encode the name as one filename component.
     """
     if advisor_round:
-        return os.path.join("advisor-rounds", f"r{advisor_round}", issue_name)
+        encoded = quote(issue_name, safe="")
+        # Windows reserves these stems even with a .json extension.
+        stem = issue_name.split(".", 1)[0].upper()
+        if stem in {"CON", "PRN", "AUX", "NUL"} or (
+            len(stem) == 4 and stem[:3] in {"COM", "LPT"} and stem[3] in "123456789"
+        ):
+            encoded = f"%{ord(issue_name[0]):02X}{encoded[1:]}"
+        return encoded
     return issue_name
 
 
-def _iteration_state_path(artifacts_dir: str, state_key: str, build_id: str = "") -> str:
+def _iteration_state_path(artifacts_dir: str, state_key: str, build_id: str = "", advisor_round: int = 0) -> str:
+    """Round zero keeps the base path; retries use a sibling tree."""
     if not artifacts_dir:
         return ""
+    if advisor_round:
+        return os.path.join(
+            artifacts_dir, "execution", "iteration-rounds", *([build_id] if build_id else []),
+            f"r{advisor_round}", f"{state_key}.json",
+        )
     if build_id:
         # Scope iteration checkpoints by build_id so parallel/sequential builds
         # against the same repo do not resume stale state from prior runs.
@@ -71,8 +85,8 @@ def _iteration_state_path(artifacts_dir: str, state_key: str, build_id: str = ""
     return os.path.join(artifacts_dir, "execution", "iterations", f"{state_key}.json")
 
 
-def _save_iteration_state(artifacts_dir: str, state_key: str, state: dict, build_id: str = "") -> None:
-    path = _iteration_state_path(artifacts_dir, state_key, build_id=build_id)
+def _save_iteration_state(artifacts_dir: str, state_key: str, state: dict, build_id: str = "", advisor_round: int = 0) -> None:
+    path = _iteration_state_path(artifacts_dir, state_key, build_id=build_id, advisor_round=advisor_round)
     if not path:
         return
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -80,8 +94,8 @@ def _save_iteration_state(artifacts_dir: str, state_key: str, state: dict, build
         json.dump(state, f, indent=2, default=str)
 
 
-def _load_iteration_state(artifacts_dir: str, state_key: str, build_id: str = "") -> dict | None:
-    path = _iteration_state_path(artifacts_dir, state_key, build_id=build_id)
+def _load_iteration_state(artifacts_dir: str, state_key: str, build_id: str = "", advisor_round: int = 0) -> dict | None:
+    path = _iteration_state_path(artifacts_dir, state_key, build_id=build_id, advisor_round=advisor_round)
     if not path or not os.path.exists(path):
         return None
     with open(path, "r") as f:
@@ -710,7 +724,7 @@ async def run_coding_loop(
     is_first_success = len(dag_state.completed_issues) == 0
 
     # Resume from iteration checkpoint if available
-    existing_state = _load_iteration_state(dag_state.artifacts_dir, state_key, build_id=dag_state.build_id)
+    existing_state = _load_iteration_state(dag_state.artifacts_dir, state_key, build_id=dag_state.build_id, advisor_round=advisor_round)
     if existing_state:
         start_iteration = existing_state.get("iteration", 0) + 1
         feedback = existing_state.get("feedback", "")
@@ -862,7 +876,7 @@ async def run_coding_loop(
             "feedback": summary,
             "files_changed": files_changed,
             "iteration_history": iteration_history,
-        }, build_id=dag_state.build_id)
+        }, build_id=dag_state.build_id, advisor_round=advisor_round)
 
         # --- 3. WRITE TO MEMORY ---
         if action == "approve":
