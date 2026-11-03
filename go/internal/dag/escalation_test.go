@@ -95,7 +95,7 @@ func TestAdvisorRetryRunsCoderIterations(t *testing.T) {
 		t.Errorf("attempts = %d, want 1 (the retry window's own counter)", result.Attempts)
 	}
 
-	checkpoint := filepath.Join(state.ArtifactsDir, "execution", "iterations", "build-l12", "retry-issue.r1.json")
+	checkpoint := filepath.Join(state.ArtifactsDir, "execution", "iterations", "build-l12", "advisor-rounds", "r1", "retry-issue.json")
 	data, err := os.ReadFile(checkpoint)
 	if err != nil {
 		t.Fatalf("retry checkpoint missing at %s: %v", checkpoint, err)

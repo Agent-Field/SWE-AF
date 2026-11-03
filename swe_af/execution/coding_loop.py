@@ -52,8 +52,11 @@ def _iteration_state_key(issue_name: str, advisor_round: int = 0) -> str:
     round working while stopping a RETRY from resuming an exhausted window
     (which would run zero coder iterations and still report a completion).
     Round 0 keeps the bare issue name so pre-existing checkpoints still resume.
+    Later rounds use a subdirectory that cannot alias a base issue filename.
     """
-    return f"{issue_name}.r{advisor_round}" if advisor_round else issue_name
+    if advisor_round:
+        return os.path.join("advisor-rounds", f"r{advisor_round}", issue_name)
+    return issue_name
 
 
 def _iteration_state_path(artifacts_dir: str, state_key: str, build_id: str = "") -> str:
@@ -368,6 +371,19 @@ def _detect_stuck_loop(iteration_history: list[dict], window: int = 3) -> bool:
     return len(findings) == 1 and "" not in findings
 
 
+def _review_from_history(entry: dict) -> dict:
+    """Recover recorded review feedback, including legacy fingerprints."""
+    findings = entry.get("review_debt_items") or []
+    if not findings and entry.get("review_blocking") and entry.get("review_findings"):
+        findings = [{"severity": "blocking", "title": entry["review_findings"]}]
+    return {
+        "approved": entry.get("review_approved", False),
+        "blocking": entry.get("review_blocking", False),
+        "summary": entry.get("summary", ""),
+        "debt_items": findings,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Path routing helpers
 # ---------------------------------------------------------------------------
@@ -388,6 +404,7 @@ async def _run_default_path(
     note_fn: Callable | None = None,
     workspace_manifest: dict | None = None,
     target_repo: str = "",
+    previous_review: dict | None = None,
 ) -> tuple[str, str, dict | None]:
     """Default path: reviewer only (2 LLM calls total including coder).
 
@@ -423,7 +440,10 @@ async def _run_default_path(
                 f"Reviewer failed: {issue_name}: {e}",
                 tags=["coding_loop", "review_error", issue_name],
             )
-        review_result = {"approved": True, "blocking": False, "summary": f"Review unavailable: {e}"}
+        if previous_review and previous_review.get("blocking"):
+            review_result = previous_review
+        else:
+            review_result = {"approved": True, "blocking": False, "summary": f"Review unavailable: {e}"}
 
     if note_fn:
         note_fn(
@@ -695,7 +715,9 @@ async def run_coding_loop(
         start_iteration = existing_state.get("iteration", 0) + 1
         feedback = existing_state.get("feedback", "")
         files_changed = existing_state.get("files_changed", [])
-        iteration_history = existing_state.get("iteration_history", [])
+        iteration_history = existing_state.get("iteration_history") or []
+        if iteration_history:
+            review_result = _review_from_history(iteration_history[-1])
         if note_fn:
             note_fn(
                 f"Resuming {issue_name} from iteration {start_iteration}",
@@ -806,6 +828,7 @@ async def run_coding_loop(
                 note_fn=note_fn,
                 workspace_manifest=ws_manifest_dict,
                 target_repo=target_repo,
+                previous_review=review_result,
             )
             qa_result = None
             synthesis_result = None
@@ -822,6 +845,8 @@ async def run_coding_loop(
             "review_approved": review_result.get("approved", False) if review_result else False,
             "review_blocking": review_result.get("blocking", False) if review_result else False,
             "review_findings": _review_findings_key(review_result),
+            "review_debt_items": (review_result or {}).get("debt_items") or [],
+            "repo_name": coder_result.get("repo_name", ""),
             "path": "flagged" if needs_deeper_qa else "default",
         })
 
@@ -968,18 +993,34 @@ async def run_coding_loop(
                 )
 
     # Loop exhausted without approval — check if we can accept with debt.
-    # `review_result` holds the last review of this window (None if the loop body
-    # never ran); `last_blocking` is derived from the recorded history so a
-    # missing review can never be read as a non-blocking one.
+    # Recover only recorded evidence when the checkpoint exhausted the window.
     last_review = review_result
     last_entry = iteration_history[-1] if iteration_history else None
     last_blocking = bool(last_entry.get("review_blocking", False)) if last_entry else False
-    last_iteration = int(last_entry.get("iteration", max_iterations)) if last_entry else 0
+    recorded_iteration = last_entry.get("iteration", 0) if last_entry else 0
+    last_iteration = recorded_iteration if type(recorded_iteration) is int else 0
 
     if iterations_run == 0:
-        # A window that never ran an iteration cannot be a completion: this is
-        # the shape that reported a blocked issue as "accepted with debt" with
-        # an empty debt list.  Fail it so the advisor sees a real failure.
+        if last_entry and last_iteration > 0 and last_entry.get("review_blocking") is False:
+            if last_entry.get("action") == "approve" and type(last_entry.get("review_approved")) is bool:
+                # On the flagged path the synthesizer owns the approval decision.
+                return IssueResult(
+                    issue_name=issue_name,
+                    outcome=IssueOutcome.COMPLETED,
+                    result_summary=last_entry.get("summary", ""),
+                    files_changed=files_changed,
+                    branch_name=branch_name,
+                    attempts=last_iteration,
+                    iteration_history=iteration_history,
+                    repo_name=last_entry.get("repo_name", ""),
+                )
+            if last_entry.get("action") == "fix" and files_changed:
+                last_review = _review_from_history(last_entry)
+            else:
+                last_blocking = True  # An unestablished decision is not approval.
+        else:
+            last_blocking = True
+    if iterations_run == 0 and last_blocking:
         if note_fn:
             note_fn(
                 f"Coding loop ran zero iterations: {issue_name}",

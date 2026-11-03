@@ -20,9 +20,10 @@ import (
 // counter must start fresh; keying per round keeps crash-resume inside a round
 // working while stopping a RETRY from resuming an exhausted window. Round 0
 // keeps the bare issue name so pre-existing checkpoints still resume.
+// Later rounds use a subdirectory that cannot alias a base issue filename.
 func iterationStateKey(issueName string, advisorRound int) string {
 	if advisorRound != 0 {
-		return fmt.Sprintf("%s.r%d", issueName, advisorRound)
+		return fmt.Sprintf("advisor-rounds/r%d/%s", advisorRound, issueName)
 	}
 	return issueName
 }

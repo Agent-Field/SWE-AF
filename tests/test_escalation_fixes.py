@@ -264,7 +264,7 @@ def test_advisor_retry_runs_coder_iterations(tmp_path: Path) -> None:
 
     retry_checkpoint = (
         tmp_path / "artifacts" / "execution" / "iterations" / "build-l12"
-        / "retry-issue.r1.json"
+        / "advisor-rounds" / "r1" / "retry-issue.json"
     )
     assert retry_checkpoint.exists()
     assert json.loads(retry_checkpoint.read_text())["iteration"] == 1

@@ -156,6 +156,9 @@ func RunCodingLoop(
 	// reviewResult persists past the loop for the exhaustion check (Python:
 	// `review_result if 'review_result' in dir() else None`).
 	var reviewResult map[string]any
+	if len(iterationHistory) > 0 {
+		reviewResult = reviewFromHistory(iterationHistory[len(iterationHistory)-1])
+	}
 
 	for iteration := startIteration; iteration <= maxIterations; iteration++ {
 		iterationsRun++
@@ -247,7 +250,7 @@ func RunCodingLoop(
 			// DEFAULT PATH: reviewer only.
 			a, s, rr, perr := runDefaultPath(ctx, callFn, nodeID, worktreePath, coderResult,
 				issue, iterationID, projectContext, memoryContext, cfg, timeout, issueName, note,
-				wsManifestDict, targetRepo)
+				wsManifestDict, targetRepo, reviewResult)
 			if perr != nil {
 				return schemas.IssueResult{}, perr // fatal — propagate
 			}
@@ -265,14 +268,16 @@ func RunCodingLoop(
 			qaPassed = qaResult["passed"] // .get("passed", None)
 		}
 		iterationHistory = append(iterationHistory, map[string]any{
-			"iteration":       iteration,
-			"action":          action,
-			"summary":         summary,
-			"qa_passed":       qaPassed,
-			"review_approved": isTruthy(reviewResult) && mapGetBool(reviewResult, "approved", false),
-			"review_blocking": isTruthy(reviewResult) && mapGetBool(reviewResult, "blocking", false),
-			"review_findings": reviewFindingsKey(reviewResult),
-			"path":            pathName(needsDeeperQA),
+			"iteration":         iteration,
+			"action":            action,
+			"summary":           summary,
+			"qa_passed":         qaPassed,
+			"review_approved":   isTruthy(reviewResult) && mapGetBool(reviewResult, "approved", false),
+			"review_blocking":   isTruthy(reviewResult) && mapGetBool(reviewResult, "blocking", false),
+			"review_findings":   reviewFindingsKey(reviewResult),
+			"review_debt_items": toMapSlice(reviewResult["debt_items"]),
+			"repo_name":         mapGetStr(coderResult, "repo_name", ""),
+			"path":              pathName(needsDeeperQA),
 		})
 
 		note(
@@ -417,10 +422,8 @@ func RunCodingLoop(
 	}
 
 	// Loop exhausted without approval — check if we can accept with debt.
-	// reviewResult holds the last review of this window (nil if the loop body
-	// never ran); lastBlocking is derived from the recorded history so a missing
-	// review can never be read as a non-blocking one.
-	lastReview := reviewResult // nil if the loop body never ran
+	// Recover only recorded evidence when the checkpoint exhausted the window.
+	lastReview := reviewResult
 	var lastEntry map[string]any
 	if len(iterationHistory) > 0 {
 		lastEntry = iterationHistory[len(iterationHistory)-1]
@@ -428,14 +431,36 @@ func RunCodingLoop(
 	lastBlocking := mapGetBool(lastEntry, "review_blocking", false)
 	lastIteration := 0
 	if lastEntry != nil {
-		// Python: int(last_entry.get("iteration", max_iterations)).
-		lastIteration = toIntDefault(lastEntry["iteration"], maxIterations)
+		lastIteration = toIntDefault(lastEntry["iteration"], 0)
 	}
 
 	if iterationsRun == 0 {
-		// A window that never ran an iteration cannot be a completion: this is
-		// the shape that reported a blocked issue as "accepted with debt" with an
-		// empty debt list. Fail it so the advisor sees a real failure.
+		blocking, recorded := lastEntry["review_blocking"].(bool)
+		_, approvalRecorded := lastEntry["review_approved"].(bool)
+		if lastEntry != nil && lastIteration > 0 && recorded && !blocking {
+			if mapGetStr(lastEntry, "action", "") == "approve" && approvalRecorded {
+				// On the flagged path the synthesizer owns the approval decision.
+				return schemas.IssueResult{
+					IssueName:        issueName,
+					Outcome:          schemas.IssueOutcomeCompleted,
+					ResultSummary:    mapGetStr(lastEntry, "summary", ""),
+					FilesChanged:     filesChanged,
+					BranchName:       branchName,
+					Attempts:         lastIteration,
+					IterationHistory: iterationHistory,
+					RepoName:         mapGetStr(lastEntry, "repo_name", ""),
+				}, nil
+			}
+			if mapGetStr(lastEntry, "action", "") == "fix" && len(filesChanged) > 0 {
+				lastReview = reviewFromHistory(lastEntry)
+			} else {
+				lastBlocking = true // An unestablished decision is not approval.
+			}
+		} else {
+			lastBlocking = true
+		}
+	}
+	if iterationsRun == 0 && lastBlocking {
 		note(
 			fmt.Sprintf("Coding loop ran zero iterations: %s", issueName),
 			[]string{"coding_loop", "exhausted", "zero_iterations", issueName},
@@ -500,7 +525,7 @@ func RunCodingLoop(
 // runDefaultPath ports _run_default_path: reviewer only (2 role calls including
 // the coder). Returns (action, summary, review_result). A fatal harness error is
 // returned as err (propagated); any other reviewer failure degrades to an
-// approving fallback so the loop continues.
+// approving fallback unless a previous blocking review remains unresolved.
 func runDefaultPath(
 	ctx context.Context,
 	callFn CallFn,
@@ -514,6 +539,7 @@ func runDefaultPath(
 	note NoteFn,
 	workspaceManifest map[string]any,
 	targetRepo string,
+	previousReview map[string]any,
 ) (action, summary string, reviewResult map[string]any, err error) {
 	permissionMode := cfg.PermissionMode
 
@@ -543,7 +569,11 @@ func runDefaultPath(
 			fmt.Sprintf("Reviewer failed: %s: %v", issueName, rerr),
 			[]string{"coding_loop", "review_error", issueName},
 		)
-		reviewResult = map[string]any{"approved": true, "blocking": false, "summary": fmt.Sprintf("Review unavailable: %v", rerr)}
+		if mapGetBool(previousReview, "blocking", false) {
+			reviewResult = previousReview
+		} else {
+			reviewResult = map[string]any{"approved": true, "blocking": false, "summary": fmt.Sprintf("Review unavailable: %v", rerr)}
+		}
 	}
 
 	note(
@@ -709,6 +739,20 @@ func runFlaggedPath(
 	summary = mapGetStr(synthesisResult, "summary", "")
 
 	return action, summary, reviewResult, qaResult, synthesisResult, nil
+}
+
+// reviewFromHistory recovers recorded review feedback, including legacy fingerprints.
+func reviewFromHistory(entry map[string]any) map[string]any {
+	findings := toMapSlice(entry["review_debt_items"])
+	if len(findings) == 0 && mapGetBool(entry, "review_blocking", false) && mapGetStr(entry, "review_findings", "") != "" {
+		findings = []map[string]any{{"severity": "blocking", "title": entry["review_findings"]}}
+	}
+	return map[string]any{
+		"approved":   mapGetBool(entry, "review_approved", false),
+		"blocking":   mapGetBool(entry, "review_blocking", false),
+		"summary":    mapGetStr(entry, "summary", ""),
+		"debt_items": findings,
+	}
 }
 
 // reviewFindingsKey ports _review_findings_key: a stable fingerprint of a
