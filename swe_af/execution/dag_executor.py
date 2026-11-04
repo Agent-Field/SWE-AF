@@ -10,6 +10,7 @@ import traceback
 from typing import Callable
 
 from swe_af.execution import git_fast_path
+from swe_af.execution.concurrency import gather_bounded
 from swe_af.execution.dag_utils import apply_replan, find_downstream
 from swe_af.execution.envelope import unwrap_call_result
 from swe_af.execution.fatal_error import FatalHarnessError
@@ -1534,7 +1535,9 @@ async def _write_issue_files_for_replan(
         )
         for new_issue in issues_to_write
     ]
-    results = await asyncio.gather(*writer_tasks, return_exceptions=True)
+    results = await gather_bounded(
+        writer_tasks, config.max_concurrent_issue_writers,
+    )
 
     if note_fn:
         successes = sum(
