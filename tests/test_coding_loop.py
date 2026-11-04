@@ -83,6 +83,9 @@ class _CallFnBuilder:
         self._reviewer_responses: dict[int, dict] = {}
         self._qa_responses: dict[int, dict] = {}
         self._synth_responses: dict[int, dict] = {}
+        self._reviewer_errors: dict[int, Exception] = {}
+        self._qa_errors: dict[int, Exception] = {}
+        self._synth_errors: dict[int, Exception] = {}
         self._call_count = 0
         # Track iteration by counting coder calls
         self._coder_calls = 0
@@ -132,6 +135,20 @@ class _CallFnBuilder:
         }
         return self
 
+    # -- failures --
+    def fail_reviewer(self, iteration: int, error: Exception | None = None) -> "_CallFnBuilder":
+        """Make the reviewer call raise (e.g. a timeout or provider error)."""
+        self._reviewer_errors[iteration] = error or RuntimeError("reviewer timed out")
+        return self
+
+    def fail_qa(self, iteration: int, error: Exception | None = None) -> "_CallFnBuilder":
+        self._qa_errors[iteration] = error or RuntimeError("qa timed out")
+        return self
+
+    def fail_synth(self, iteration: int, error: Exception | None = None) -> "_CallFnBuilder":
+        self._synth_errors[iteration] = error or RuntimeError("synthesizer timed out")
+        return self
+
     # -- synthesizer --
     def on_synth(
         self,
@@ -165,16 +182,22 @@ class _CallFnBuilder:
                 iteration = builder._coder_calls  # same iteration as last coder call
 
                 if "run_code_reviewer" in agent_name:
+                    if iteration in builder._reviewer_errors:
+                        raise builder._reviewer_errors[iteration]
                     default = {"approved": False, "blocking": False, "summary": "Needs work"}
                     return builder._reviewer_responses.get(iteration, default)
 
                 # Check synthesizer BEFORE qa — "run_qa" is a substring of
                 # "run_qa_synthesizer" so order matters.
                 if "run_qa_synthesizer" in agent_name:
+                    if iteration in builder._synth_errors:
+                        raise builder._synth_errors[iteration]
                     default = {"action": "fix", "summary": "Continue fixing", "stuck": False}
                     return builder._synth_responses.get(iteration, default)
 
                 if "run_qa" in agent_name:
+                    if iteration in builder._qa_errors:
+                        raise builder._qa_errors[iteration]
                     default = {"passed": True, "summary": "Tests pass", "test_failures": []}
                     return builder._qa_responses.get(iteration, default)
 
@@ -293,6 +316,86 @@ class TestCodingLoopIntegration(unittest.TestCase):
         self.assertIn("src/app.py", result.files_changed)
         self.assertEqual(len(result.iteration_history), 1)
         self.assertEqual(result.iteration_history[0]["action"], "approve")
+
+    # -- Reviewer infrastructure failures must not read as approvals --
+
+    def test_reviewer_failure_accepts_with_debt_not_completed(self):
+        """A reviewer that never ran must not yield a clean COMPLETED."""
+        builder = _CallFnBuilder()
+        builder.on_coder(1, files_changed=["src/app.py"])
+        builder.fail_reviewer(1, TimeoutError("reviewer timed out"))
+
+        result = _run(run_coding_loop(
+            issue=_make_issue(),
+            dag_state=_make_dag_state(self.artifacts_dir),
+            call_fn=builder.build(),
+            node_id="test-node",
+            config=_make_config(),
+            note_fn=self._note_fn,
+        ))
+
+        self.assertEqual(result.outcome, IssueOutcome.COMPLETED_WITH_DEBT)
+        self.assertEqual(result.attempts, 1)
+        self.assertTrue(result.iteration_history[0]["review_unavailable"])
+        self.assertFalse(result.iteration_history[0]["review_approved"])
+        self.assertTrue(any("review_unavailable" in tags for tags in self.note_tags))
+
+    def test_reviewer_failure_without_changes_fails(self):
+        """Nothing was produced and nothing was reviewed → not completable."""
+        builder = _CallFnBuilder()
+        builder.on_coder(1, files_changed=[])
+        builder.fail_reviewer(1)
+
+        result = _run(run_coding_loop(
+            issue=_make_issue(),
+            dag_state=_make_dag_state(self.artifacts_dir),
+            call_fn=builder.build(),
+            node_id="test-node",
+            config=_make_config(),
+            note_fn=self._note_fn,
+        ))
+
+        self.assertEqual(result.outcome, IssueOutcome.FAILED_UNRECOVERABLE)
+        self.assertIn("Review unavailable", result.error_message)
+
+    def test_flagged_reviewer_failure_never_reports_clean_approval(self):
+        """Even when the synthesizer says approve, a missing reviewer means debt."""
+        builder = _CallFnBuilder()
+        builder.on_coder(1, files_changed=["src/app.py"])
+        builder.fail_reviewer(1)
+        builder.on_synth(1, action="approve", summary="Looks fine")
+
+        result = _run(run_coding_loop(
+            issue=_make_issue(needs_deeper_qa=True),
+            dag_state=_make_dag_state(self.artifacts_dir),
+            call_fn=builder.build(),
+            node_id="test-node",
+            config=_make_config(),
+            note_fn=self._note_fn,
+        ))
+
+        self.assertEqual(result.outcome, IssueOutcome.COMPLETED_WITH_DEBT)
+        self.assertFalse(result.iteration_history[0]["review_approved"])
+
+    def test_flagged_qa_failure_does_not_block_an_approving_reviewer(self):
+        """QA unavailable + reviewer approved is still an approval."""
+        builder = _CallFnBuilder()
+        builder.on_coder(1, files_changed=["src/app.py"])
+        builder.on_reviewer(1, approved=True, blocking=False, summary="LGTM")
+        builder.fail_qa(1)
+        builder.fail_synth(1)
+
+        result = _run(run_coding_loop(
+            issue=_make_issue(needs_deeper_qa=True),
+            dag_state=_make_dag_state(self.artifacts_dir),
+            call_fn=builder.build(),
+            node_id="test-node",
+            config=_make_config(),
+            note_fn=self._note_fn,
+        ))
+
+        self.assertEqual(result.outcome, IssueOutcome.COMPLETED)
+        self.assertTrue(result.iteration_history[0]["qa_unavailable"])
 
     # -- Scenario 2: Approved after a fix cycle --
 
