@@ -1027,7 +1027,10 @@ class BuildConfig(BaseModel):
     # extending overall gate runtime. Used by `resolve()`; `build()` doesn't
     # need this because it creates a fresh PR with no prior check history.
     ci_startup_grace_seconds: int = 30
-    agent_timeout_seconds: int = 2700
+    # 60 min. Coder/QA agent calls routinely run 35-50 min on a large issue
+    # (a measured QA call took 51 min), so a 45 min cap killed healthy tail
+    # calls mid-edit.
+    agent_timeout_seconds: int = 3600
     max_advisor_invocations: int = 2
     enable_issue_advisor: bool = True
     enable_learning: bool = (
@@ -1305,7 +1308,7 @@ class ExecutionConfig(BaseModel):
     # Mirrors BuildConfig.deterministic_git (see there for semantics).
     deterministic_git: bool = True
     permission_mode: str = ""
-    agent_timeout_seconds: int = 2700  # 45 min
+    agent_timeout_seconds: int = 3600  # 60 min; see BuildConfig for rationale
     max_advisor_invocations: int = 2
     enable_issue_advisor: bool = True
     enable_learning: bool = False

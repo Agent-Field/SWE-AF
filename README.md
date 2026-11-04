@@ -914,7 +914,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 | `enable_issue_advisor`    | `true`          | Enable issue adaptation                               |
 | `enable_replanning`       | `true`          | Enable global replanning                              |
 | `enable_learning`         | `false`         | Enable cross-issue shared memory (continual learning) |
-| `agent_timeout_seconds`   | `2700`          | Per-agent timeout                                     |
+| `agent_timeout_seconds`   | `3600`          | Per-agent timeout                                     |
 | `agent_max_turns`         | `150`           | Tool-use turn budget                                  |
 
 </details>
