@@ -127,7 +127,7 @@ func TestPunctuationAfterCodeSurvives(t *testing.T) {
 // Live round 2, 2026-11-07: a command's output file was redacted to "the
 // repo", and the build's own approval file was cited to the person.
 func TestCommandsKeepPathsAndRecordsAreNotCited(t *testing.T) {
-	got := personText("Run `go test ./... -v > /tmp/len.out && grep -q PASS /tmp/len.out`. Per the override in `.artifacts/approval_state.json`, Total() stays; drafts in .artifacts/plan/prd.md lack it. Built at /Users/santosh/af/x/ledger.go.", 0)
+	got := personText("Run `go test ./... -v > /tmp/len.out && grep -q PASS /tmp/len.out`. Per the override in `.artifacts/approval_state.json`, Total() stays; drafts in .artifacts/plan/prd.md lack it (.artifacts/, .obs/ are ignored). Built at /Users/santosh/af/x/ledger.go.", 0)
 	for _, want := range []string{"> /tmp/len.out && grep -q PASS /tmp/len.out`", "override in your review", "drafts in the build's notes lack"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %q", want, got)

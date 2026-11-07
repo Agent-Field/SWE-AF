@@ -582,7 +582,7 @@ func existingTestNames(repoPath string) map[string]bool {
 var (
 	htmlComment   = regexp.MustCompile(`(?s)<!--.*?-->`)
 	absWorktree   = regexp.MustCompile(`(?:/Users|/home|/private|/tmp|/var|/root)/\S*?/(?:\.worktrees|workspaces)/[^/\s` + "`" + `]+/?`)
-	artifactRef   = regexp.MustCompile("`\\.artifacts/[^`\\s]*`|(?:^|\\s)\\.artifacts/[^\\s`'\")]*")
+	artifactRef   = regexp.MustCompile("`\\.artifacts/[^`\\s]*`|(?:^|[\\s(\\[])\\.artifacts/[^\\s`'\")]*")
 	homeDir       = regexp.MustCompile(`(?:/Users|/home)/[^/\s]+/`)
 	absPath       = regexp.MustCompile("(?:/Users|/home|/private|/tmp|/var|/root)/[^\\s`'\")]+")
 	refParen      = regexp.MustCompile(`\s*\((?:[^()]*?\b(?:AC\s?\d+|§\s?\d|[CDFR]\d{1,2}\b|[Rr]ev(?:ision)?\.?\s?\d|finding)[^()]*)\)`)
@@ -620,7 +620,10 @@ func personText(s string, revision int) string {
 	// as "your review" (live, 2026-11-07: "the override in
 	// `.artifacts/approval_state.json`").
 	s = artifactRef.ReplaceAllStringFunc(s, func(m string) string {
-		lead := m[:len(m)-len(strings.TrimLeft(m, " \t\n"))]
+		lead := ""
+		if i := strings.Index(m, ".artifacts"); i > 0 && !strings.HasPrefix(m, "`") {
+			lead = m[:i]
+		}
 		if strings.Contains(m, "approval") {
 			return lead + "your review"
 		}
