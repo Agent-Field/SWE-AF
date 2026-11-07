@@ -206,7 +206,7 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 			// spelled out, before anyone is asked to approve it.
 			reqs := readReviewRequests(feedback)
 			check := func(plan map[string]any) []string {
-				return append(revisionProblems(plan, reqs), additiveProblems(feedback, beforeTests, plan)...)
+				return revisionChecks(plan, reqs, feedback, beforeTests)
 			}
 			if problems := check(revised); len(problems) > 0 && revisionErr == "" {
 				deps.Note(ctx, fmt.Sprintf("Revised plan does not yet reflect the review (%d issue(s)); re-planning once more",

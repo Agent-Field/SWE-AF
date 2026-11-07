@@ -133,8 +133,9 @@ func TestTheGateReplansAContradictoryRevisionBeforeAsking(t *testing.T) {
 	if strings.Index(body, "## What you asked to change") > strings.Index(body, "## Summary") {
 		t.Fatal("the person's words come before the summary")
 	}
-	// ONE COUNTER: the planner's "Revision 2" reads as the gate's revision 1.
-	if regexp.MustCompile(`(?i)revision 2`).MatchString(body) || !strings.Contains(body, "revision 1") {
+	// ONE COUNTER, in the person's terms: the planner's "Revision 2" is said
+	// as "this revision", and the plan is named by the note that produced it.
+	if regexp.MustCompile(`(?i)revision \d`).MatchString(body) || !strings.Contains(body, "revised after your first note") {
 		t.Fatalf("revision numbering must come from the gate:\n%s", body)
 	}
 }

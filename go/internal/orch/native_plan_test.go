@@ -100,7 +100,7 @@ func TestApprovalWithoutHaxAsksOnTheControlPlane(t *testing.T) {
 	if strings.Join(first.Options, ",") != "approve,request_changes,reject" {
 		t.Fatalf("options = %v", first.Options)
 	}
-	if !strings.Contains(second.Question, "revised plan (revision 1)") ||
+	if !strings.Contains(second.Question, "revised after your first note") ||
 		!strings.Contains(second.Body, "> also document Len in the README") {
 		t.Fatalf("second round must say it is revised and quote the words:\n%s\n%s", second.Question, second.Body)
 	}

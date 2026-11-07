@@ -175,7 +175,8 @@ func howThePlanChanged(reqs []reviewRequest, problems []string, listed bool) []s
 		var bad bool
 		for _, p := range problems {
 			if (r.Avoid != "" && strings.Contains(p, r.Avoid)) || containsAny(p, r.Require) ||
-				(strings.Contains(p, "you asked to add, not to replace") && additiveCue.MatchString(r.Sentence)) {
+				(strings.Contains(p, "you asked to add, not to replace") && additiveSentence(r.Sentence)) ||
+				(strings.Contains(p, "duplicate") || strings.Contains(p, "check the same thing")) && reshapeCue.MatchString(r.Sentence) {
 				bad = true
 			}
 		}
@@ -291,19 +292,46 @@ func oneLineCut(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// additiveCue and replaceCue tell "also add a table test" (keep everything,
-// add one) from "replace the tests with a table test". Live on 2026-11-07 the
-// planner read "Also add a table test" as replace and dropped two tests the
-// person had already seen, while the Summary still listed them.
+// An ADDITIVE request keeps everything and adds one thing ("also add a table
+// test"); a RESHAPING request makes an old form go away ("make the
+// zero-allocation check its own test named X", "rename", "move", "split",
+// "replace"). Live on 2026-11-07 "Also add a table test" was read as replace
+// and dropped two tests the person had seen, so an additive request is held
+// to keeping them. But the same day "Also make the TestLen zero-allocation
+// check its own test named TestLenDoesNotAllocate" was a MOVE, and holding
+// it to "keep everything" would defend the very leftover the person asked to
+// reshape: the planner kept TestLenNoAllocations beside the new test and
+// wrote a rule protecting the duplicate. So "also" alone is not additive; a
+// sentence is additive only when it ADDS (add, include, cover, write…) and
+// reshapes nothing, and a test a reshaping sentence names is never held.
 var (
 	additiveCue = regexp.MustCompile(`(?i)\b(also|as well|in addition|additionally|too|on top of)\b`)
-	replaceCue  = regexp.MustCompile(`(?i)\b(instead|replace|replaces|replacing|rather than|drop|remove|delete|only|merge|combine|fold)\b`)
+	addVerb     = regexp.MustCompile(`(?i)\b(add|adds|adding|include|including|cover|covering|write|keep|plus)\b`)
+	reshapeCue  = regexp.MustCompile(`(?i)\b(its own|their own|own test|separate|split|move|moved|rename|renamed|replace|replaces|replacing|instead|rather than|turn (it|them) into|drop|remove|delete|merge|combine|fold|consolidate|only)\b`)
 )
 
+// additiveSentence is one the person wrote to add something and change
+// nothing else.
+func additiveSentence(s string) bool {
+	return additiveCue.MatchString(s) && addVerb.MatchString(s) && !reshapeCue.MatchString(s)
+}
+
 // additiveProblems names every test the plan sent back would have added that
-// the revision no longer adds, when the person asked only to ADD.
+// the revision no longer adds, when the person asked only to ADD — except a
+// test a reshaping sentence of theirs names or stems from ("TestLen…" when
+// they asked to move a TestLen check out), which they asked to go away.
 func additiveProblems(feedback string, beforeTests []string, revised map[string]any) []string {
-	if !additiveCue.MatchString(feedback) || replaceCue.MatchString(feedback) {
+	var additive bool
+	var reshaped []string
+	for _, sent := range sentenceSplit.Split(feedback, -1) {
+		if additiveSentence(sent) {
+			additive = true
+		}
+		if reshapeCue.MatchString(sent) {
+			reshaped = append(reshaped, goTestPattern.FindAllString(sent, -1)...)
+		}
+	}
+	if !additive {
 		return nil
 	}
 	now := map[string]bool{}
@@ -312,9 +340,113 @@ func additiveProblems(feedback string, beforeTests []string, revised map[string]
 	}
 	var out []string
 	for _, n := range beforeTests {
-		if !now[n] {
-			out = append(out, fmt.Sprintf("the revision no longer adds %s, but you asked to add, not to replace", n))
+		if now[n] || stemsFrom(n, reshaped) {
+			continue
 		}
+		out = append(out, fmt.Sprintf("the revision no longer adds %s, but you asked to add, not to replace", n))
+	}
+	return out
+}
+
+func stemsFrom(name string, roots []string) bool {
+	for _, r := range roots {
+		if strings.HasPrefix(name, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// duplicateProblems holds a revision to the person's reshaping: two new tests
+// that check the same thing, and any line of the plan whose only job is to
+// protect such a leftover ("renaming, removing or merging either allocation
+// test is out of scope"; "a later tidy-up must not delete one of them").
+func duplicateProblems(plan map[string]any) []string {
+	var out []string
+	tests := planTests(plan)
+	var dupNames []string
+	for i := 0; i < len(tests); i++ {
+		for j := i + 1; j < len(tests); j++ {
+			if sameCheck(tests[i], tests[j]) {
+				out = append(out, fmt.Sprintf("the plan adds both %s and %s, which check the same thing; keep one", tests[i], tests[j]))
+				dupNames = append(dupNames, tests[i], tests[j])
+			}
+		}
+	}
+	prd, _ := mapGet(plan, "prd", map[string]any{}).(map[string]any)
+	var lines []string
+	for _, k := range []string{"out_of_scope", "risks", "assumptions", "must_have", "acceptance_criteria"} {
+		for _, it := range coerceAnyList(prd[k]) {
+			lines = append(lines, fmt.Sprint(it))
+		}
+	}
+	for _, it := range coerceAnyList(approverSummary(plan)["risks"]) {
+		lines = append(lines, fmt.Sprint(it))
+	}
+	for _, it := range coerceAnyList(approverSummary(plan)["will_not_change"]) {
+		lines = append(lines, fmt.Sprint(it))
+	}
+	seen := map[string]bool{}
+	for _, l := range lines {
+		if strings.HasPrefix(l, reviewerRequestPrefix) || seen[l] {
+			continue
+		}
+		if protectsLeftover(l, dupNames) {
+			seen[l] = true
+			out = append(out, "the plan protects a duplicate instead of removing it: "+oneLineCut(l, 160))
+		}
+	}
+	return out
+}
+
+var (
+	protectCue   = regexp.MustCompile(`(?i)\b(must not|do not|don'?t|never|not)\s+(be\s+)?(delete|deleted|remove|removed|merge|merged|rename|renamed|consolidate|consolidated|collapse|collapsed|tidy)\b|\b(renaming|removing|merging|consolidating|deleting)\b[^.]{0,40}\b(either|both|one of)\b|\bnear-identical\b|\bduplicate\w*\b|\bon purpose\b`)
+	testWordCue  = regexp.MustCompile(`(?i)\btests?\b|\bTest[A-Z]`)
+	camelSplit   = regexp.MustCompile(`[A-Z][a-z0-9]*`)
+	fillerTokens = map[string]bool{"test": true, "does": true, "not": true, "no": true, "is": true, "it": true, "has": true, "should": true, "zero": true}
+)
+
+// protectsLeftover is a line that guards tests against being removed or
+// merged, or names a duplicate pair, rather than describing the change.
+func protectsLeftover(line string, dupNames []string) bool {
+	if !testWordCue.MatchString(line) || !protectCue.MatchString(line) {
+		return false
+	}
+	if len(dupNames) == 0 {
+		// Without a duplicate pair in the tests, only words that defend
+		// a duplicate by name count ("near-identical", "on purpose").
+		return regexp.MustCompile(`(?i)near-identical|duplicate|on purpose|either allocation|both allocation`).MatchString(line)
+	}
+	return true
+}
+
+// sameCheck: two test names that, past their shared subject, name the same
+// check — TestLenNoAllocations and TestLenDoesNotAllocate both say "Len,
+// alloc"; TestLen and TestLenEmpty do not.
+func sameCheck(a, b string) bool {
+	sa, sb := checkStems(a), checkStems(b)
+	if len(sa) < 2 || len(sa) != len(sb) {
+		return false
+	}
+	for k := range sa {
+		if !sb[k] {
+			return false
+		}
+	}
+	return true
+}
+
+func checkStems(name string) map[string]bool {
+	out := map[string]bool{}
+	for _, tok := range camelSplit.FindAllString(strings.TrimPrefix(name, "Test"), -1) {
+		t := strings.ToLower(tok)
+		if fillerTokens[t] {
+			continue
+		}
+		if len(t) > 5 {
+			t = t[:5]
+		}
+		out[t] = true
 	}
 	return out
 }
@@ -410,4 +542,13 @@ func stringList(v any) []string {
 		out = append(out, fmt.Sprint(it))
 	}
 	return out
+}
+
+// revisionChecks is every way a revision can fall short of the person's
+// words: the requests read from them, an additive request kept, and no
+// duplicate left behind or protected.
+func revisionChecks(plan map[string]any, reqs []reviewRequest, feedback string, beforeTests []string) []string {
+	out := revisionProblems(plan, reqs)
+	out = append(out, additiveProblems(feedback, beforeTests, plan)...)
+	return append(out, duplicateProblems(plan)...)
 }

@@ -53,7 +53,7 @@ func NativePlanQuestion(
 	}
 	question := fmt.Sprintf("Approve the plan for %s?", title)
 	if revisionIter > 0 {
-		question = fmt.Sprintf("Approve the revised plan (revision %d) for %s?", revisionIter, title)
+		question = fmt.Sprintf("Approve the plan for %s, %s?", title, revisedAfter(revisionIter))
 	}
 	id := ""
 	if req.ExecutionID != "" {
@@ -103,7 +103,7 @@ func planReviewMarkdown(
 	var b strings.Builder
 	heading := "Plan: " + title
 	if revisionIter > 0 {
-		heading = fmt.Sprintf("Plan: %s (revision %d)", title, revisionIter)
+		heading = fmt.Sprintf("Plan: %s — %s", title, revisedAfter(revisionIter))
 	}
 	b.WriteString("# " + heading + "\n\n")
 
@@ -119,7 +119,7 @@ func planReviewMarkdown(
 		if fb, _ := last["feedback"].(string); strings.TrimSpace(fb) != "" {
 			reqs := readReviewRequests(fb)
 			beforeTests := stringList(last["before_tests"])
-			problems := append(revisionProblems(planResult, reqs), additiveProblems(fb, beforeTests, planResult)...)
+			problems := revisionChecks(planResult, reqs, fb, beforeTests)
 			diff := []string(nil)
 			if _, ok := last["before_tests"]; ok {
 				diff = planDiff(beforeTests, stringList(last["before_files"]), planResult, existingTests)
@@ -462,6 +462,17 @@ func phrase(s string, max int) string {
 	return ""
 }
 
+// revisedAfter names a revised plan by the note that produced it. The person
+// saw the first plan, then "(revision 1)", and could not tell which was which
+// (owner review, 2026-11-07); counting their notes can't be misread.
+func revisedAfter(n int) string {
+	ord := []string{"", "first", "second", "third", "fourth", "fifth"}
+	if n > 0 && n < len(ord) {
+		return "revised after your " + ord[n] + " note"
+	}
+	return fmt.Sprintf("revised after your note %d", n)
+}
+
 // joinPhrases joins summary phrases with "; ", without the full stop each
 // may end with ("untouched.; Nothing", live 2026-11-07).
 func joinPhrases(items []string) string {
@@ -661,7 +672,7 @@ func proseText(s string, revision int, first bool) string {
 	s = refSection.ReplaceAllString(s, "")
 	s = refCode.ReplaceAllString(s, "")
 	if revision > 0 {
-		s = refRevision.ReplaceAllString(s, fmt.Sprintf("revision %d", revision))
+		s = refRevision.ReplaceAllString(s, "this revision")
 	} else {
 		s = refRevision.ReplaceAllString(s, "this plan")
 	}
