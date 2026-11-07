@@ -315,6 +315,7 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	}
 	issues := asMapList(sprintResult["issues"])
 	rationale := mapStr(sprintResult, "rationale", "")
+	approverSummary, _ := sprintResult["approver_summary"].(map[string]any)
 
 	// 5. Compute parallel execution levels & assign sequence numbers BEFORE
 	// issue writing. A dependency cycle propagates as an error.
@@ -349,6 +350,9 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	result, err := buildPlanResult(prd, arch, review, issues, levels, fileConflicts, base, rationale)
 	if err != nil {
 		return nil, err
+	}
+	if approverSummary != nil {
+		result["approver_summary"] = approverSummary
 	}
 	return result, nil
 }

@@ -19,13 +19,13 @@ import (
 // what a WorkAF job carries, and the engine dispatches against these names
 // (HITL-CONTRACT.md, SWE-AF section).
 type BuildIssueInput struct {
-	Title       string `json:"title"`
-	Body        string `json:"body"`
-	RepoURL     string `json:"repo_url"`
-	RepoPath    string `json:"repo_path"`
-	BaseBranch  string `json:"base_branch"`
+	Title       string      `json:"title"`
+	Body        string      `json:"body"`
+	RepoURL     string      `json:"repo_url"`
+	RepoPath    string      `json:"repo_path"`
+	BaseBranch  string      `json:"base_branch"`
 	IssueNumber issueNumber `json:"issue_number"`
-	IssueURL    string `json:"issue_url"`
+	IssueURL    string      `json:"issue_url"`
 	// PlanReview defaults to true; false skips the plan pause.
 	PlanReview *bool `json:"plan_review"`
 	// Config is passed to build as its BuildConfig (advanced; usually empty).

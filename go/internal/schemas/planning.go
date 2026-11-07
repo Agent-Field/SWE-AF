@@ -98,4 +98,24 @@ type PlanResult struct {
 	FileConflicts []map[string]any `json:"file_conflicts"` // Informational only
 	ArtifactsDir  string           `json:"artifacts_dir"`
 	Rationale     string           `json:"rationale"`
+	// ApproverSummary is what the person approving the plan reads first.
+	ApproverSummary *ApproverSummary `json:"approver_summary,omitempty"`
+}
+
+// ApproverSummary is the plan in the approver's terms, written by the sprint
+// planner as its own field (never cut out of longer prose): every entry is a
+// short COMPLETE phrase, with no paths outside the repo and no references to
+// documents the approver does not see (AC numbers, section signs, C1/D9).
+type ApproverSummary struct {
+	WhatChanges   string        `json:"what_changes" jsonschema:"description=One or two plain sentences for the approver: what the change does and what it adds. Example: Adds Ledger.Len() as an O(1) count that does not copy entries plus three tests."`
+	Files         []FilePurpose `json:"files" jsonschema:"description=Every file the plan touches and each one's own purpose"`
+	TestsAdded    []string      `json:"tests_added" jsonschema:"description=Names of NEW test functions only; never tests that already exist"`
+	WillNotChange []string      `json:"will_not_change" jsonschema:"description=Up to three short complete phrases naming what is deliberately left alone"`
+	Risks         []string      `json:"risks" jsonschema:"description=Up to two short complete phrases; empty when there is no real risk"`
+}
+
+// FilePurpose is one file and what the plan does to it.
+type FilePurpose struct {
+	Path    string `json:"path" jsonschema:"description=Repo-relative path"`
+	Purpose string `json:"purpose" jsonschema:"description=Under ten words: what this file gets (for example: the new Len method)"`
 }

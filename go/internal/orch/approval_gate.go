@@ -485,6 +485,12 @@ func replanWithFeedback(
 	revised["levels"] = levels
 	revised["file_conflicts"] = fileConflicts
 	revised["rationale"] = mapGet(sprint, "rationale", "")
+	// The approver summary is the revised plan's own; the first plan's
+	// would describe what the person sent back.
+	delete(revised, "approver_summary")
+	if as, ok := sprint["approver_summary"].(map[string]any); ok {
+		revised["approver_summary"] = as
+	}
 	return revised, revisionErr, nil
 }
 

@@ -139,7 +139,7 @@ func planReviewMarkdown(
 
 	// --- summary ---------------------------------------------------------------
 	b.WriteString("## Summary\n\n")
-	for _, l := range summaryLines(prd, order, avoided, existingTests, t) {
+	for _, l := range summaryLines(prd, approverSummary(planResult), order, avoided, existingTests, t) {
 		b.WriteString(l + "\n")
 	}
 	b.WriteString("\n")
@@ -231,51 +231,95 @@ func planReviewMarkdown(
 }
 
 // summaryLines is the Summary: at most summaryCap lines.
-func summaryLines(prd map[string]any, order []map[string]any, avoided []string, existingTests map[string]bool, t func(string) string) []string {
+//
+// The sprint planner writes it for the approver as its own field
+// (approver_summary): one or two plain sentences of what changes, each file
+// with ITS OWN purpose, the new tests, and short phrases for what is left
+// alone and what could go wrong. A plan without that field (an older planner,
+// a model that skipped it) falls back to what the plan's other parts say. In
+// either case every entry is a COMPLETE phrase: an entry too long for the
+// summary is shortened to its first sentence or clause, or left out for
+// Details to carry, and is never cut mid-word (owner review, 2026-11-07).
+func summaryLines(prd, as map[string]any, order []map[string]any, avoided []string, existingTests map[string]bool, t func(string) string) []string {
 	var lines []string
-	what := firstSentences(t(stripMarkdownHeadings(mapStr(prd, "validated_description", ""))), 2, 320)
+	avoid := map[string]bool{}
+	for _, f := range avoided {
+		avoid[strings.ToLower(strings.Trim(f, "`"))] = true
+	}
+
+	what := phrase(t(mapStr(as, "what_changes", "")), 280)
+	if what == "" {
+		what = phrase(t(stripMarkdownHeadings(mapStr(prd, "validated_description", ""))), 280)
+	}
 	if what == "" && len(order) > 0 {
-		what = t(mapStr(order[0], "title", ""))
+		what = phrase(t(mapStr(order[0], "title", "")), 160)
 	}
 	if what != "" {
 		lines = append(lines, "**What changes:** "+what)
 	}
 
-	// Each file once, with the title of the change that touches it first.
+	// Files: the planner's own list and purposes first, then any file a
+	// planned change touches that the list forgot, with a purpose derived
+	// from that change.
 	purposes := map[string]string{}
 	var files []string
+	addFile := func(name, purpose string) {
+		name = strings.Trim(strings.TrimSpace(name), "`")
+		if name == "" || avoid[strings.ToLower(name)] {
+			return
+		}
+		if _, ok := purposes[name]; ok {
+			if purposes[name] == "" {
+				purposes[name] = purpose
+			}
+			return
+		}
+		files = append(files, name)
+		purposes[name] = purpose
+	}
+	for _, fp := range asMapList(as["files"]) {
+		addFile(mapStr(fp, "path", ""), phrase(t(mapStr(fp, "purpose", "")), 90))
+	}
 	for _, iss := range order {
 		for _, k := range []string{"files_to_modify", "files_to_create"} {
 			for _, f := range coerceAnyList(iss[k]) {
 				name := strings.TrimSpace(fmt.Sprint(f))
-				if name == "" {
-					continue
-				}
-				if _, ok := purposes[name]; !ok {
-					files = append(files, name)
-					verb := ""
-					if k == "files_to_create" {
-						verb = "new — "
-					}
-					purposes[name] = verb + t(mapStr(iss, "title", ""))
-				}
+				addFile(name, derivedPurpose(name, k == "files_to_create", iss, existingTests, t))
 			}
 		}
 	}
-	sort.SliceStable(files, func(i, j int) bool { return isTestFile(files[i]) == false && isTestFile(files[j]) })
+	sort.SliceStable(files, func(i, j int) bool { return !isTestFile(files[i]) && isTestFile(files[j]) })
 	if len(files) > 0 {
 		lines = append(lines, "**Files:**")
-		max := 5
+		const max = 5
 		for i, f := range files {
 			if i == max {
 				lines = append(lines, fmt.Sprintf("- and %d more (see Details)", len(files)-max))
 				break
 			}
-			lines = append(lines, fmt.Sprintf("- `%s` — %s", f, oneLineCut(purposes[f], 90)))
+			if p := purposes[f]; p != "" {
+				lines = append(lines, fmt.Sprintf("- `%s` — %s", f, p))
+			} else {
+				lines = append(lines, fmt.Sprintf("- `%s`", f))
+			}
 		}
 	}
 
-	if tests := testNames(order, existingTests); len(tests) > 0 {
+	// Tests: the planner's list, held to the same law as the derived one —
+	// a test the repository already has is not one the plan adds.
+	var tests []string
+	seen := map[string]bool{}
+	for _, it := range coerceAnyList(as["tests_added"]) {
+		n := strings.Trim(strings.TrimSpace(fmt.Sprint(it)), "`")
+		if goTestPattern.MatchString(n) && !existingTests[n] && !seen[n] {
+			seen[n] = true
+			tests = append(tests, n)
+		}
+	}
+	if len(tests) == 0 {
+		tests = testNames(order, existingTests)
+	}
+	if len(tests) > 0 {
 		lines = append(lines, "**Tests it adds:** "+codeJoin(tests))
 	}
 
@@ -283,21 +327,45 @@ func summaryLines(prd map[string]any, order []map[string]any, avoided []string, 
 	for _, f := range avoided {
 		not = append(not, "`"+f+"`")
 	}
-	for _, it := range coerceAnyList(prd["out_of_scope"]) {
+	notSource := coerceAnyList(as["will_not_change"])
+	if len(notSource) == 0 {
+		notSource = coerceAnyList(prd["out_of_scope"])
+	}
+	for _, it := range notSource {
 		if len(not) >= 3 {
 			break
 		}
-		not = append(not, oneLineCut(t(fmt.Sprint(it)), 80))
+		p := phrase(t(fmt.Sprint(it)), 90)
+		if p == "" || mentionsAny(p, avoided) {
+			continue
+		}
+		not = append(not, p)
 	}
 	if len(not) > 0 {
 		lines = append(lines, "**Will not change:** "+strings.Join(not, "; "))
 	}
 
+	risks := coerceAnyList(as["risks"])
+	_, plannerSpoke := as["risks"]
+	if len(risks) == 0 && !plannerSpoke {
+		risks = coerceAnyList(prd["risks"])
+	}
+	var rs []string
+	for _, it := range risks {
+		if p := phrase(t(fmt.Sprint(it)), 120); p != "" {
+			rs = append(rs, p)
+		}
+	}
 	risk := "none"
-	if rs := coerceAnyList(prd["risks"]); len(rs) > 0 {
-		risk = oneLineCut(t(fmt.Sprint(rs[0])), 160)
-		if len(rs) > 1 {
-			risk += fmt.Sprintf(" (+%d more in Details)", len(rs)-1)
+	switch {
+	case len(rs) == 0 && len(risks) > 0:
+		risk = "listed in Details"
+	case len(rs) == 1:
+		risk = rs[0]
+	case len(rs) >= 2:
+		risk = rs[0] + "; " + rs[1]
+		if len(rs) > 2 {
+			risk += fmt.Sprintf(" (+%d more in Details)", len(rs)-2)
 		}
 	}
 	lines = append(lines, "**Risks:** "+risk)
@@ -306,6 +374,69 @@ func summaryLines(prd map[string]any, order []map[string]any, avoided []string, 
 		lines = lines[:summaryCap]
 	}
 	return lines
+}
+
+// derivedPurpose is a file's purpose when the planner gave none: a test file
+// names the new tests its change adds; any other file is the change's title.
+func derivedPurpose(file string, created bool, iss map[string]any, existing map[string]bool, t func(string) string) string {
+	if isTestFile(file) {
+		if names := testNames([]map[string]any{iss}, existing); len(names) > 0 {
+			return strings.Join(names, ", ")
+		}
+	}
+	p := phrase(t(mapStr(iss, "title", "")), 90)
+	if created && p != "" {
+		p = "new: " + p
+	}
+	return p
+}
+
+func mentionsAny(s string, needles []string) bool {
+	ls := strings.ToLower(s)
+	for _, n := range needles {
+		if n != "" && strings.Contains(ls, strings.ToLower(strings.Trim(n, "`"))) {
+			return true
+		}
+	}
+	return false
+}
+
+// phrase is s as one COMPLETE phrase of at most max runes: whole if it fits,
+// else its first sentence, else its first clause, else nothing. It never
+// cuts a word, because a summary line that ends "Do not mo…" tells the
+// approver less than no line at all.
+func phrase(s string, max int) string {
+	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+	if s == "" {
+		return ""
+	}
+	fits := func(x string) bool { return len([]rune(x)) <= max }
+	if fits(s) {
+		return s
+	}
+	if loc := sentenceBreak.FindStringIndex(s); loc != nil {
+		if first := strings.TrimSpace(s[:loc[0]+1]); fits(first) {
+			return first
+		}
+	}
+	// A bare comma is not a clause boundary here: cutting "do not modify A,
+	// B or C" at its first comma would tell the approver only A is safe.
+	for _, sep := range []string{"; ", " — ", ": ", " (", ", because ", ", since ", ", so ", ", which ", ", but "} {
+		if i := strings.Index(s, sep); i > 0 {
+			if first := strings.TrimRight(strings.TrimSpace(s[:i]), ",;:"); fits(first) && len([]rune(first)) >= 12 {
+				return first
+			}
+		}
+	}
+	return ""
+}
+
+// approverSummary is the planner's approver_summary, or an empty map.
+func approverSummary(planResult map[string]any) map[string]any {
+	if m, ok := planResult["approver_summary"].(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
 }
 
 func isTestFile(f string) bool {
@@ -408,13 +539,15 @@ func personText(s string, revision int) string {
 	// Code spans are left exactly as written: a command must still run.
 	parts := strings.Split(s, "`")
 	for i := 0; i < len(parts); i += 2 {
-		parts[i] = proseText(parts[i], revision)
+		parts[i] = proseText(parts[i], revision, i == 0)
 	}
 	return strings.TrimSpace(manySpaces.ReplaceAllString(strings.Join(parts, "`"), " "))
 }
 
 // proseText strips references from text outside code spans.
-func proseText(s string, revision int) string {
+// Only the text's first stretch loses leading punctuation: after a code span,
+// a leading comma belongs to the sentence ("`Len()`, an O(1) count").
+func proseText(s string, revision int, first bool) string {
 	s = refLabel.ReplaceAllString(s, "")
 	s = refParen.ReplaceAllString(s, "")
 	s = refFinding.ReplaceAllString(s, "your review")
@@ -433,7 +566,9 @@ func proseText(s string, revision int) string {
 	s = emptyParens.ReplaceAllString(s, "")
 	s = doublePunct.ReplaceAllString(s, "$1")
 	s = spaceBeforeP.ReplaceAllString(s, "$1$2")
-	s = leadingPunct.ReplaceAllString(s, "")
+	if first {
+		s = leadingPunct.ReplaceAllString(s, "")
+	}
 	return manySpaces.ReplaceAllString(s, " ")
 }
 
