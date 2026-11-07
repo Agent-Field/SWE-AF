@@ -307,17 +307,18 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	wantReview := haxAPIKey != "" || in.PlanReview || hitl.NativeEnabled()
 	if wantReview && execID != "" && deps.ApprovalGate != nil {
 		outcome, aerr := deps.ApprovalGate(ctx, ApprovalRequest{
-			Deps:            deps,
-			Cfg:             cfg,
-			Resolved:        resolved,
-			PlanResult:      planResult,
-			ManifestMap:     manifestMap,
-			RepoPath:        repoPath,
-			Goal:            in.Goal,
-			ArtifactsDir:    in.ArtifactsDir,
-			AbsArtifactsDir: absArtifactsDir,
-			ExecutionID:     execID,
-			ReviewTitle:     in.ReviewTitle,
+			Deps:              deps,
+			Cfg:               cfg,
+			Resolved:          resolved,
+			PlanResult:        planResult,
+			ManifestMap:       manifestMap,
+			RepoPath:          repoPath,
+			Goal:              in.Goal,
+			ArtifactsDir:      in.ArtifactsDir,
+			AbsArtifactsDir:   absArtifactsDir,
+			ExecutionID:       execID,
+			ReviewTitle:       in.ReviewTitle,
+			AdditionalContext: in.AdditionalContext,
 		})
 		if aerr != nil {
 			return nil, aerr

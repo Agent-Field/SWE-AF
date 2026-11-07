@@ -92,7 +92,6 @@ func TestApprovalWithoutHaxAsksOnTheControlPlane(t *testing.T) {
 		"## How you will know it is done", "Len() of an empty ledger is 0",
 		"## Planned changes (2)", "### 1. Add Len()", "### 2. Test Len", "`ledger.go`",
 		"`ledger_len_test.go`", "## Files it will touch", "Left out on purpose", "No new type",
-		"**Reject** — the run stops here",
 	} {
 		if !strings.Contains(first.Body, want) {
 			t.Errorf("plan body is missing %q:\n%s", want, first.Body)
@@ -120,6 +119,21 @@ func TestApprovalWithoutHaxAsksOnTheControlPlane(t *testing.T) {
 	for _, c := range *calls {
 		if strings.HasSuffix(c["target"].(string), ".run_issue_writer") {
 			wroteIssues = true
+		}
+	}
+	pmHeard := false
+	for _, c := range *calls {
+		if strings.HasSuffix(c["target"].(string), ".run_product_manager") &&
+			strings.Contains(c["input"].(map[string]any)["additional_context"].(string), "also document Len in the README") {
+			pmHeard = true
+		}
+	}
+	if !pmHeard {
+		t.Fatal("a revised plan must rebuild its PRD from the person's words")
+	}
+	for _, gone := range []string{"## Your answer", "## Why this plan"} {
+		if strings.Contains(first.Body, gone) {
+			t.Errorf("plan body still has %q; the door draws its own answers and planner reasoning is not for the person", gone)
 		}
 	}
 	if !wroteIssues {

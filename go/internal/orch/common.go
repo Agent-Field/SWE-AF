@@ -264,6 +264,9 @@ type ApprovalRequest struct {
 	// ReviewTitle names the work in the one-line question a person is asked
 	// ("#12: Add a Len() method to Ledger"). Empty falls back to the goal.
 	ReviewTitle string
+	// AdditionalContext is build's additional_context, handed to the product
+	// manager again when a plan is revised.
+	AdditionalContext string
 }
 
 // ApprovalOutcome is the gate's verdict. Terminal means the gate ended the build

@@ -283,6 +283,28 @@ func replanWithFeedback(
 	cfg := req.Cfg
 	resolved := req.Resolved
 	prd := mapGet(planResult, "prd", map[string]any{})
+	// The PRD is rebuilt from the person's words too. Without it the revised
+	// plan contradicts itself: its design does what was asked while its
+	// must-haves and checks still describe the plan the person sent back. A
+	// failed PM keeps the earlier PRD; the words still reach it as a check.
+	if revisedPRD, perr := deps.Call(ctx, "run_product_manager", map[string]any{
+		"goal":      req.Goal,
+		"repo_path": req.RepoPath, "artifacts_dir": req.ArtifactsDir,
+		"additional_context": strings.TrimSpace(req.AdditionalContext + "\n\n" +
+			"The person reviewing the plan asked for these changes, and they override anything above that disagrees: " + feedback),
+		"model":              resolved["pm_model"],
+		"permission_mode":    cfg.PermissionMode,
+		"ai_provider":        cfg.AIProvider(),
+		"workspace_manifest": req.ManifestMap,
+	}, "run_product_manager (human revision)"); perr != nil {
+		if isNonDegradableRevisionError(perr) {
+			return nil, "", perr
+		}
+		deps.Note(ctx, "Product revision did not complete; keeping the earlier PRD: "+truncateRevisionError(perr.Error()),
+			"pipeline", "revision", "degraded")
+	} else if mapStr(revisedPRD, "validated_description", "") != "" {
+		prd = revisedPRD
+	}
 	manifest := req.ManifestMap
 	provider := cfg.AIProvider()
 	architecturePath := architectureArtifactPath(req.RepoPath, req.ArtifactsDir)

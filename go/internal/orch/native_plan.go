@@ -83,9 +83,6 @@ func PlanReviewMarkdown(
 	if g := strings.TrimSpace(goal); g != "" {
 		b.WriteString("## Goal\n\n" + g + "\n\n")
 	}
-	if r := mapStr(planResult, "rationale", ""); r != "" {
-		b.WriteString("## Why this plan\n\n" + strings.TrimSpace(r) + "\n\n")
-	}
 
 	prd, _ := mapGet(planResult, "prd", map[string]any{}).(map[string]any)
 	if vd := mapStr(prd, "validated_description", ""); vd != "" {
@@ -172,11 +169,6 @@ func PlanReviewMarkdown(
 		}
 		b.WriteString("\n")
 	}
-
-	b.WriteString("## Your answer\n\n" +
-		"- **Approve** — the coding starts with this plan.\n" +
-		"- **Request changes** — say what to change; the plan is rebuilt with your words and asked again.\n" +
-		"- **Reject** — the run stops here and no code is written.\n")
 
 	out := b.String()
 	if len(out) > maxPlanBody {
