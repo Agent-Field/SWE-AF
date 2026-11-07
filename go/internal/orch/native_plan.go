@@ -688,9 +688,32 @@ func proseText(s string, revision int, first bool) string {
 	return manySpaces.ReplaceAllString(s, " ")
 }
 
+// detailHeading is the level a planner's own headings start at inside the
+// plan body: below its "###" sections and its "####" change items, and the
+// same level a shouted lead becomes in capsLeads.
+const detailHeading = 5
+
 // demoteHeadings keeps planner markdown headings below the body's own levels.
+// The shallowest heading in the block lands at detailHeading and deeper ones
+// keep their offset from it, CAPPED AT SIX MARKS: markdown has no seventh
+// level, and "########" renders as literal text (job 70, 2026-11-07, where
+// prefixing five marks onto a planner's "###" did exactly that).
 func demoteHeadings(s string) string {
-	return capsLeads(mdHeading.ReplaceAllString(s, "#####$1 "))
+	shallowest := 0
+	for _, m := range mdHeading.FindAllStringSubmatch(s, -1) {
+		if n := len(m[1]); shallowest == 0 || n < shallowest {
+			shallowest = n
+		}
+	}
+	s = mdHeading.ReplaceAllStringFunc(s, func(m string) string {
+		marks := len(m) - len(strings.TrimLeft(m, "#"))
+		level := detailHeading + marks - shallowest
+		if level > 6 {
+			level = 6
+		}
+		return strings.Repeat("#", level) + m[marks:]
+	})
+	return capsLeads(s)
 }
 
 // capsLead is a paragraph that opens with an ALL-CAPS phrase ending in a full

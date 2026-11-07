@@ -208,3 +208,23 @@ func TestShoutedLeadsBecomeHeadings(t *testing.T) {
 		t.Errorf("a shouted lead is left:\n%s", got)
 	}
 }
+
+// Job 70's planner wrote "###" sections inside a detail; prefixing five marks
+// made "########", which markdown does not read as a heading. Every demoted
+// heading is a real one (at most six marks), the shallowest lands at five, and
+// a deeper one keeps sitting below it.
+func TestDemotedHeadingsStayHeadings(t *testing.T) {
+	in := "### What changes\n\nOne method.\n\n#### Edge case\n\nNone.\n\n### What stays the same\n\nThe CLI."
+	got := demoteHeadings(in)
+	for _, want := range []string{"##### What changes\n", "###### Edge case\n", "##### What stays the same\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if regexp.MustCompile(`(?m)^#{7,}`).MatchString(got) {
+		t.Errorf("a heading deeper than six marks:\n%s", got)
+	}
+	if g := demoteHeadings("# Top\n\n###### Deep"); !strings.Contains(g, "##### Top") || !strings.Contains(g, "###### Deep") {
+		t.Errorf("the cap at six marks did not hold:\n%s", g)
+	}
+}
