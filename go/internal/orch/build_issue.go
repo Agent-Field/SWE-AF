@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -23,12 +24,31 @@ type BuildIssueInput struct {
 	RepoURL     string `json:"repo_url"`
 	RepoPath    string `json:"repo_path"`
 	BaseBranch  string `json:"base_branch"`
-	IssueNumber int    `json:"issue_number"`
+	IssueNumber issueNumber `json:"issue_number"`
 	IssueURL    string `json:"issue_url"`
 	// PlanReview defaults to true; false skips the plan pause.
 	PlanReview *bool `json:"plan_review"`
 	// Config is passed to build as its BuildConfig (advanced; usually empty).
 	Config map[string]any `json:"config"`
+}
+
+// issueNumber takes 83 or "83" (or "#83"): the engine substitutes
+// {issue_number} into a pipeline input as text, and a person writes either.
+type issueNumber int
+
+func (n *issueNumber) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "null" || s == `""` {
+		*n = 0
+		return nil
+	}
+	s = strings.TrimPrefix(strings.Trim(s, `"`), "#")
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < 0 {
+		return fmt.Errorf("issue_number must be a whole number, got %s", string(b))
+	}
+	*n = issueNumber(v)
+	return nil
 }
 
 // BuildIssueSchema is the input schema the node advertises for build_issue.
@@ -38,7 +58,7 @@ const BuildIssueSchema = `{"type":"object","additionalProperties":false,"require
 	`"repo_url":{"type":"string","description":"Clone URL of the repository (or give repo_path)"},` +
 	`"repo_path":{"type":"string","description":"An existing checkout on the node's machine (or give repo_url)"},` +
 	`"base_branch":{"type":"string","description":"Branch the pull request targets; default the repository's default branch"},` +
-	`"issue_number":{"type":"integer","description":"The issue number; the pull request closes it"},` +
+	`"issue_number":{"type":["integer","string"],"description":"The issue number (83 or \"83\"); the pull request closes it"},` +
 	`"issue_url":{"type":"string","description":"Link to the issue"},` +
 	`"plan_review":{"type":"boolean","description":"Pause for a person to approve the plan (default true)"},` +
 	`"config":{"type":"object","description":"Advanced: SWE-AF BuildConfig overrides"}}}`
@@ -97,7 +117,9 @@ func (in BuildIssueInput) goal() string {
 	} else {
 		fmt.Fprintf(&b, "Resolve this GitHub issue: %s\n", in.Title)
 	}
-	if body := strings.TrimSpace(in.Body); body != "" {
+	// HTML comments in an issue body are for machines (seed markers,
+	// templates); no agent should read them and no plan should repeat them.
+	if body := strings.TrimSpace(htmlComment.ReplaceAllString(in.Body, "")); body != "" {
 		b.WriteString("\n" + body + "\n")
 	}
 	if in.IssueNumber > 0 {

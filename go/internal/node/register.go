@@ -437,6 +437,7 @@ func regHandler[D any](
 	opts ...agent.ReasonerOption,
 ) {
 	n.registered = append(n.registered, name)
+	opts = withDisplayLabel(name, opts)
 	n.recordMeta(name, opts)
 	n.App.RegisterReasoner(name, func(ctx context.Context, input map[string]any) (any, error) {
 		return h(ctx, deps, input)

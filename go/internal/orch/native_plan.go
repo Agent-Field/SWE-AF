@@ -1,13 +1,27 @@
 // This file (native_plan.go) renders a plan_result as the plan review a person
-// reads on the control-plane pause: one line to ask, and a markdown body that
-// holds EVERYTHING needed to judge the plan — the goal, what it will deliver,
-// how anyone will know it is done, the design, every planned change with the
-// files it touches and its checks, and the order the changes run in. There is
-// no other page behind it when hax is absent, so nothing may be left out.
+// reads on the control-plane pause. It is written for an engineer deciding in a
+// minute whether to approve:
+//
+//   - On a revision, the person's own words come first, then one line per
+//     request saying how the plan changed (revision_check.go holds the plan to
+//     them), and anything the revision still does not reflect.
+//   - Then a SUMMARY of at most summaryCap lines: what changes, every file it
+//     touches and why, the tests it adds, what it will not change, and the
+//     risks or "none".
+//   - Then `## Details`: the full requirements, design, every planned change
+//     with its checks, and the order — the substance, unabridged.
+//
+// THE BODY IS SELF-CONTAINED. Everything in it is text the planner wrote for
+// other agents, so personText strips what the person cannot follow: machine
+// paths, HTML comments copied from the issue, and references to documents they
+// never see (AC numbers, §4, C1, D9, F2, "tech-lead finding"). Revision numbers
+// come from ONE counter, the gate's. There is no answer list: every door that
+// shows this draws its own answers.
 package orch
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -18,18 +32,21 @@ import (
 // room to spare; a plan that large is cut with a line saying so.
 const maxPlanBody = 200 * 1024
 
+// summaryCap is the most lines the Summary may hold.
+const summaryCap = 12
+
 // NativePlanQuestion is the plan_review pause for one round of the gate.
 // revisionIter is 0 for the first plan; history carries the words that asked
-// for each earlier revision.
+// for each earlier revision and what the check found.
 func NativePlanQuestion(
 	req ApprovalRequest,
 	planResult map[string]any,
 	revisionIter int,
 	history []map[string]any,
 ) hitl.NativeQuestion {
-	title := strings.TrimSpace(req.ReviewTitle)
+	title := personText(strings.TrimSpace(req.ReviewTitle), revisionIter)
 	if title == "" {
-		title = firstLine(req.Goal)
+		title = personText(firstLine(req.Goal), revisionIter)
 	}
 	question := fmt.Sprintf("Approve the plan for %s?", title)
 	if revisionIter > 0 {
@@ -54,13 +71,14 @@ func NativePlanQuestion(
 	}
 }
 
-// PlanReviewMarkdown renders the full plan as markdown.
+// PlanReviewMarkdown renders the plan as markdown: summary first, details below.
 func PlanReviewMarkdown(
 	title, goal string,
 	planResult map[string]any,
 	revisionIter int,
 	history []map[string]any,
 ) string {
+	t := func(s string) string { return personText(s, revisionIter) }
 	var b strings.Builder
 	heading := "Plan: " + title
 	if revisionIter > 0 {
@@ -68,42 +86,71 @@ func PlanReviewMarkdown(
 	}
 	b.WriteString("# " + heading + "\n\n")
 
+	prd, _ := mapGet(planResult, "prd", map[string]any{}).(map[string]any)
+	arch, _ := mapGet(planResult, "architecture", map[string]any{}).(map[string]any)
+	issues := asMapList(mapGet(planResult, "issues", nil))
+	order := issueOrder(planResult, issues)
+
+	// --- the person's words, and how the plan changed -------------------------
+	var avoided []string
 	if len(history) > 0 {
 		last := history[len(history)-1]
-		if fb := strings.TrimSpace(fmt.Sprint(last["feedback"])); fb != "" && fb != "<nil>" {
-			b.WriteString("## What you asked to change\n\n")
-			b.WriteString(quote(fb) + "\n\n")
+		if fb, _ := last["feedback"].(string); strings.TrimSpace(fb) != "" {
+			reqs := readReviewRequests(fb)
+			problems := revisionProblems(planResult, reqs)
+			b.WriteString("## What you asked to change\n\n" + quote(strings.TrimSpace(fb)) + "\n\n")
+			b.WriteString("## How the plan changed\n\n")
+			for _, l := range howThePlanChanged(reqs, problems) {
+				b.WriteString(l + "\n")
+			}
+			b.WriteString("\n")
+			if len(problems) > 0 {
+				b.WriteString("## Not reflected yet\n\nThe plan was revised twice and still says this; approve only if you accept it:\n\n")
+				for _, p := range problems {
+					b.WriteString("- " + t(p) + "\n")
+				}
+				b.WriteString("\n")
+			}
 			if re, _ := last["revision_error"].(string); re != "" {
-				b.WriteString("The design could not be fully revised (" + re +
-					"), so this is the last complete plan; the changes below may not reflect your words yet.\n\n")
+				b.WriteString("The design could not be fully revised, so this is the last complete design.\n\n")
+			}
+			for _, r := range reqs {
+				if r.Avoid != "" {
+					avoided = append(avoided, r.Avoid)
+				}
 			}
 		}
 	}
 
-	if g := strings.TrimSpace(goal); g != "" {
-		b.WriteString("## Goal\n\n" + g + "\n\n")
+	// --- summary ---------------------------------------------------------------
+	b.WriteString("## Summary\n\n")
+	for _, l := range summaryLines(prd, order, avoided, t) {
+		b.WriteString(l + "\n")
 	}
+	b.WriteString("\n")
 
-	prd, _ := mapGet(planResult, "prd", map[string]any{}).(map[string]any)
-	if vd := mapStr(prd, "validated_description", ""); vd != "" {
-		b.WriteString("## What it will deliver\n\n" + strings.TrimSpace(vd) + "\n\n")
+	// --- details ---------------------------------------------------------------
+	b.WriteString("## Details\n\n")
+	if g := t(goal); g != "" {
+		b.WriteString("### Goal\n\n" + g + "\n\n")
 	}
-	bulletSection(&b, "Must have", prd["must_have"])
-	bulletSection(&b, "Nice to have", prd["nice_to_have"])
-	bulletSection(&b, "Left out on purpose", prd["out_of_scope"])
-	bulletSection(&b, "How you will know it is done", prd["acceptance_criteria"])
-	bulletSection(&b, "Assumptions", prd["assumptions"])
-	bulletSection(&b, "Risks", prd["risks"])
+	if vd := t(mapStr(prd, "validated_description", "")); vd != "" {
+		b.WriteString("### What it will deliver\n\n" + demoteHeadings(vd) + "\n\n")
+	}
+	bulletSection(&b, "Must have", prd["must_have"], t)
+	bulletSection(&b, "Nice to have", prd["nice_to_have"], t)
+	bulletSection(&b, "Left out on purpose", prd["out_of_scope"], t)
+	numberedSection(&b, "How you will know it is done", prd["acceptance_criteria"], t)
+	bulletSection(&b, "Assumptions", prd["assumptions"], t)
+	bulletSection(&b, "Risks", prd["risks"], t)
 
-	arch, _ := mapGet(planResult, "architecture", map[string]any{}).(map[string]any)
 	if len(arch) > 0 {
-		b.WriteString("## Design\n\n")
-		if s := mapStr(arch, "summary", ""); s != "" {
-			b.WriteString(strings.TrimSpace(s) + "\n\n")
+		b.WriteString("### Design\n\n")
+		if s := t(mapStr(arch, "summary", "")); s != "" {
+			b.WriteString(demoteHeadings(s) + "\n\n")
 		}
 		for _, comp := range asMapList(mapGet(arch, "components", nil)) {
-			fmt.Fprintf(&b, "- **%s**: %s", mapStr(comp, "name", "Component"),
-				strings.TrimSpace(mapStr(comp, "responsibility", "")))
+			fmt.Fprintf(&b, "- **%s**: %s", t(mapStr(comp, "name", "Component")), t(mapStr(comp, "responsibility", "")))
 			if files := codeList(comp["touches_files"]); files != "" {
 				b.WriteString(" (" + files + ")")
 			}
@@ -112,23 +159,18 @@ func PlanReviewMarkdown(
 		if decs := asMapList(mapGet(arch, "decisions", nil)); len(decs) > 0 {
 			b.WriteString("\nDecisions:\n\n")
 			for _, dec := range decs {
-				fmt.Fprintf(&b, "- **%s** — %s\n", strings.TrimSpace(mapStr(dec, "decision", "")),
-					strings.TrimSpace(mapStr(dec, "rationale", "")))
+				fmt.Fprintf(&b, "- **%s** — %s\n", t(mapStr(dec, "decision", "")), t(mapStr(dec, "rationale", "")))
 			}
 		}
 		b.WriteString("\n")
 	}
 
-	issues := asMapList(mapGet(planResult, "issues", nil))
-	order := issueOrder(planResult, issues)
 	if len(issues) > 0 {
-		fmt.Fprintf(&b, "## Planned changes (%d)\n\n", len(issues))
+		fmt.Fprintf(&b, "### Planned changes (%d)\n\n", len(issues))
 		for i, iss := range order {
-			name := mapStr(iss, "name", "")
-			t := strings.TrimSpace(mapStr(iss, "title", name))
-			fmt.Fprintf(&b, "### %d. %s\n\n", i+1, t)
-			if d := strings.TrimSpace(mapStr(iss, "description", "")); d != "" {
-				b.WriteString(d + "\n\n")
+			fmt.Fprintf(&b, "#### %d. %s\n\n", i+1, t(mapStr(iss, "title", mapStr(iss, "name", ""))))
+			if d := t(mapStr(iss, "description", "")); d != "" {
+				b.WriteString(demoteHeadings(d) + "\n\n")
 			}
 			if f := codeList(iss["files_to_modify"]); f != "" {
 				b.WriteString("- Changes: " + f + "\n")
@@ -137,40 +179,32 @@ func PlanReviewMarkdown(
 				b.WriteString("- Creates: " + f + "\n")
 			}
 			if deps := coerceAnyList(iss["depends_on"]); len(deps) > 0 {
-				b.WriteString("- After: " + joinAny(deps, ", ") + "\n")
+				b.WriteString("- After: " + strings.Join(titlesFor(deps, issues), ", ") + "\n")
 			}
-			if ts := strings.TrimSpace(mapStr(iss, "testing_strategy", "")); ts != "" {
+			if ts := t(mapStr(iss, "testing_strategy", "")); ts != "" {
 				b.WriteString("- Tested by: " + ts + "\n")
 			}
 			if ac := coerceAnyList(iss["acceptance_criteria"]); len(ac) > 0 {
 				b.WriteString("- Done when:\n")
 				for _, c := range ac {
-					fmt.Fprintf(&b, "  - %v\n", c)
+					b.WriteString("  - " + t(fmt.Sprint(c)) + "\n")
 				}
 			}
 			b.WriteString("\n")
 		}
 	} else {
-		b.WriteString("## Planned changes\n\nThe planner produced no changes. Approving builds nothing.\n\n")
-	}
-
-	if files := touchedFiles(issues); len(files) > 0 {
-		b.WriteString("## Files it will touch\n\n")
-		for _, f := range files {
-			b.WriteString("- `" + f + "`\n")
-		}
-		b.WriteString("\n")
+		b.WriteString("### Planned changes\n\nThe planner produced no changes. Approving builds nothing.\n\n")
 	}
 
 	if levels := levelLines(planResult, issues); len(levels) > 1 {
-		b.WriteString("## Order\n\n")
+		b.WriteString("### Order\n\n")
 		for _, l := range levels {
-			b.WriteString(l + "\n")
+			b.WriteString(t(l) + "\n")
 		}
 		b.WriteString("\n")
 	}
 
-	out := b.String()
+	out := strings.TrimRight(b.String(), "\n") + "\n"
 	if len(out) > maxPlanBody {
 		cut := maxPlanBody
 		for cut > 0 && out[cut]&0xC0 == 0x80 {
@@ -180,6 +214,197 @@ func PlanReviewMarkdown(
 	}
 	return out
 }
+
+// summaryLines is the Summary: at most summaryCap lines.
+func summaryLines(prd map[string]any, order []map[string]any, avoided []string, t func(string) string) []string {
+	var lines []string
+	what := firstSentences(t(stripMarkdownHeadings(mapStr(prd, "validated_description", ""))), 2, 320)
+	if what == "" && len(order) > 0 {
+		what = t(mapStr(order[0], "title", ""))
+	}
+	if what != "" {
+		lines = append(lines, "**What changes:** "+what)
+	}
+
+	// Each file once, with the title of the change that touches it first.
+	purposes := map[string]string{}
+	var files []string
+	for _, iss := range order {
+		for _, k := range []string{"files_to_modify", "files_to_create"} {
+			for _, f := range coerceAnyList(iss[k]) {
+				name := strings.TrimSpace(fmt.Sprint(f))
+				if name == "" {
+					continue
+				}
+				if _, ok := purposes[name]; !ok {
+					files = append(files, name)
+					verb := ""
+					if k == "files_to_create" {
+						verb = "new — "
+					}
+					purposes[name] = verb + t(mapStr(iss, "title", ""))
+				}
+			}
+		}
+	}
+	sort.SliceStable(files, func(i, j int) bool { return isTestFile(files[i]) == false && isTestFile(files[j]) })
+	if len(files) > 0 {
+		lines = append(lines, "**Files:**")
+		max := 5
+		for i, f := range files {
+			if i == max {
+				lines = append(lines, fmt.Sprintf("- and %d more (see Details)", len(files)-max))
+				break
+			}
+			lines = append(lines, fmt.Sprintf("- `%s` — %s", f, oneLineCut(purposes[f], 90)))
+		}
+	}
+
+	if tests := testNames(order); len(tests) > 0 {
+		lines = append(lines, "**Tests it adds:** "+codeJoin(tests))
+	}
+
+	var not []string
+	for _, f := range avoided {
+		not = append(not, "`"+f+"`")
+	}
+	for _, it := range coerceAnyList(prd["out_of_scope"]) {
+		if len(not) >= 3 {
+			break
+		}
+		not = append(not, oneLineCut(t(fmt.Sprint(it)), 80))
+	}
+	if len(not) > 0 {
+		lines = append(lines, "**Will not change:** "+strings.Join(not, "; "))
+	}
+
+	risk := "none"
+	if rs := coerceAnyList(prd["risks"]); len(rs) > 0 {
+		risk = oneLineCut(t(fmt.Sprint(rs[0])), 160)
+		if len(rs) > 1 {
+			risk += fmt.Sprintf(" (+%d more in Details)", len(rs)-1)
+		}
+	}
+	lines = append(lines, "**Risks:** "+risk)
+
+	if len(lines) > summaryCap {
+		lines = lines[:summaryCap]
+	}
+	return lines
+}
+
+func isTestFile(f string) bool {
+	return strings.HasSuffix(f, "_test.go") || strings.Contains(f, "test")
+}
+
+// testNames lists the Go test functions the planned changes name.
+func testNames(issues []map[string]any) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, iss := range issues {
+		text := mapStr(iss, "description", "") + " " + mapStr(iss, "testing_strategy", "") + " " +
+			mapStr(iss, "title", "")
+		for _, c := range coerceAnyList(iss["acceptance_criteria"]) {
+			text += " " + fmt.Sprint(c)
+		}
+		for _, m := range goTestPattern.FindAllString(text, -1) {
+			if !seen[m] {
+				seen[m] = true
+				out = append(out, m)
+			}
+		}
+	}
+	if len(out) > 6 {
+		out = out[:6]
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// personText — what the person can read.
+// ---------------------------------------------------------------------------
+
+var (
+	htmlComment   = regexp.MustCompile(`(?s)<!--.*?-->`)
+	absWorktree   = regexp.MustCompile(`(?:/Users|/home|/private|/tmp|/var|/root)/\S*?/(?:\.worktrees|workspaces)/[^/\s` + "`" + `]+/?`)
+	absPath       = regexp.MustCompile("(?:/Users|/home|/private|/tmp|/var|/root)/[^\\s`'\")]+")
+	refParen      = regexp.MustCompile(`\s*\((?:[^()]*?\b(?:AC\s?\d+|§\s?\d|[CDFR]\d{1,2}\b|[Rr]ev(?:ision)?\.?\s?\d|finding)[^()]*)\)`)
+	refAC         = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+(?:\s*(?:[-–,/]|and|to)\s*(?:AC\s?)?\d+)*\b`)
+	refSection    = regexp.MustCompile(`(?:\b(?:architecture|PRD|design)\s+)?§\s?\d+(?:\.\d+)*`)
+	refCode       = regexp.MustCompile(`\b(?:review\s+)?[CDFR]\d{1,2}\b`)
+	refFinding    = regexp.MustCompile(`(?i)\btech[- ]lead(?:'s)?\s+finding(?:s)?(?:\s*\([a-z0-9]\))?`)
+	refArchRev    = regexp.MustCompile(`(?i)\barchitecture\s+(?:rev(?:ision)?\.?\s*\d+(?:\.\d+)*|\d+(?:\.\d+)+)`)
+	refRevision   = regexp.MustCompile(`(?i)\brev(?:ision)?\.?\s*\d+\b`)
+	refMerger     = regexp.MustCompile(`(?i)\bmerger agent\b`)
+	refScopeRule  = regexp.MustCompile(`(?i)\bthe scope rule\b`)
+	refPRD        = regexp.MustCompile(`\bPRD\b`)
+	emptyParens   = regexp.MustCompile(`\((?:\s+|\s*[,;/&–-]+\s*(?:and\s*)?)\)`)
+	spaceBeforeP  = regexp.MustCompile(`[ \t]+([,.;:])`)
+	doublePunct   = regexp.MustCompile(`([,;])\s*[,;]+`)
+	manySpaces    = regexp.MustCompile(`[ \t]{2,}`)
+	mdHeading     = regexp.MustCompile(`(?m)^(#{1,6})\s`)
+	sentenceBreak = regexp.MustCompile(`([.!?])\s+`)
+)
+
+// personText rewrites planner text so a person can read it with nothing else
+// open. revision is the gate's one counter: any revision number the planner
+// wrote is replaced by it.
+func personText(s string, revision int) string {
+	if s == "" {
+		return s
+	}
+	s = htmlComment.ReplaceAllString(s, "")
+	s = absWorktree.ReplaceAllString(s, "")
+	s = absPath.ReplaceAllString(s, "the repo")
+	s = refParen.ReplaceAllString(s, "")
+	s = refFinding.ReplaceAllString(s, "your review")
+	s = refArchRev.ReplaceAllString(s, "the design")
+	s = refAC.ReplaceAllString(s, "")
+	s = refSection.ReplaceAllString(s, "")
+	s = refCode.ReplaceAllString(s, "")
+	if revision > 0 {
+		s = refRevision.ReplaceAllString(s, fmt.Sprintf("revision %d", revision))
+	} else {
+		s = refRevision.ReplaceAllString(s, "this plan")
+	}
+	s = refMerger.ReplaceAllString(s, "the merge step")
+	s = refScopeRule.ReplaceAllString(s, "the keep-it-small guideline")
+	s = refPRD.ReplaceAllString(s, "requirements")
+	s = emptyParens.ReplaceAllString(s, "")
+	s = doublePunct.ReplaceAllString(s, "$1")
+	s = spaceBeforeP.ReplaceAllString(s, "$1")
+	s = manySpaces.ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
+}
+
+// demoteHeadings keeps planner markdown headings below the body's own levels.
+func demoteHeadings(s string) string {
+	return mdHeading.ReplaceAllString(s, "#####$1 ")
+}
+
+func stripMarkdownHeadings(s string) string {
+	var keep []string
+	for _, l := range strings.Split(s, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			keep = append(keep, l)
+		}
+	}
+	return strings.Join(keep, " ")
+}
+
+// firstSentences is the first n sentences of s, at most max runes.
+func firstSentences(s string, n, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	idx := sentenceBreak.FindAllStringIndex(s, -1)
+	if len(idx) >= n {
+		s = s[:idx[n-1][0]+1]
+	}
+	return oneLineCut(s, max)
+}
+
+// ---------------------------------------------------------------------------
+// Structure helpers.
+// ---------------------------------------------------------------------------
 
 // issueOrder returns the issues in the order they run: by level, then the
 // order the planner listed them. Issues no level names keep their place at
@@ -209,6 +434,9 @@ func issueOrder(planResult map[string]any, issues []map[string]any) []map[string
 }
 
 func levelsOf(planResult map[string]any) [][]string {
+	if raw, ok := planResult["levels"].([][]string); ok {
+		return raw
+	}
 	var out [][]string
 	for _, lvl := range coerceAnyList(planResult["levels"]) {
 		var names []string
@@ -224,29 +452,18 @@ func levelsOf(planResult map[string]any) [][]string {
 			out = append(out, names)
 		}
 	}
-	if raw, ok := planResult["levels"].([][]string); ok && len(out) == 0 {
-		out = raw
-	}
 	return out
 }
 
 // levelLines says which changes run together, by title.
 func levelLines(planResult map[string]any, issues []map[string]any) []string {
-	titles := map[string]string{}
-	for _, iss := range issues {
-		n := mapStr(iss, "name", "")
-		titles[n] = strings.TrimSpace(mapStr(iss, "title", n))
-	}
 	var out []string
 	for i, lvl := range levelsOf(planResult) {
-		names := make([]string, 0, len(lvl))
-		for _, n := range lvl {
-			if t := titles[n]; t != "" {
-				names = append(names, t)
-			} else {
-				names = append(names, n)
-			}
+		anyLvl := make([]any, len(lvl))
+		for j, n := range lvl {
+			anyLvl[j] = n
 		}
+		names := titlesFor(anyLvl, issues)
 		line := fmt.Sprintf("%d. %s", i+1, strings.Join(names, "; "))
 		if len(names) > 1 {
 			line += " (together)"
@@ -256,33 +473,45 @@ func levelLines(planResult map[string]any, issues []map[string]any) []string {
 	return out
 }
 
-func touchedFiles(issues []map[string]any) []string {
-	set := map[string]bool{}
+// titlesFor maps issue names to their titles; the kebab name is machinery.
+func titlesFor(names []any, issues []map[string]any) []string {
+	titles := map[string]string{}
 	for _, iss := range issues {
-		for _, k := range []string{"files_to_modify", "files_to_create"} {
-			for _, f := range coerceAnyList(iss[k]) {
-				if s := strings.TrimSpace(fmt.Sprint(f)); s != "" {
-					set[s] = true
-				}
-			}
+		n := mapStr(iss, "name", "")
+		titles[n] = strings.TrimSpace(mapStr(iss, "title", n))
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		k := fmt.Sprint(n)
+		if t := titles[k]; t != "" {
+			out = append(out, t)
+		} else {
+			out = append(out, k)
 		}
 	}
-	out := make([]string, 0, len(set))
-	for f := range set {
-		out = append(out, f)
-	}
-	sort.Strings(out)
 	return out
 }
 
-func bulletSection(b *strings.Builder, heading string, v any) {
+func bulletSection(b *strings.Builder, heading string, v any, t func(string) string) {
 	items := coerceAnyList(v)
 	if len(items) == 0 {
 		return
 	}
-	b.WriteString("## " + heading + "\n\n")
+	b.WriteString("### " + heading + "\n\n")
 	for _, it := range items {
-		fmt.Fprintf(b, "- %v\n", it)
+		b.WriteString("- " + t(fmt.Sprint(it)) + "\n")
+	}
+	b.WriteString("\n")
+}
+
+func numberedSection(b *strings.Builder, heading string, v any, t func(string) string) {
+	items := coerceAnyList(v)
+	if len(items) == 0 {
+		return
+	}
+	b.WriteString("### " + heading + "\n\n")
+	for i, it := range items {
+		fmt.Fprintf(b, "%d. %s\n", i+1, t(fmt.Sprint(it)))
 	}
 	b.WriteString("\n")
 }
@@ -296,14 +525,6 @@ func codeList(v any) string {
 		}
 	}
 	return strings.Join(parts, ", ")
-}
-
-func joinAny(items []any, sep string) string {
-	parts := make([]string, len(items))
-	for i, it := range items {
-		parts[i] = fmt.Sprint(it)
-	}
-	return strings.Join(parts, sep)
 }
 
 func quote(s string) string {

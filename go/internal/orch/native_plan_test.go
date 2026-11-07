@@ -88,10 +88,10 @@ func TestApprovalWithoutHaxAsksOnTheControlPlane(t *testing.T) {
 		t.Fatalf("no hax means no URL, got %q", first.ApprovalRequestURL)
 	}
 	for _, want := range []string{
-		"# Plan: #7: Add a Len() method to Ledger", "## Goal", "Ledger gains Len()",
-		"## How you will know it is done", "Len() of an empty ledger is 0",
-		"## Planned changes (2)", "### 1. Add Len()", "### 2. Test Len", "`ledger.go`",
-		"`ledger_len_test.go`", "## Files it will touch", "Left out on purpose", "No new type",
+		"# Plan: #7: Add a Len() method to Ledger", "## Summary", "## Details", "### Goal", "Ledger gains Len()",
+		"### How you will know it is done", "Len() of an empty ledger is 0",
+		"### Planned changes (2)", "#### 1. Add Len()", "#### 2. Test Len", "`ledger.go`",
+		"`ledger_len_test.go`", "Left out on purpose", "No new type",
 	} {
 		if !strings.Contains(first.Body, want) {
 			t.Errorf("plan body is missing %q:\n%s", want, first.Body)
@@ -199,6 +199,15 @@ func TestBuildIssueInput(t *testing.T) {
 	}
 	if b["config"].(map[string]any)["github_pr_base"] != "main" || b["repo_url"] == nil {
 		t.Fatalf("build input = %v", b)
+	}
+	for _, n := range []any{"7", "#7", 7.0} {
+		in, err := decodeBuildIssue(map[string]any{"title": "t", "repo_url": "u", "issue_number": n})
+		if err != nil || in.IssueNumber != 7 {
+			t.Fatalf("issue_number %v → %v, %v", n, in.IssueNumber, err)
+		}
+	}
+	if _, err := decodeBuildIssue(map[string]any{"title": "t", "repo_url": "u", "issue_number": "seven"}); err == nil {
+		t.Fatal("a non-number issue_number must be refused")
 	}
 	if _, err := decodeBuildIssue(map[string]any{"title": "x"}); err == nil {
 		t.Fatal("no repo must be refused")

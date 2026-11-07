@@ -194,6 +194,27 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 			if err != nil {
 				return ApprovalOutcome{}, err
 			}
+			// HOLD THE REVISION TO THE WORDS (revision_check.go). A plan whose
+			// design did what was asked while its requirements still say the
+			// opposite is re-planned once more, with every contradiction
+			// spelled out, before anyone is asked to approve it.
+			reqs := readReviewRequests(feedback)
+			if problems := revisionProblems(revised, reqs); len(problems) > 0 && revisionErr == "" {
+				deps.Note(ctx, fmt.Sprintf("Revised plan does not yet reflect the review (%d issue(s)); re-planning once more",
+					len(problems)), "build", "approval", "revision", "recheck")
+				again, againErr, err := replanWithFeedback(ctx, req, revised,
+					feedback+"\n\nThe last revision still contradicts this request. Fix EVERY section (requirements, design and every planned change):\n- "+
+						strings.Join(problems, "\n- "))
+				if err != nil {
+					return ApprovalOutcome{}, err
+				}
+				if againErr == "" {
+					revised = again
+				}
+			}
+			if problems := revisionProblems(revised, reqs); len(problems) > 0 {
+				revisionHistory[len(revisionHistory)-1]["unreflected"] = problems
+			}
 			planResult = revised
 			if revisionErr != "" {
 				revisionHistory[len(revisionHistory)-1]["revision_error"] = revisionErr
@@ -604,6 +625,10 @@ func writeApprovalState(path string, state map[string]any) {
 	_ = os.WriteFile(path, raw, 0o644)
 }
 
+// reviewerRequestPrefix marks the acceptance check that carries the person's
+// own words. revision_check.go skips it: the words cannot vouch for themselves.
+const reviewerRequestPrefix = "Asked for in plan review (this overrides anything above it disagrees with): "
+
 // prdWithReviewerRequest returns a copy of prd whose acceptance criteria end
 // with the plan reviewer's words.
 func prdWithReviewerRequest(prd any, feedback string) map[string]any {
@@ -617,7 +642,7 @@ func prdWithReviewerRequest(prd any, feedback string) map[string]any {
 		return out
 	}
 	ac := append([]any(nil), coerceAnyList(out["acceptance_criteria"])...)
-	ac = append(ac, "Asked for in plan review (this overrides anything above it disagrees with): "+feedback)
+	ac = append(ac, reviewerRequestPrefix+feedback)
 	out["acceptance_criteria"] = ac
 	return out
 }
