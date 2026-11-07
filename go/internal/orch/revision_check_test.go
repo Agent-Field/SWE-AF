@@ -120,7 +120,7 @@ func TestTheGateReplansAContradictoryRevisionBeforeAsking(t *testing.T) {
 	body := p.seen[1].Body
 	for _, want := range []string{
 		"## What you asked to change", "> " + liveFeedback, "## How the plan changed",
-		"Leave README.md alone — no planned change touches `README.md`.",
+		"“Leave README.md alone” — no planned change touches `README.md`.",
 		"the plan now includes `TestLenDoesNotAllocate`.", "## Summary", "## Details",
 	} {
 		if !strings.Contains(body, want) {

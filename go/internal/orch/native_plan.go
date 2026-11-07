@@ -153,9 +153,7 @@ func planReviewMarkdown(
 
 	// --- summary ---------------------------------------------------------------
 	b.WriteString("## Summary\n\n")
-	for _, l := range summaryLines(prd, approverSummary(planResult), order, avoided, existingTests, t) {
-		b.WriteString(l + "\n")
-	}
+	b.WriteString(summaryBlock(summaryLines(prd, approverSummary(planResult), order, avoided, existingTests, t)))
 	b.WriteString("\n")
 
 	// --- details ---------------------------------------------------------------
@@ -245,6 +243,29 @@ func planReviewMarkdown(
 		out = out[:cut] + "\n\n… the plan is longer than this page can carry; the rest was cut.\n"
 	}
 	return out
+}
+
+// summaryBlock lays the summary's lines out as markdown blocks. Each field is
+// its own paragraph and only a list item follows the line before it directly.
+// Written one line after another, "**Tests it adds:**" directly below the
+// Files list was a lazy continuation of its last item, and the fields below
+// it ran on into the same paragraph (job 70, 2026-11-07).
+func summaryBlock(lines []string) string {
+	var b strings.Builder
+	for i, l := range lines {
+		if i > 0 {
+			if strings.HasPrefix(l, "- ") {
+				b.WriteString("\n")
+			} else {
+				b.WriteString("\n\n")
+			}
+		}
+		b.WriteString(l)
+	}
+	if len(lines) > 0 {
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // summaryLines is the Summary: at most summaryCap lines.
@@ -591,31 +612,33 @@ func existingTestNames(repoPath string) map[string]bool {
 // ---------------------------------------------------------------------------
 
 var (
-	htmlComment   = regexp.MustCompile(`(?s)<!--.*?-->`)
-	absWorktree   = regexp.MustCompile(`(?:/Users|/home|/private|/tmp|/var|/root)/\S*?/(?:\.worktrees|workspaces)/[^/\s` + "`" + `]+/?`)
-	artifactRef   = regexp.MustCompile("`\\.artifacts/[^`\\s]*`|(?:^|[\\s(\\[])\\.artifacts/[^\\s`'\")]*")
-	homeDir       = regexp.MustCompile(`(?:/Users|/home)/[^/\s]+/`)
-	absPath       = regexp.MustCompile("(?:/Users|/home|/private|/tmp|/var|/root)/[^\\s`'\")]+")
-	refParen      = regexp.MustCompile(`\s*\((?:[^()]*?\b(?:AC\s?\d+|§\s?\d|[CDFR]\d{1,2}\b|[Rr]ev(?:ision)?\.?\s?\d|finding)[^()]*)\)`)
-	refACNamed    = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+\s*\(([^()]{3,40})\)`)
-	refACBare     = regexp.MustCompile(`(?i)\b(by|and|fails|failing|per|see|under|in|via|or)\s+(?:PRD\s+)?AC\s?\d+\b`)
-	refAC         = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+(?:\s*(?:[-–,/]|and|to)\s*(?:AC\s?)?\d+)*\b`)
-	refSection    = regexp.MustCompile(`(?:\b(?:architecture|PRD|design)\s+)?§\s?\d+(?:\.\d+)*`)
-	refCode       = regexp.MustCompile(`\b(?:review\s+)?[CDFR]\d{1,2}\b`)
-	refFinding    = regexp.MustCompile(`(?i)\btech[- ]lead(?:'s)?\s+finding(?:s)?(?:\s*\([a-z0-9]\))?`)
-	refArchRev    = regexp.MustCompile(`(?i)\barchitecture\s+(?:rev(?:ision)?\.?\s*\d+(?:\.\d+)*|\d+(?:\.\d+)+)`)
-	refRevision   = regexp.MustCompile(`(?i)\brev(?:ision)?\.?\s*\d+\b`)
-	refMerger     = regexp.MustCompile(`(?i)\bmerger agent\b`)
-	refScopeRule  = regexp.MustCompile(`(?i)\bthe scope rule\b`)
-	refPRD        = regexp.MustCompile(`\bPRD\b`)
-	emptyParens   = regexp.MustCompile(`\((?:\s+|\s*[,;/&–-]+\s*(?:and\s*)?)\)`)
-	spaceBeforeP  = regexp.MustCompile(`[ \t]+([,;:])(\s|$)`)
-	refLabel      = regexp.MustCompile(`(?m)\b(?:PRD\s+)?(?:AC|[CDFR])\s?\d{1,2}\s*[:)]\s*`)
-	leadingPunct  = regexp.MustCompile(`(?m)^\s*[:;,]\s*`)
-	doublePunct   = regexp.MustCompile(`([,;])\s*[,;]+`)
-	manySpaces    = regexp.MustCompile(`[ \t]{2,}`)
-	mdHeading     = regexp.MustCompile(`(?m)^(#{1,6})\s`)
-	sentenceBreak = regexp.MustCompile(`([.!?])\s+`)
+	htmlComment    = regexp.MustCompile(`(?s)<!--.*?-->`)
+	absWorktree    = regexp.MustCompile(`(?:/Users|/home|/private|/tmp|/var|/root)/\S*?/(?:\.worktrees|workspaces)/[^/\s` + "`" + `]+/?`)
+	artifactRef    = regexp.MustCompile("`\\.artifacts/[^`\\s]*`|(?:^|[\\s(\\[])\\.artifacts/[^\\s`'\")]*")
+	homeDir        = regexp.MustCompile(`(?:/Users|/home)/[^/\s]+/`)
+	absPath        = regexp.MustCompile("(?:/Users|/home|/private|/tmp|/var|/root)/[^\\s`'\")]+")
+	refParen       = regexp.MustCompile(`\s*\((?:[^()]*?\b(?:AC\s?\d+|§\s?\d|[CDFR]\d{1,2}\b|[Rr]ev(?:ision)?\.?\s?\d|finding)[^()]*)\)`)
+	refACNamed     = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+\s*\(([^()]{3,40})\)`)
+	refACBare      = regexp.MustCompile(`(?i)\b(by|and|fails|failing|per|see|under|in|via|or)\s+(?:PRD\s+)?AC\s?\d+\b`)
+	refAC          = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+(?:\s*(?:[-–,/]|and|to)\s*(?:AC\s?)?\d+)*\b`)
+	refSection     = regexp.MustCompile(`(?:\b(?:architecture|PRD|design)\s+)?§\s?\d+(?:\.\d+)*`)
+	refCode        = regexp.MustCompile(`\b(?:review\s+)?[CDFR]\d{1,2}\b`)
+	refFinding     = regexp.MustCompile(`(?i)\btech[- ]lead(?:'s)?\s+finding(?:s)?(?:\s*\([a-z0-9]\))?`)
+	refArchRev     = regexp.MustCompile(`(?i)\barchitecture\s+(?:rev(?:ision)?\.?\s*\d+(?:\.\d+)*|\d+(?:\.\d+)+)`)
+	refRevision    = regexp.MustCompile(`(?i)\brev(?:ision)?\.?\s*\d+\b`)
+	refMerger      = regexp.MustCompile(`(?i)\bmerger agent\b`)
+	refReviewerAsk = regexp.MustCompile(`\b[Tt]he (?:plan )?reviewer asked\b`)
+	refReviewerReq = regexp.MustCompile(`(?i)\breviewer[- ]requested\b`)
+	refScopeRule   = regexp.MustCompile(`(?i)\bthe scope rule\b`)
+	refPRD         = regexp.MustCompile(`\bPRD\b`)
+	emptyParens    = regexp.MustCompile(`\((?:\s+|\s*[,;/&–-]+\s*(?:and\s*)?)\)`)
+	spaceBeforeP   = regexp.MustCompile(`[ \t]+([,;:])(\s|$)`)
+	refLabel       = regexp.MustCompile(`(?m)\b(?:PRD\s+)?(?:AC|[CDFR])\s?\d{1,2}\s*[:)]\s*`)
+	leadingPunct   = regexp.MustCompile(`(?m)^\s*[:;,]\s*`)
+	doublePunct    = regexp.MustCompile(`([,;])\s*[,;]+`)
+	manySpaces     = regexp.MustCompile(`[ \t]{2,}`)
+	mdHeading      = regexp.MustCompile(`(?m)^(#{1,6})\s`)
+	sentenceBreak  = regexp.MustCompile(`([.!?])\s+`)
 )
 
 // personText rewrites planner text so a person can read it with nothing else
@@ -677,6 +700,16 @@ func proseText(s string, revision int, first bool) string {
 		s = refRevision.ReplaceAllString(s, "this plan")
 	}
 	s = refMerger.ReplaceAllString(s, "the merge step")
+	// The person reading the plan IS the reviewer: "the reviewer-requested
+	// test" is said as "the requested test", and "the reviewer asked" as
+	// "you asked" (job 70, 2026-11-07).
+	s = refReviewerAsk.ReplaceAllStringFunc(s, func(m string) string {
+		if m[0] == 'T' {
+			return "You asked"
+		}
+		return "you asked"
+	})
+	s = refReviewerReq.ReplaceAllString(s, "requested")
 	s = refScopeRule.ReplaceAllString(s, "the keep-it-small guideline")
 	s = refPRD.ReplaceAllString(s, "requirements")
 	s = emptyParens.ReplaceAllString(s, "")

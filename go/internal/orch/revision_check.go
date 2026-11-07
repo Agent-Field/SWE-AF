@@ -169,9 +169,20 @@ func revisionProblems(planResult map[string]any, reqs []reviewRequest) []string 
 
 // howThePlanChanged is one line per sentence the person wrote: what the
 // revised plan now does about it, or that it could not be checked.
+//
+// The note is quoted in full right above this list, so a line does not say it
+// again: with one sentence the line is only the outcome, and with several it
+// leads with a short handle on the sentence it answers. Repeating the whole
+// note as the first bullet read as an echo (job 70, 2026-11-07).
 func howThePlanChanged(reqs []reviewRequest, problems []string, listed bool) []string {
 	var out []string
 	for _, r := range reqs {
+		lead := func(outcome string) string {
+			if len(reqs) == 1 {
+				return "- " + strings.ToUpper(outcome[:1]) + outcome[1:]
+			}
+			return "- " + requestHandle(r.Sentence) + " — " + outcome
+		}
 		var bad bool
 		for _, p := range problems {
 			if (r.Avoid != "" && strings.Contains(p, r.Avoid)) || containsAny(p, r.Require) ||
@@ -182,20 +193,34 @@ func howThePlanChanged(reqs []reviewRequest, problems []string, listed bool) []s
 		}
 		switch {
 		case bad:
-			out = append(out, fmt.Sprintf("- %s — **not fully reflected yet** (see below)", r.Sentence))
+			out = append(out, lead("**not fully reflected yet** (see below)"))
 		case r.Avoid != "" && len(r.Require) == 0:
-			out = append(out, fmt.Sprintf("- %s — no planned change touches `%s`.", r.Sentence, r.Avoid))
+			out = append(out, lead(fmt.Sprintf("no planned change touches `%s`.", r.Avoid)))
 		case len(r.Require) > 0:
-			out = append(out, fmt.Sprintf("- %s — the plan now includes %s.", r.Sentence, codeJoin(r.Require)))
+			out = append(out, lead("the plan now includes "+codeJoin(r.Require)+"."))
 		default:
 			if listed {
-				out = append(out, fmt.Sprintf("- %s — the changes it made are listed below.", r.Sentence))
+				out = append(out, lead("the changes it made are listed below."))
 			} else {
-				out = append(out, fmt.Sprintf("- %s — the plan made no change to its files or tests for this; check the summary.", r.Sentence))
+				out = append(out, lead("the plan made no change to its files or tests for this; check the summary."))
 			}
 		}
 	}
 	return out
+}
+
+// requestHandle is a short, whole-word handle on one of the person's
+// sentences: its first clause, quoted, so a reader can find it in the note.
+func requestHandle(s string) string {
+	h := strings.TrimRight(phrase(s, 60), " ,;:")
+	if h == "" {
+		w := strings.Fields(s)
+		if len(w) > 8 {
+			w = append(w[:8:8], "…")
+		}
+		h = strings.Join(w, " ")
+	}
+	return "“" + h + "”"
 }
 
 var clauseSplit = regexp.MustCompile(`[,;:()—–]|\. `)
@@ -337,6 +362,10 @@ func additiveProblems(feedback string, beforeTests []string, revised map[string]
 	now := map[string]bool{}
 	for _, n := range planTests(revised) {
 		now[n] = true
+	}
+	// A test the person gave a new name is renamed, not dropped.
+	for _, r := range readRenames(personWords(feedback), beforeTests) {
+		reshaped = append(reshaped, r.From)
 	}
 	var out []string
 	for _, n := range beforeTests {
@@ -550,5 +579,79 @@ func stringList(v any) []string {
 func revisionChecks(plan map[string]any, reqs []reviewRequest, feedback string, beforeTests []string) []string {
 	out := revisionProblems(plan, reqs)
 	out = append(out, additiveProblems(feedback, beforeTests, plan)...)
+	out = append(out, renameProblems(personWords(feedback), beforeTests, plan)...)
 	return append(out, duplicateProblems(plan)...)
+}
+
+// renameTarget is a sentence that gives a test the plan already adds a NAME:
+// "name the test TestX", "call the new test TestX", "rename it TestX",
+// "rename TestA to TestX". Job 70 (2026-11-07) asked "name the test
+// TestNegativesCountsRefunds" of a plan that added one test, TestNegatives,
+// and the planner kept TestNegatives and added a second test beside it,
+// labelled "reviewer-requested". A name for "the test" is a rename.
+var (
+	renameTheTest = regexp.MustCompile(`(?i)\b(?:name|call|rename|retitle)\s+(?:the|that|this|your|its|it(?:s)?)\s*(?:new\s+|added\s+|one\s+)?(?:test\s+)?(?:function\s+)?(?:to\s+|as\s+)?` + "`?" + `(Test[A-Z][A-Za-z0-9_]*)`)
+	renameFromTo  = regexp.MustCompile(`(?i)\brename\s+` + "`?" + `(Test[A-Z][A-Za-z0-9_]*)` + "`?" + `\s+(?:to|as)\s+` + "`?" + `(Test[A-Z][A-Za-z0-9_]*)`)
+)
+
+// testRename is one rename the person asked for: From is the test the plan
+// sent back added, To the name they gave it.
+type testRename struct{ From, To string }
+
+// readRenames reads the renames out of the person's words, against the tests
+// the plan they sent back would have added. "The test" names a test only when
+// that plan added exactly one other; with several it is not knowable which.
+func readRenames(feedback string, beforeTests []string) []testRename {
+	var out []testRename
+	for _, s := range sentenceSplit.Split(feedback, -1) {
+		if m := renameFromTo.FindStringSubmatch(s); m != nil {
+			out = append(out, testRename{From: m[1], To: m[2]})
+			continue
+		}
+		m := renameTheTest.FindStringSubmatch(s)
+		if m == nil {
+			continue
+		}
+		var others []string
+		for _, b := range beforeTests {
+			if b != m[1] {
+				others = append(others, b)
+			}
+		}
+		if len(others) == 1 && len(others) == len(beforeTests) {
+			out = append(out, testRename{From: others[0], To: m[1]})
+		}
+	}
+	return out
+}
+
+// renameReading is what the gate adds to the person's words before the first
+// revision so the planners read a name as a rename, not as one more test.
+func renameReading(feedback string, beforeTests []string) string {
+	var lines []string
+	for _, r := range readRenames(feedback, beforeTests) {
+		lines = append(lines, fmt.Sprintf("%s is a new name for %s: rename %s to %s everywhere and keep ONE test; do not add a second test beside it.",
+			r.To, r.From, r.From, r.To))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return readingMarker + strings.Join(lines, "\n- ")
+}
+
+// renameProblems holds a revision to a rename: the old name must be gone from
+// the tests it adds once the new one is there.
+func renameProblems(feedback string, beforeTests []string, revised map[string]any) []string {
+	now := map[string]bool{}
+	for _, n := range planTests(revised) {
+		now[n] = true
+	}
+	var out []string
+	for _, r := range readRenames(feedback, beforeTests) {
+		if now[r.From] && now[r.To] {
+			out = append(out, fmt.Sprintf("you asked to name the test %s, not to add a second one, but the plan still adds %s beside it; rename %s to %s",
+				r.To, r.From, r.From, r.To))
+		}
+	}
+	return out
 }

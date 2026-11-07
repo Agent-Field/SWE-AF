@@ -196,7 +196,10 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 				revisionIter, runeTruncate(feedback, 200)),
 				"build", "approval", "request_changes")
 
-			revised, revisionErr, err := replanWithFeedback(ctx, req, planResult, feedback)
+			// A name given to "the test" renames the one the plan adds; it
+			// is said so before the planners read the words (renameReading).
+			told := feedback + renameReading(feedback, beforeTests)
+			revised, revisionErr, err := replanWithFeedback(ctx, req, planResult, told)
 			if err != nil {
 				return ApprovalOutcome{}, err
 			}
@@ -212,7 +215,7 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 				deps.Note(ctx, fmt.Sprintf("Revised plan does not yet reflect the review (%d issue(s)); re-planning once more",
 					len(problems)), "build", "approval", "revision", "recheck")
 				again, againErr, err := replanWithFeedback(ctx, req, revised,
-					feedback+recheckMarker+
+					told+recheckMarker+
 						strings.Join(problems, "\n- "))
 				if err != nil {
 					return ApprovalOutcome{}, err
@@ -645,10 +648,18 @@ func writeApprovalState(path string, state map[string]any) {
 // requirements carry only the person's own words (personWords).
 const recheckMarker = "\n\nThe last revision still contradicts this request. Fix EVERY section (requirements, design and every planned change):\n- "
 
-// personWords is the person's own words, without the gate's recheck notes.
+// readingMarker starts the gate's reading of the person's words, added before
+// the first revision (renameReading). Like the recheck notes it is for the
+// planners; the requirements carry only the person's own words.
+const readingMarker = "\n\nHow to read this request:\n- "
+
+// personWords is the person's own words, without the gate's reading or its
+// recheck notes.
 func personWords(feedback string) string {
-	if i := strings.Index(feedback, recheckMarker); i >= 0 {
-		return feedback[:i]
+	for _, marker := range []string{readingMarker, recheckMarker} {
+		if i := strings.Index(feedback, marker); i >= 0 {
+			feedback = feedback[:i]
+		}
 	}
 	return feedback
 }
