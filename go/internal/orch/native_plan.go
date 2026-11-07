@@ -690,7 +690,41 @@ func proseText(s string, revision int, first bool) string {
 
 // demoteHeadings keeps planner markdown headings below the body's own levels.
 func demoteHeadings(s string) string {
-	return mdHeading.ReplaceAllString(s, "#####$1 ")
+	return capsLeads(mdHeading.ReplaceAllString(s, "#####$1 "))
+}
+
+// capsLead is a paragraph that opens with an ALL-CAPS phrase ending in a full
+// stop or colon: "THE DELTA IS THREE FILES AND FIVE INSERTED PRODUCT LINES."
+var capsLead = regexp.MustCompile(`(?m)^([A-Z][A-Z0-9'’/(),-]*(?:\s+[A-Z0-9][A-Z0-9'’/(),-]*)+)[.:]\s+`)
+
+// keepCaps are words that stay capitals when a lead is said in sentence case.
+var keepCaps = map[string]bool{"API": true, "CLI": true, "CI": true, "PR": true, "PRS": true, "README": true,
+	"JSON": true, "HTTP": true, "URL": true, "ID": true, "OK": true, "UI": true, "SQL": true, "CSV": true, "GO": false}
+
+// capsLeads turns each ALL-CAPS paragraph lead into a short heading in
+// sentence case, so a planner that still writes run-on blocks led by
+// shouting reads as headed sections (owner review, 2026-11-07). The prompt
+// asks for headed sections first; this is the floor.
+func capsLeads(s string) string {
+	return capsLead.ReplaceAllStringFunc(s, func(m string) string {
+		lead := strings.TrimSpace(capsLead.FindStringSubmatch(m)[1])
+		return "##### " + sentenceCase(lead) + "\n\n"
+	})
+}
+
+func sentenceCase(s string) string {
+	words := strings.Fields(s)
+	for i, w := range words {
+		core := strings.Trim(w, "'’/(),-")
+		switch {
+		case keepCaps[core]:
+		case i == 0:
+			words[i] = strings.ToUpper(w[:1]) + strings.ToLower(w[1:])
+		default:
+			words[i] = strings.ToLower(w)
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 func stripMarkdownHeadings(s string) string {

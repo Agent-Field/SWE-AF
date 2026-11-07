@@ -141,7 +141,7 @@ func RunProductManager(ctx context.Context, deps *Deps, input map[string]any) (a
 			AdditionalContext:  additionalContext,
 			WorkspaceManifest:  wsManifest,
 			PriorUserResponses: prior,
-		})
+		}) + personReadableProse("validated_description")
 		opts := harnessx.RoleOptions{
 			Provider:       provider,
 			Model:          model,
@@ -353,7 +353,7 @@ func RunArchitect(ctx context.Context, deps *Deps, input map[string]any) (any, e
 		ArchitecturePath:  paths["architecture"],
 		Feedback:          feedback,
 		WorkspaceManifest: wsManifest,
-	})
+	}) + personReadableProse("summary")
 
 	provider, err := runtimex.RuntimeToHarnessAdapter(aiProvider)
 	if err != nil {
@@ -471,6 +471,21 @@ func RunTechLead(ctx context.Context, deps *Deps, input map[string]any) (any, er
 
 // sprintPlanOutput is the inline schema Python declares inside
 // run_sprint_planner (issues + rationale).
+// personReadableProse asks a planning role to write the field a person reads
+// in a plan's Details as short headed sections. Live on 2026-11-07 the PM's
+// description was four run-on blocks, each led by an ALL-CAPS phrase ("THE
+// DELTA IS THREE FILES…", "SCOPE BOUNDARIES."). Like the approver summary it
+// is a Go-only addition to the task prompt, so the system prompts stay
+// byte-identical to the Python port their golden tests pin.
+func personReadableProse(field string) string {
+	return "\n\n## How to write `" + field + "`\n\n" +
+		"A person approving this plan reads `" + field + "` when the summary is not enough. " +
+		"Write it as two to five short sections. Start each with a `### ` heading of a few words in " +
+		"sentence case (\"### What changes\", \"### What stays the same\"), followed by one to three " +
+		"plain sentences. Never start a paragraph or a heading with an ALL-CAPS phrase, and do not " +
+		"pack several topics into one paragraph."
+}
+
 // approverSummaryInstruction asks the sprint planner for the plan in the
 // approver's terms. It is a Go-only addition appended to the task prompt, so
 // the system prompt stays byte-identical to the Python port its golden test

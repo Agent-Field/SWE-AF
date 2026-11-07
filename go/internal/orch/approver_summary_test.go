@@ -1,6 +1,7 @@
 package orch
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -183,5 +184,27 @@ func TestCitedChecksKeepTheSentenceWhole(t *testing.T) {
 	}
 	if p := phrase("The frozen shape matters: the struct keeps one field, so callers that embed it are unaffected by the change at all", 60); p != "The frozen shape matters: the struct keeps one field" {
 		t.Fatalf("a colon is not a clause boundary: %q", p)
+	}
+}
+
+// Run 4's Details were run-on blocks led by shouting; each lead becomes a
+// short heading in sentence case and the text below it is kept.
+func TestShoutedLeadsBecomeHeadings(t *testing.T) {
+	in := "THE DELTA IS THREE FILES AND FIVE INSERTED PRODUCT LINES. Len goes after Total.\n\n" +
+		"SCOPE BOUNDARIES: Must-have is the method. The CLI output stays.\n\n" +
+		"THE README AND CLI STAY AS THEY ARE. Nothing else.\n\nA normal paragraph. O(1) stays."
+	got := demoteHeadings(in)
+	for _, want := range []string{
+		"##### The delta is three files and five inserted product lines\n\nLen goes after Total.",
+		"##### Scope boundaries\n\nMust-have is the method.",
+		"##### The README and CLI stay as they are\n\nNothing else.",
+		"A normal paragraph. O(1) stays.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if regexp.MustCompile(`(?m)^[A-Z]{3,} [A-Z]{3,}`).MatchString(got) {
+		t.Errorf("a shouted lead is left:\n%s", got)
 	}
 }
