@@ -386,7 +386,9 @@ var (
 	refScopeRule  = regexp.MustCompile(`(?i)\bthe scope rule\b`)
 	refPRD        = regexp.MustCompile(`\bPRD\b`)
 	emptyParens   = regexp.MustCompile(`\((?:\s+|\s*[,;/&–-]+\s*(?:and\s*)?)\)`)
-	spaceBeforeP  = regexp.MustCompile(`[ \t]+([,.;:])`)
+	spaceBeforeP  = regexp.MustCompile(`[ \t]+([,;:])(\s|$)`)
+	refLabel      = regexp.MustCompile(`(?m)\b(?:PRD\s+)?(?:AC|[CDFR])\s?\d{1,2}\s*[:)]\s*`)
+	leadingPunct  = regexp.MustCompile(`(?m)^\s*[:;,]\s*`)
 	doublePunct   = regexp.MustCompile(`([,;])\s*[,;]+`)
 	manySpaces    = regexp.MustCompile(`[ \t]{2,}`)
 	mdHeading     = regexp.MustCompile(`(?m)^(#{1,6})\s`)
@@ -403,6 +405,17 @@ func personText(s string, revision int) string {
 	s = htmlComment.ReplaceAllString(s, "")
 	s = absWorktree.ReplaceAllString(s, "")
 	s = absPath.ReplaceAllString(s, "the repo")
+	// Code spans are left exactly as written: a command must still run.
+	parts := strings.Split(s, "`")
+	for i := 0; i < len(parts); i += 2 {
+		parts[i] = proseText(parts[i], revision)
+	}
+	return strings.TrimSpace(manySpaces.ReplaceAllString(strings.Join(parts, "`"), " "))
+}
+
+// proseText strips references from text outside code spans.
+func proseText(s string, revision int) string {
+	s = refLabel.ReplaceAllString(s, "")
 	s = refParen.ReplaceAllString(s, "")
 	s = refFinding.ReplaceAllString(s, "your review")
 	s = refArchRev.ReplaceAllString(s, "the design")
@@ -419,9 +432,9 @@ func personText(s string, revision int) string {
 	s = refPRD.ReplaceAllString(s, "requirements")
 	s = emptyParens.ReplaceAllString(s, "")
 	s = doublePunct.ReplaceAllString(s, "$1")
-	s = spaceBeforeP.ReplaceAllString(s, "$1")
-	s = manySpaces.ReplaceAllString(s, " ")
-	return strings.TrimSpace(s)
+	s = spaceBeforeP.ReplaceAllString(s, "$1$2")
+	s = leadingPunct.ReplaceAllString(s, "")
+	return manySpaces.ReplaceAllString(s, " ")
 }
 
 // demoteHeadings keeps planner markdown headings below the body's own levels.

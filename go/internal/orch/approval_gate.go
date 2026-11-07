@@ -203,7 +203,7 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 				deps.Note(ctx, fmt.Sprintf("Revised plan does not yet reflect the review (%d issue(s)); re-planning once more",
 					len(problems)), "build", "approval", "revision", "recheck")
 				again, againErr, err := replanWithFeedback(ctx, req, revised,
-					feedback+"\n\nThe last revision still contradicts this request. Fix EVERY section (requirements, design and every planned change):\n- "+
+					feedback+recheckMarker+
 						strings.Join(problems, "\n- "))
 				if err != nil {
 					return ApprovalOutcome{}, err
@@ -437,7 +437,7 @@ func replanWithFeedback(
 	// planner, the issue writers, the coders and the verifier all read what
 	// was asked — PM does not re-run, and without this the PRD would still
 	// describe the plan the person sent back.
-	revisedPRD := prdWithReviewerRequest(prd, feedback)
+	revisedPRD := prdWithReviewerRequest(prd, personWords(feedback))
 
 	sprint, err := deps.Call(ctx, "run_sprint_planner", map[string]any{
 		"prd":                revisedPRD,
@@ -623,6 +623,19 @@ func writeApprovalState(path string, state map[string]any) {
 		return
 	}
 	_ = os.WriteFile(path, raw, 0o644)
+}
+
+// recheckMarker starts what the gate adds to the person's words when a
+// revision is sent back by revision_check.go. The planners read it; the
+// requirements carry only the person's own words (personWords).
+const recheckMarker = "\n\nThe last revision still contradicts this request. Fix EVERY section (requirements, design and every planned change):\n- "
+
+// personWords is the person's own words, without the gate's recheck notes.
+func personWords(feedback string) string {
+	if i := strings.Index(feedback, recheckMarker); i >= 0 {
+		return feedback[:i]
+	}
+	return feedback
 }
 
 // reviewerRequestPrefix marks the acceptance check that carries the person's

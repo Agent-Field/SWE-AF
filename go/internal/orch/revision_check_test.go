@@ -195,3 +195,44 @@ func TestSummaryListsOnlyNewTests(t *testing.T) {
 		t.Fatalf("summary tests wrong:\n%s", summary)
 	}
 }
+
+// Run 3's revised plan said README.md was left alone in a file list and in a
+// command; neither may read as a contradiction.
+func TestLeftAloneInAListOrACommandIsNotAContradiction(t *testing.T) {
+	for _, ok := range []string{
+		"The diff touches exactly two files: ledger.go and ledger_test.go — README.md, cmd/ledger/main.go and every other file untouched.",
+		"— README.md is untouched: `test -z \"$(git diff --name-only main...HEAD -- README.md)\"` exits 0.",
+		"Documentation edits (README.md or any non-Go file) — left untouched.",
+		"Leave README.md alone; do not amend its API sentence to mention Len.",
+	} {
+		if mentionsWithoutLeavingAlone(ok, "README.md") {
+			t.Errorf("read as changing README.md: %s", ok)
+		}
+	}
+	for _, bad := range []string{
+		"Add `Len` to the method list in `README.md` without altering the documented CLI output example.",
+		"Update README.md to list Len.",
+	} {
+		if !mentionsWithoutLeavingAlone(bad, "README.md") {
+			t.Errorf("missed a change to README.md: %s", bad)
+		}
+	}
+}
+
+// Code spans survive the cleanup exactly; reference labels leave no debris.
+func TestPersonTextKeepsCommandsAndDropsLabels(t *testing.T) {
+	got := personText("AC6: No regressions. Command (exit 0): `go test ./... -count=1`.", 0)
+	if got != "No regressions. Command (exit 0): `go test ./... -count=1`." {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// The recheck notes reach the planners, never the requirements.
+func TestRecheckNotesStayOutOfTheRequirements(t *testing.T) {
+	fb := liveFeedback + recheckMarker + "Must have still says: x"
+	prd := prdWithReviewerRequest(map[string]any{}, personWords(fb))
+	ac := coerceAnyList(prd["acceptance_criteria"])
+	if len(ac) != 1 || strings.Contains(ac[0].(string), "still says") {
+		t.Fatalf("acceptance = %v", ac)
+	}
+}

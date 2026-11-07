@@ -194,39 +194,58 @@ func howThePlanChanged(reqs []reviewRequest, problems []string) []string {
 
 var clauseSplit = regexp.MustCompile(`[,;:()—–]|\. `)
 
-// mentionsWithoutLeavingAlone reports a line that names file without saying,
-// right beside it, that it is left alone. "Beside" is a word window, because
-// a whole-line negation lies: "add Len to the method list in README.md
-// without altering the CLI example" negates the example, not the README.
-// A negation counts when it comes up to five words BEFORE the file ("do not
-// touch README.md", "leave README.md") or a state word comes up to three
-// words AFTER it ("README.md alone", "README.md is left untouched").
+// mentionsWithoutLeavingAlone reports a line that would CHANGE file: it names
+// the file beside an editing verb and nowhere says the file is left alone.
+//
+// Two live misreadings shaped it. "Add Len to the method list in README.md
+// without altering the CLI example" must be caught although it holds a
+// negation ("without" negates the example, so a whole-line "not" is not
+// enough: the strong state words below are). And "README.md, cmd/ledger and
+// every other file untouched", or a check like `git diff -- README.md` is
+// empty, must NOT be caught: they say the file is left alone, in a list or a
+// command, where no word sits right beside it.
 func mentionsWithoutLeavingAlone(text, file string) bool {
+	lower := strings.ToLower(text)
 	lf := strings.ToLower(strings.Trim(file, "`"))
-	for _, clause := range clauseSplit.Split(text, -1) {
-		words := strings.Fields(strings.ToLower(clause))
-		for i, w := range words {
-			if !strings.Contains(strings.Trim(w, "`'\"*"), lf) {
-				continue
+	if !strings.Contains(lower, lf) || strongLeftAlone.MatchString(lower) {
+		return false
+	}
+	words := strings.Fields(lower)
+	for i, w := range words {
+		if !strings.Contains(w, lf) {
+			continue
+		}
+		left, edits := false, false
+		for j := max0(i - 8); j < i; j++ {
+			ww := strings.Trim(words[j], "`'\",.:;()")
+			if beforeNegation[ww] {
+				left = true
 			}
-			left := false
-			for j := max0(i - 5); j < i; j++ {
-				if beforeNegation[strings.Trim(words[j], "`'\",.")] {
-					left = true
-				}
+			if editVerb[ww] {
+				edits = true
 			}
-			for j := i + 1; j < len(words) && j <= i+3; j++ {
-				if afterState[strings.Trim(words[j], "`'\",.")] {
-					left = true
-				}
+		}
+		for j := i + 1; j < len(words) && j <= i+3; j++ {
+			if afterState[strings.Trim(words[j], "`'\",.:;()")] {
+				left = true
 			}
-			if !left {
-				return true
-			}
+		}
+		if edits && !left {
+			return true
 		}
 	}
 	return false
 }
+
+// strongLeftAlone is a line that says, somewhere, that files are left alone.
+var strongLeftAlone = regexp.MustCompile(`\b(untouched|unchanged|left alone|stays? alone|not (be )?(touched|modified|edited|changed)|no changes? to|is not modified|never (touch|edit|modify)|neither modified|out of scope|left as-is)\b`)
+
+// editVerb is a word that, before a file, means the plan would change it.
+var editVerb = map[string]bool{"add": true, "adds": true, "adding": true, "update": true, "updates": true,
+	"updating": true, "edit": true, "edits": true, "modify": true, "modifies": true, "change": true,
+	"changes": true, "document": true, "documents": true, "mention": true, "mentions": true, "amend": true,
+	"append": true, "write": true, "writes": true, "extend": true, "list": true, "lists": true, "touch": true,
+	"touches": true, "rewrite": true, "insert": true}
 
 var beforeNegation = map[string]bool{"not": true, "no": true, "never": true, "leave": true, "leaves": true,
 	"don't": true, "dont": true, "without": true, "neither": true, "nor": true, "excluding": true, "except": true, "untouched:": true}
