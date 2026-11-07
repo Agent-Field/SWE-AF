@@ -88,3 +88,36 @@ func TestPhraseNeverCutsAWord(t *testing.T) {
 		}
 	}
 }
+
+// Live on 2026-11-07 the architect named components "C1 — Ledger.Len (root
+// package ledger)" and cited them by id; stripping the ids left "→ →" and a
+// bold name of "— Ledger.Len". Each id is now said as its component's name.
+func TestComponentIDsAreSaidAsTheirNames(t *testing.T) {
+	plan := richPlan()
+	arch := plan["architecture"].(map[string]any)
+	arch["summary"] = "Three components, implemented in order C1 → C2 → C3."
+	arch["components"] = []any{
+		map[string]any{"name": "C1 — Ledger.Len (root package ledger)", "responsibility": "Expose the count."},
+		map[string]any{"name": "C2 — Len test suite (package ledger, internal)", "responsibility": "Pin it; see C1."},
+		map[string]any{"name": "C3 — CLI count migration (cmd/ledger)", "responsibility": "Call Len."},
+	}
+	body := planReviewMarkdown("x", "g", plan, 0, nil, nil)
+	for _, want := range []string{"Ledger.Len → Len test suite → CLI count migration", "**Ledger.Len (root package ledger)**", "see Ledger.Len"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body misses %q", want)
+		}
+	}
+	for _, bad := range []string{"→ →", "**—", "C1", "C2"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("body still has %q", bad)
+		}
+	}
+}
+
+// A comma after a code span belongs to the sentence (live: "`Cap()“IsEmpty()`indexed").
+func TestPunctuationAfterCodeSurvives(t *testing.T) {
+	got := personText("`Cap()`, `IsEmpty()`, indexed `Get(i)`, and `cmd/ledger/main.go`, which copies", 0)
+	if got != "`Cap()`, `IsEmpty()`, indexed `Get(i)`, and `cmd/ledger/main.go`, which copies" {
+		t.Fatalf("got %q", got)
+	}
+}

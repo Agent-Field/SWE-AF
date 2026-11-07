@@ -93,7 +93,13 @@ func planReviewMarkdown(
 	history []map[string]any,
 	existingTests map[string]bool,
 ) string {
-	t := func(s string) string { return personText(s, revisionIter) }
+	// The architect often names components "C1 — Ledger.Len (root package)"
+	// and then cites them by id ("implemented in order C1 → C2 → C3"). The
+	// id is a reference the person never sees, so it is replaced by the
+	// component's own short name BEFORE references are stripped; stripping
+	// alone left "implemented in order → →" (live, 2026-11-07).
+	compIDs := componentIDs(planResult)
+	t := func(s string) string { return personText(nameComponents(s, compIDs), revisionIter) }
 	var b strings.Builder
 	heading := "Plan: " + title
 	if revisionIter > 0 {
@@ -437,6 +443,42 @@ func approverSummary(planResult map[string]any) map[string]any {
 		return m
 	}
 	return map[string]any{}
+}
+
+var componentIDName = regexp.MustCompile(`^\s*([CDFR]\d{1,2})\s*(?:[—–:-]|\.)\s*(.+?)\s*$`)
+
+// componentIDs maps a component id ("C1") to its short name ("Ledger.Len"):
+// the name after the id, without a trailing parenthetical.
+func componentIDs(planResult map[string]any) map[string]string {
+	arch, _ := mapGet(planResult, "architecture", map[string]any{}).(map[string]any)
+	out := map[string]string{}
+	for _, comp := range asMapList(mapGet(arch, "components", nil)) {
+		m := componentIDName.FindStringSubmatch(mapStr(comp, "name", ""))
+		if m == nil {
+			continue
+		}
+		short := strings.TrimSpace(m[2])
+		if i := strings.Index(short, " ("); i > 0 {
+			short = strings.TrimSpace(short[:i])
+		}
+		if short != "" {
+			out[m[1]] = short
+		}
+	}
+	return out
+}
+
+// nameComponents says each component id as its name: "C1 — Ledger.Len" as
+// "Ledger.Len", and a bare "C2" as that component's name.
+func nameComponents(s string, ids map[string]string) string {
+	if len(ids) == 0 || s == "" {
+		return s
+	}
+	for id, name := range ids {
+		s = regexp.MustCompile(`\b`+id+`\s*[—–:-]\s*`+regexp.QuoteMeta(name)).ReplaceAllString(s, name)
+		s = regexp.MustCompile(`\b`+id+`\b`).ReplaceAllString(s, name)
+	}
+	return s
 }
 
 func isTestFile(f string) bool {
