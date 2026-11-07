@@ -169,3 +169,19 @@ func TestAnAdditiveRequestKeepsTheTestsAndListsTheChange(t *testing.T) {
 		t.Error("dropping the person's tests must be named as not reflected")
 	}
 }
+
+// Live 2026-11-07, run 06: criteria cited by number left holes, and joined
+// phrases read "untouched.; Nothing".
+func TestCitedChecksKeepTheSentenceWhole(t *testing.T) {
+	got := personText("Mitigated by AC5 (body-shape gate) and AC6 (allocation gate). An agent adds it, mitigated by AC9 and the explicit statement. It fails AC4 and a shipped file is polluted.", 0)
+	want := "Mitigated by the body-shape gate check and the allocation gate check. An agent adds it, mitigated by a check and the explicit statement. It fails a check and a shipped file is polluted."
+	if got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	if j := joinPhrases([]string{"The output is untouched.", "Nothing else changes."}); j != "The output is untouched; Nothing else changes" {
+		t.Fatalf("joined %q", j)
+	}
+	if p := phrase("The frozen shape matters: the struct keeps one field, so callers that embed it are unaffected by the change at all", 60); p != "The frozen shape matters: the struct keeps one field" {
+		t.Fatalf("a colon is not a clause boundary: %q", p)
+	}
+}

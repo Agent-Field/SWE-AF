@@ -359,7 +359,7 @@ func summaryLines(prd, as map[string]any, order []map[string]any, avoided []stri
 		not = append(not, p)
 	}
 	if len(not) > 0 {
-		lines = append(lines, "**Will not change:** "+strings.Join(not, "; "))
+		lines = append(lines, "**Will not change:** "+joinPhrases(not))
 	}
 
 	risks := coerceAnyList(as["risks"])
@@ -380,7 +380,7 @@ func summaryLines(prd, as map[string]any, order []map[string]any, avoided []stri
 	case len(rs) == 1:
 		risk = rs[0]
 	case len(rs) >= 2:
-		risk = rs[0] + "; " + rs[1]
+		risk = joinPhrases(rs[:2])
 		if len(rs) > 2 {
 			risk += fmt.Sprintf(" (+%d more in Details)", len(rs)-2)
 		}
@@ -441,7 +441,9 @@ func phrase(s string, max int) string {
 	}
 	// A bare comma is not a clause boundary here: cutting "do not modify A,
 	// B or C" at its first comma would tell the approver only A is safe.
-	for _, sep := range []string{"; ", " — ", ": ", " (", ", because ", ", since ", ", so ", ", which ", ", but "} {
+	// Nor is a colon: what comes after it is usually the point ("The frozen
+	// shape matters: …" said nothing on its own, live 2026-11-07).
+	for _, sep := range []string{"; ", " — ", " (", ", because ", ", since ", ", so ", ", which ", ", but "} {
 		for off := 0; ; {
 			i := strings.Index(s[off:], sep)
 			if i < 0 {
@@ -458,6 +460,16 @@ func phrase(s string, max int) string {
 		}
 	}
 	return ""
+}
+
+// joinPhrases joins summary phrases with "; ", without the full stop each
+// may end with ("untouched.; Nothing", live 2026-11-07).
+func joinPhrases(items []string) string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = strings.TrimRight(strings.TrimSpace(it), ".")
+	}
+	return strings.Join(out, "; ")
 }
 
 // approverSummary is the planner's approver_summary, or an empty map.
@@ -574,6 +586,8 @@ var (
 	homeDir       = regexp.MustCompile(`(?:/Users|/home)/[^/\s]+/`)
 	absPath       = regexp.MustCompile("(?:/Users|/home|/private|/tmp|/var|/root)/[^\\s`'\")]+")
 	refParen      = regexp.MustCompile(`\s*\((?:[^()]*?\b(?:AC\s?\d+|§\s?\d|[CDFR]\d{1,2}\b|[Rr]ev(?:ision)?\.?\s?\d|finding)[^()]*)\)`)
+	refACNamed    = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+\s*\(([^()]{3,40})\)`)
+	refACBare     = regexp.MustCompile(`(?i)\b(by|and|fails|failing|per|see|under|in|via|or)\s+(?:PRD\s+)?AC\s?\d+\b`)
 	refAC         = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+(?:\s*(?:[-–,/]|and|to)\s*(?:AC\s?)?\d+)*\b`)
 	refSection    = regexp.MustCompile(`(?:\b(?:architecture|PRD|design)\s+)?§\s?\d+(?:\.\d+)*`)
 	refCode       = regexp.MustCompile(`\b(?:review\s+)?[CDFR]\d{1,2}\b`)
@@ -635,6 +649,11 @@ func proseText(s string, revision int, first bool) string {
 	s = refParen.ReplaceAllString(s, "")
 	s = refFinding.ReplaceAllString(s, "your review")
 	s = refArchRev.ReplaceAllString(s, "the design")
+	// A criterion cited by number is said as a check, keeping its name when
+	// it has one: stripping it left "mitigated by and the explicit
+	// statement" and "by (body-shape gate)" (live, 2026-11-07).
+	s = refACNamed.ReplaceAllString(s, "the $1 check")
+	s = refACBare.ReplaceAllString(s, "${1} a check")
 	s = refAC.ReplaceAllString(s, "")
 	s = refSection.ReplaceAllString(s, "")
 	s = refCode.ReplaceAllString(s, "")
