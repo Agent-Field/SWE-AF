@@ -81,6 +81,8 @@ func TestPhraseNeverCutsAWord(t *testing.T) {
 		{"First sentence here. Second one is much longer than the limit allows", "First sentence here."},
 		{"A clause that fits, but then a very long tail that does not fit anywhere", "A clause that fits"},
 		{"Do not modify A, B, C, D, E, F, G or any other part of it", ""},
+		{"Keep `a; b (c)` as is; then a much longer tail goes here", "Keep `a; b (c)` as is"},
+		{"Run `go doc -u (x); y` and a long tail that will not fit", ""},
 		{"onegiantwordwithnoseparatorsatallthatcannotbeshortened", ""},
 	} {
 		if got := phrase(c.in, 30); got != c.want {

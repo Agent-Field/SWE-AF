@@ -416,7 +416,10 @@ func phrase(s string, max int) string {
 	if s == "" {
 		return ""
 	}
-	fits := func(x string) bool { return len([]rune(x)) <= max }
+	// A cut inside a code span would leave an unclosed backtick and turn the
+	// rest of the Summary into code (live, 2026-11-07: "`*…;"), so a
+	// shortened phrase must close every span it opens.
+	fits := func(x string) bool { return len([]rune(x)) <= max && strings.Count(x, "`")%2 == 0 }
 	if fits(s) {
 		return s
 	}
@@ -428,10 +431,19 @@ func phrase(s string, max int) string {
 	// A bare comma is not a clause boundary here: cutting "do not modify A,
 	// B or C" at its first comma would tell the approver only A is safe.
 	for _, sep := range []string{"; ", " — ", ": ", " (", ", because ", ", since ", ", so ", ", which ", ", but "} {
-		if i := strings.Index(s, sep); i > 0 {
-			if first := strings.TrimRight(strings.TrimSpace(s[:i]), ",;:"); fits(first) && len([]rune(first)) >= 12 {
+		for off := 0; ; {
+			i := strings.Index(s[off:], sep)
+			if i < 0 {
+				break
+			}
+			first := strings.TrimRight(strings.TrimSpace(s[:off+i]), ",;:")
+			if len([]rune(first)) > max {
+				break
+			}
+			if fits(first) && len([]rune(first)) >= 12 {
 				return first
 			}
+			off += i + len(sep)
 		}
 	}
 	return ""
