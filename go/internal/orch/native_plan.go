@@ -21,6 +21,9 @@ package orch
 
 import (
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -64,7 +67,7 @@ func NativePlanQuestion(
 		RequestID:      id,
 		Kind:           hitl.KindPlanReview,
 		Question:       question,
-		Body:           PlanReviewMarkdown(title, req.Goal, planResult, revisionIter, history),
+		Body:           planReviewMarkdown(title, req.Goal, planResult, revisionIter, history, existingTestNames(req.RepoPath)),
 		Options:        hitl.ReviewOptions,
 		ExpiresInHours: expires,
 		ExecutionID:    req.ExecutionID,
@@ -77,6 +80,18 @@ func PlanReviewMarkdown(
 	planResult map[string]any,
 	revisionIter int,
 	history []map[string]any,
+) string {
+	return planReviewMarkdown(title, goal, planResult, revisionIter, history, nil)
+}
+
+// planReviewMarkdown is PlanReviewMarkdown knowing which tests the repository
+// already has, so the summary lists only the tests the plan ADDS.
+func planReviewMarkdown(
+	title, goal string,
+	planResult map[string]any,
+	revisionIter int,
+	history []map[string]any,
+	existingTests map[string]bool,
 ) string {
 	t := func(s string) string { return personText(s, revisionIter) }
 	var b strings.Builder
@@ -124,7 +139,7 @@ func PlanReviewMarkdown(
 
 	// --- summary ---------------------------------------------------------------
 	b.WriteString("## Summary\n\n")
-	for _, l := range summaryLines(prd, order, avoided, t) {
+	for _, l := range summaryLines(prd, order, avoided, existingTests, t) {
 		b.WriteString(l + "\n")
 	}
 	b.WriteString("\n")
@@ -216,7 +231,7 @@ func PlanReviewMarkdown(
 }
 
 // summaryLines is the Summary: at most summaryCap lines.
-func summaryLines(prd map[string]any, order []map[string]any, avoided []string, t func(string) string) []string {
+func summaryLines(prd map[string]any, order []map[string]any, avoided []string, existingTests map[string]bool, t func(string) string) []string {
 	var lines []string
 	what := firstSentences(t(stripMarkdownHeadings(mapStr(prd, "validated_description", ""))), 2, 320)
 	if what == "" && len(order) > 0 {
@@ -260,7 +275,7 @@ func summaryLines(prd map[string]any, order []map[string]any, avoided []string, 
 		}
 	}
 
-	if tests := testNames(order); len(tests) > 0 {
+	if tests := testNames(order, existingTests); len(tests) > 0 {
 		lines = append(lines, "**Tests it adds:** "+codeJoin(tests))
 	}
 
@@ -298,7 +313,7 @@ func isTestFile(f string) bool {
 }
 
 // testNames lists the Go test functions the planned changes name.
-func testNames(issues []map[string]any) []string {
+func testNames(issues []map[string]any, existing map[string]bool) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, iss := range issues {
@@ -308,7 +323,7 @@ func testNames(issues []map[string]any) []string {
 			text += " " + fmt.Sprint(c)
 		}
 		for _, m := range goTestPattern.FindAllString(text, -1) {
-			if !seen[m] {
+			if !seen[m] && !existing[m] {
 				seen[m] = true
 				out = append(out, m)
 			}
@@ -317,6 +332,38 @@ func testNames(issues []map[string]any) []string {
 	if len(out) > 6 {
 		out = out[:6]
 	}
+	return out
+}
+
+var testFuncDecl = regexp.MustCompile(`(?m)^func (Test[A-Z]\w*|Benchmark[A-Z]\w*)\(`)
+
+// existingTestNames reads the test functions already in the repository's
+// _test.go files, skipping the build's own worktrees and artifacts.
+func existingTestNames(repoPath string) map[string]bool {
+	out := map[string]bool{}
+	if strings.TrimSpace(repoPath) == "" {
+		return out
+	}
+	_ = filepath.WalkDir(repoPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".worktrees", ".artifacts", "vendor", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			if raw, rerr := os.ReadFile(path); rerr == nil {
+				for _, m := range testFuncDecl.FindAllStringSubmatch(string(raw), -1) {
+					out[m[1]] = true
+				}
+			}
+		}
+		return nil
+	})
 	return out
 }
 

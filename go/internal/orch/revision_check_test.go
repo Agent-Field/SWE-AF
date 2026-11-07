@@ -183,3 +183,15 @@ func TestThePlanBodyIsSummaryFirstAndSelfContained(t *testing.T) {
 		t.Fatal("code like Len() must survive the cleanup")
 	}
 }
+
+// "Tests it adds" lists only tests the repository does not already have.
+func TestSummaryListsOnlyNewTests(t *testing.T) {
+	plan := richPlan()
+	plan["issues"].([]any)[0].(map[string]any)["description"] = "Add TestLen beside TestTotal and TestEntriesIsACopy."
+	body := planReviewMarkdown("x", "g", plan, 0, nil, map[string]bool{"TestTotal": true, "TestEntriesIsACopy": true})
+	start, end := strings.Index(body, "## Summary"), strings.Index(body, "## Details")
+	summary := body[start:end]
+	if !strings.Contains(summary, "`TestLen`") || strings.Contains(summary, "TestTotal") || strings.Contains(summary, "TestEntriesIsACopy") {
+		t.Fatalf("summary tests wrong:\n%s", summary)
+	}
+}
