@@ -122,8 +122,13 @@ func (in BuildIssueInput) goal() string {
 	if body := strings.TrimSpace(htmlComment.ReplaceAllString(in.Body, "")); body != "" {
 		b.WriteString("\n" + body + "\n")
 	}
+	// The pull request is opened AFTER verification, by the pipeline itself,
+	// so it cannot be one of the change's acceptance criteria: live on
+	// 2026-11-07 the verifier failed a good build on "no pull request
+	// exists" a minute before its own pipeline opened PR #185.
 	if in.IssueNumber > 0 {
-		fmt.Fprintf(&b, "\nThe pull request description must include \"Closes #%d\".\n", in.IssueNumber)
+		fmt.Fprintf(&b, "\nWhen the change is verified, the pipeline opens the pull request; its description must include \"Closes #%d\". "+
+			"Opening the pull request is not part of the change: no acceptance criterion may require that a pull request exists or what it says.\n", in.IssueNumber)
 	}
 	return strings.TrimSpace(b.String())
 }
