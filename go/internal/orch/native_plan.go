@@ -118,10 +118,18 @@ func planReviewMarkdown(
 		last := history[len(history)-1]
 		if fb, _ := last["feedback"].(string); strings.TrimSpace(fb) != "" {
 			reqs := readReviewRequests(fb)
-			problems := revisionProblems(planResult, reqs)
+			beforeTests := stringList(last["before_tests"])
+			problems := append(revisionProblems(planResult, reqs), additiveProblems(fb, beforeTests, planResult)...)
+			diff := []string(nil)
+			if _, ok := last["before_tests"]; ok {
+				diff = planDiff(beforeTests, stringList(last["before_files"]), planResult, existingTests)
+			}
 			b.WriteString("## What you asked to change\n\n" + quote(strings.TrimSpace(fb)) + "\n\n")
 			b.WriteString("## How the plan changed\n\n")
-			for _, l := range howThePlanChanged(reqs, problems) {
+			for _, l := range howThePlanChanged(reqs, problems, len(diff) > 0) {
+				b.WriteString(l + "\n")
+			}
+			for _, l := range diff {
 				b.WriteString(l + "\n")
 			}
 			b.WriteString("\n")
@@ -180,7 +188,10 @@ func planReviewMarkdown(
 		if decs := asMapList(mapGet(arch, "decisions", nil)); len(decs) > 0 {
 			b.WriteString("\nDecisions:\n\n")
 			for _, dec := range decs {
-				fmt.Fprintf(&b, "- **%s** — %s\n", t(mapStr(dec, "decision", "")), t(mapStr(dec, "rationale", "")))
+				// A decision the architect wrote as a bullet ("- Total() is
+				// not modified") would render as "**- Total()…**".
+				name := strings.TrimSpace(strings.TrimLeft(t(mapStr(dec, "decision", "")), "-*• "))
+				fmt.Fprintf(&b, "- **%s** — %s\n", name, t(mapStr(dec, "rationale", "")))
 			}
 		}
 		b.WriteString("\n")
@@ -559,6 +570,8 @@ func existingTestNames(repoPath string) map[string]bool {
 var (
 	htmlComment   = regexp.MustCompile(`(?s)<!--.*?-->`)
 	absWorktree   = regexp.MustCompile(`(?:/Users|/home|/private|/tmp|/var|/root)/\S*?/(?:\.worktrees|workspaces)/[^/\s` + "`" + `]+/?`)
+	artifactRef   = regexp.MustCompile("`\\.artifacts/[^`\\s]*`|(?:^|\\s)\\.artifacts/[^\\s`'\")]*")
+	homeDir       = regexp.MustCompile(`(?:/Users|/home)/[^/\s]+/`)
 	absPath       = regexp.MustCompile("(?:/Users|/home|/private|/tmp|/var|/root)/[^\\s`'\")]+")
 	refParen      = regexp.MustCompile(`\s*\((?:[^()]*?\b(?:AC\s?\d+|§\s?\d|[CDFR]\d{1,2}\b|[Rr]ev(?:ision)?\.?\s?\d|finding)[^()]*)\)`)
 	refAC         = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+(?:\s*(?:[-–,/]|and|to)\s*(?:AC\s?)?\d+)*\b`)
@@ -588,12 +601,28 @@ func personText(s string, revision int) string {
 		return s
 	}
 	s = htmlComment.ReplaceAllString(s, "")
+	// The build's own records (the approval state, the planner's drafts) are
+	// files the person never sees; the one that holds their review is said
+	// as "your review" (live, 2026-11-07: "the override in
+	// `.artifacts/approval_state.json`").
+	s = artifactRef.ReplaceAllStringFunc(s, func(m string) string {
+		lead := m[:len(m)-len(strings.TrimLeft(m, " \t\n"))]
+		if strings.Contains(m, "approval") {
+			return lead + "your review"
+		}
+		return lead + "the build's notes"
+	})
 	s = absWorktree.ReplaceAllString(s, "")
-	s = absPath.ReplaceAllString(s, "the repo")
-	// Code spans are left exactly as written: a command must still run.
+	// Code spans keep their paths, because a command must still run: live,
+	// "> /tmp/len.out && grep … /tmp/len.out" became "> the repo && grep …
+	// the repo". Only a home directory is shortened to "~/" inside code.
 	parts := strings.Split(s, "`")
-	for i := 0; i < len(parts); i += 2 {
-		parts[i] = proseText(parts[i], revision, i == 0)
+	for i := range parts {
+		if i%2 == 0 {
+			parts[i] = proseText(absPath.ReplaceAllString(parts[i], "the repo"), revision, i == 0)
+		} else {
+			parts[i] = homeDir.ReplaceAllString(parts[i], "~/")
+		}
 	}
 	return strings.TrimSpace(manySpaces.ReplaceAllString(strings.Join(parts, "`"), " "))
 }

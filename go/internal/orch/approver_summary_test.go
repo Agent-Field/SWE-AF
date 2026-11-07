@@ -123,3 +123,49 @@ func TestPunctuationAfterCodeSurvives(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// Live round 2, 2026-11-07: a command's output file was redacted to "the
+// repo", and the build's own approval file was cited to the person.
+func TestCommandsKeepPathsAndRecordsAreNotCited(t *testing.T) {
+	got := personText("Run `go test ./... -v > /tmp/len.out && grep -q PASS /tmp/len.out`. Per the override in `.artifacts/approval_state.json`, Total() stays; drafts in .artifacts/plan/prd.md lack it. Built at /Users/santosh/af/x/ledger.go.", 0)
+	for _, want := range []string{"> /tmp/len.out && grep -q PASS /tmp/len.out`", "override in your review", "drafts in the build's notes lack"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+	for _, bad := range []string{".artifacts", "/Users/santosh", "> the repo"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("still has %q in %q", bad, got)
+		}
+	}
+	if strings.Count(got, "`")%2 != 0 {
+		t.Errorf("unbalanced code in %q", got)
+	}
+}
+
+// "Also add a table test" adds; a revision that drops the tests the person
+// already saw is not what they asked, and the change is listed, not implied.
+func TestAnAdditiveRequestKeepsTheTestsAndListsTheChange(t *testing.T) {
+	before := []string{"TestLenEmpty", "TestLenAfterAdd", "TestLenDoesNotAllocate"}
+	revised := richPlan()
+	revised["approver_summary"] = map[string]any{"tests_added": []any{"TestLen", "TestLenDoesNotAllocate"}}
+	fb := "Also add a table test for Len() covering an empty ledger and one with three entries, and do not change Total()"
+	probs := additiveProblems(fb, before, revised)
+	if len(probs) != 2 || !strings.Contains(probs[0], "TestLenEmpty") {
+		t.Fatalf("problems = %q", probs)
+	}
+	if p := additiveProblems("Replace the tests with one table test", before, revised); len(p) != 0 {
+		t.Fatalf("a replace request is not additive: %q", p)
+	}
+	hist := []map[string]any{{"iteration": 0, "feedback": fb, "before_tests": before, "before_files": []any{"ledger.go"}}}
+	body := planReviewMarkdown("x", "g", revised, 1, hist, nil)
+	hc := body[strings.Index(body, "## How the plan changed"):strings.Index(body, "## Summary")]
+	for _, want := range []string{"Tests now added: `TestLen`", "Tests no longer added: `TestLenEmpty`, `TestLenAfterAdd`", "not fully reflected yet"} {
+		if !strings.Contains(hc, want) {
+			t.Errorf("How the plan changed misses %q:\n%s", want, hc)
+		}
+	}
+	if !strings.Contains(body, "## Not reflected yet") {
+		t.Error("dropping the person's tests must be named as not reflected")
+	}
+}

@@ -169,12 +169,13 @@ func revisionProblems(planResult map[string]any, reqs []reviewRequest) []string 
 
 // howThePlanChanged is one line per sentence the person wrote: what the
 // revised plan now does about it, or that it could not be checked.
-func howThePlanChanged(reqs []reviewRequest, problems []string) []string {
+func howThePlanChanged(reqs []reviewRequest, problems []string, listed bool) []string {
 	var out []string
 	for _, r := range reqs {
 		var bad bool
 		for _, p := range problems {
-			if (r.Avoid != "" && strings.Contains(p, r.Avoid)) || containsAny(p, r.Require) {
+			if (r.Avoid != "" && strings.Contains(p, r.Avoid)) || containsAny(p, r.Require) ||
+				(strings.Contains(p, "you asked to add, not to replace") && additiveCue.MatchString(r.Sentence)) {
 				bad = true
 			}
 		}
@@ -186,7 +187,11 @@ func howThePlanChanged(reqs []reviewRequest, problems []string) []string {
 		case len(r.Require) > 0:
 			out = append(out, fmt.Sprintf("- %s — the plan now includes %s.", r.Sentence, codeJoin(r.Require)))
 		default:
-			out = append(out, fmt.Sprintf("- %s — sent to the planner; check the summary below.", r.Sentence))
+			if listed {
+				out = append(out, fmt.Sprintf("- %s — the changes it made are listed below.", r.Sentence))
+			} else {
+				out = append(out, fmt.Sprintf("- %s — the plan made no change to its files or tests for this; check the summary.", r.Sentence))
+			}
 		}
 	}
 	return out
@@ -284,4 +289,125 @@ func oneLineCut(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// additiveCue and replaceCue tell "also add a table test" (keep everything,
+// add one) from "replace the tests with a table test". Live on 2026-11-07 the
+// planner read "Also add a table test" as replace and dropped two tests the
+// person had already seen, while the Summary still listed them.
+var (
+	additiveCue = regexp.MustCompile(`(?i)\b(also|as well|in addition|additionally|too|on top of)\b`)
+	replaceCue  = regexp.MustCompile(`(?i)\b(instead|replace|replaces|replacing|rather than|drop|remove|delete|only|merge|combine|fold)\b`)
+)
+
+// additiveProblems names every test the plan sent back would have added that
+// the revision no longer adds, when the person asked only to ADD.
+func additiveProblems(feedback string, beforeTests []string, revised map[string]any) []string {
+	if !additiveCue.MatchString(feedback) || replaceCue.MatchString(feedback) {
+		return nil
+	}
+	now := map[string]bool{}
+	for _, n := range planTests(revised) {
+		now[n] = true
+	}
+	var out []string
+	for _, n := range beforeTests {
+		if !now[n] {
+			out = append(out, fmt.Sprintf("the revision no longer adds %s, but you asked to add, not to replace", n))
+		}
+	}
+	return out
+}
+
+// planTests is the new tests a plan names: the planner's own list when it
+// gave one, else every Go test name its planned changes mention.
+func planTests(plan map[string]any) []string {
+	if as := approverSummary(plan); len(coerceAnyList(as["tests_added"])) > 0 {
+		var out []string
+		for _, it := range coerceAnyList(as["tests_added"]) {
+			if n := strings.Trim(strings.TrimSpace(fmt.Sprint(it)), "`"); goTestPattern.MatchString(n) {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	issues := asMapList(mapGet(plan, "issues", nil))
+	return testNames(issueOrder(plan, issues), nil)
+}
+
+// planFiles is every file a plan's changes touch, in order, once.
+func planFiles(plan map[string]any) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, iss := range asMapList(mapGet(plan, "issues", nil)) {
+		for _, k := range []string{"files_to_modify", "files_to_create"} {
+			for _, f := range coerceAnyList(iss[k]) {
+				if n := strings.TrimSpace(fmt.Sprint(f)); n != "" && !seen[n] {
+					seen[n] = true
+					out = append(out, n)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// planDiff is what changed between the plan sent back and the revision, in
+// the person's terms: tests and files gained and lost.
+func planDiff(beforeTests, beforeFiles []string, revised map[string]any, existing map[string]bool) []string {
+	var out []string
+	gained, lost := setDiff(beforeTests, planTests(revised))
+	gained, lost = withoutExisting(gained, existing), withoutExisting(lost, existing)
+	if len(gained) > 0 {
+		out = append(out, "- Tests now added: "+codeJoin(gained)+".")
+	}
+	if len(lost) > 0 {
+		out = append(out, "- Tests no longer added: "+codeJoin(lost)+".")
+	}
+	fg, fl := setDiff(beforeFiles, planFiles(revised))
+	if len(fg) > 0 {
+		out = append(out, "- Files now changed: "+codeJoin(fg)+".")
+	}
+	if len(fl) > 0 {
+		out = append(out, "- Files no longer changed: "+codeJoin(fl)+".")
+	}
+	return out
+}
+
+func setDiff(before, after []string) (gained, lost []string) {
+	b, a := map[string]bool{}, map[string]bool{}
+	for _, x := range before {
+		b[x] = true
+	}
+	for _, x := range after {
+		a[x] = true
+		if !b[x] {
+			gained = append(gained, x)
+		}
+	}
+	for _, x := range before {
+		if !a[x] {
+			lost = append(lost, x)
+		}
+	}
+	return gained, lost
+}
+
+func withoutExisting(names []string, existing map[string]bool) []string {
+	var out []string
+	for _, n := range names {
+		if !existing[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// stringList reads a []string that may have come back through JSON as []any.
+func stringList(v any) []string {
+	var out []string
+	for _, it := range coerceAnyList(v) {
+		out = append(out, fmt.Sprint(it))
+	}
+	return out
 }

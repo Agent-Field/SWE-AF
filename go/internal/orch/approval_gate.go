@@ -181,9 +181,15 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 					fmt.Sprintf("Plan revision limit reached after %d iterations", revisionIter+1)), nil
 			}
 
+			// What the plan the person sent back added and touched, so the
+			// revision can be told apart from it ("How the plan changed") and
+			// held to an additive request (additiveProblems).
+			beforeTests, beforeFiles := planTests(planResult), planFiles(planResult)
 			revisionHistory = append(revisionHistory, map[string]any{
-				"iteration": revisionIter,
-				"feedback":  feedback,
+				"iteration":    revisionIter,
+				"feedback":     feedback,
+				"before_tests": beforeTests,
+				"before_files": beforeFiles,
 			})
 
 			deps.Note(ctx, fmt.Sprintf("Changes requested (iteration %d): %s",
@@ -199,7 +205,10 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 			// opposite is re-planned once more, with every contradiction
 			// spelled out, before anyone is asked to approve it.
 			reqs := readReviewRequests(feedback)
-			if problems := revisionProblems(revised, reqs); len(problems) > 0 && revisionErr == "" {
+			check := func(plan map[string]any) []string {
+				return append(revisionProblems(plan, reqs), additiveProblems(feedback, beforeTests, plan)...)
+			}
+			if problems := check(revised); len(problems) > 0 && revisionErr == "" {
 				deps.Note(ctx, fmt.Sprintf("Revised plan does not yet reflect the review (%d issue(s)); re-planning once more",
 					len(problems)), "build", "approval", "revision", "recheck")
 				again, againErr, err := replanWithFeedback(ctx, req, revised,
@@ -212,7 +221,7 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 					revised = again
 				}
 			}
-			if problems := revisionProblems(revised, reqs); len(problems) > 0 {
+			if problems := check(revised); len(problems) > 0 {
 				revisionHistory[len(revisionHistory)-1]["unreflected"] = problems
 			}
 			planResult = revised
