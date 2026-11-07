@@ -92,6 +92,10 @@ var pythonFastReasoners = []string{"build", "fast_plan_tasks", "fast_execute_tas
 // registered on BOTH nodes via the shared issue_router.
 var pythonIssueReasoners = []string{"implement_issue"}
 
+// goOnlyOrchestrators exist only on the Go node: build_issue is the entry
+// WorkAF dispatches one GitHub issue to (orch/build_issue.go).
+var goOnlyOrchestrators = []string{"build_issue"}
+
 func TestRegisterPlannerExactSurface(t *testing.T) {
 	// Pin the pro engine and furrow off so an inherited SWE_PRO_ENGINE,
 	// SWE_FURROW_ENABLED or FURROW_PUBLIC_ADDR (which auto-enables mirroring
@@ -107,9 +111,10 @@ func TestRegisterPlannerExactSurface(t *testing.T) {
 	n.RegisterPlanner()
 
 	// swe-planner surface = 25 roles + 5 orchestrators + implement_issue
-	// = 31 unique names.
+	// + build_issue (Go only) = 32 unique names.
 	want := append(append([]string(nil), pythonRoleSurface...), pythonOrchestrators...)
 	want = append(want, pythonIssueReasoners...)
+	want = append(want, goOnlyOrchestrators...)
 	assertSurface(t, "swe-planner", n.RegisteredNames(), want)
 }
 

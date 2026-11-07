@@ -1,11 +1,13 @@
 // This file (approval_gate.go) ports the hax plan-approval gate from
 // swe_af/app.py: the _format_plan_for_approval formatter (:355-402), the
 // _create_hax_request_with_timeout wrapper (:411-471), and the inline
-// plan-approval revision loop build() runs when HAX_API_KEY is set (:754-964).
+// plan-approval revision loop build() runs when HAX_API_KEY is set (:754-964),
+// and extends it to run WITHOUT hax: the plan travels on the control-plane
+// pause itself (native_plan.go renders it), so WorkAF or the CP UI can answer.
 //
 // build.go drives the gate through the ApprovalGate seam (common.go): it calls
 // PlanApprovalGate once, acting on the returned ApprovalOutcome. The gate owns
-// the entire hax flow — request the plan review, pause the execution
+// the entire flow — request the plan review, pause the execution
 // (agent.Pause, webhook-resumed, design §4.6), and on request_changes re-run
 // Architect → Tech Lead → Sprint Planner with the reviewer feedback, bounded by
 // cfg.max_plan_revision_iterations.
@@ -19,15 +21,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Agent-Field/agentfield/sdk/go/agent"
-
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
 // PlanApprovalGate satisfies the ApprovalGate seam (common.go). build.go assigns
-// it to Deps.ApprovalGate; it engages only when a hax client can be built from
-// the environment (HAX_API_KEY set) AND a pauser is wired.
+// it to Deps.ApprovalGate; it engages whenever build asks for plan review and
+// a pauser is wired. Hax is optional.
 var _ ApprovalGate = PlanApprovalGate
 
 // ---------------------------------------------------------------------------
@@ -35,7 +35,8 @@ var _ ApprovalGate = PlanApprovalGate
 // ---------------------------------------------------------------------------
 
 // haxClientProvider builds the hax REST client. Returns nil when HAX_API_KEY is
-// unset (HITL disabled). Package seam so tests point it at a stub server.
+// unset; the gate then asks on the control plane alone. Package seam so tests
+// point it at a stub server.
 var haxClientProvider = hitl.BuildHaxClientFromEnv
 
 // pauserProvider yields the pause surface the gate drives (agent.Pause — the
@@ -51,21 +52,27 @@ func SetPauserProvider(f func(req ApprovalRequest) hitl.Pauser) {
 	pauserProvider = f
 }
 
-// PlanApprovalGate runs the hax plan-approval revision loop. Ports
-// app.py:754-964. Returns a terminal ApprovalOutcome (rejected / expired /
-// error / revision-limit reached) carrying the BuildResult build must return, or
-// a non-terminal outcome carrying the (possibly revised) plan to execute.
+// PlanApprovalGate runs the plan-approval revision loop. Ports app.py:754-964,
+// and goes further than it: hax is optional. Every round pauses the execution
+// on the control plane with the WHOLE plan as markdown (kind plan_review), so a
+// person answering from any door the control plane serves — WorkAF's Needs you
+// first — can judge it without opening another page. When hax is configured the
+// same round also files hax's plan-review-v2 request; hax's id names the pause
+// and whichever door answers first wins.
+//
+// Returns a terminal ApprovalOutcome (rejected / expired / error / revision
+// limit reached) carrying the BuildResult build must return, or a non-terminal
+// outcome carrying the (possibly revised) plan to execute.
 func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome, error) {
-	hax := haxClientProvider()
-	if hax == nil || pauserProvider == nil {
-		// HITL disabled (no HAX_API_KEY) or no pauser wired — skip approval and
-		// proceed with the plan unchanged.
+	if pauserProvider == nil {
+		// No pause substrate wired — proceed with the plan unchanged.
 		return ApprovalOutcome{Terminal: false, PlanResult: req.PlanResult}, nil
 	}
 	pauser := pauserProvider(req)
 	if pauser == nil {
 		return ApprovalOutcome{Terminal: false, PlanResult: req.PlanResult}, nil
 	}
+	hax := haxClientProvider() // nil without HAX_API_KEY: the CP pause alone asks
 
 	deps := req.Deps
 	cfg := req.Cfg
@@ -94,51 +101,58 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 		deps.Note(ctx, fmt.Sprintf("Phase 1.5: Requesting plan approval (iteration %d)", revisionIter),
 			"build", "approval")
 
-		planSummary, prdMd, archMd, issuesForTemplate := formatPlanForApproval(planResult)
+		question := NativePlanQuestion(req, planResult, revisionIter, revisionHistory)
 
-		title := "SWE-AF Plan Review"
-		if revisionIter > 0 {
-			title = fmt.Sprintf("SWE-AF Plan Review (Revision %d)", revisionIter)
-		}
-
-		haxPayload := map[string]any{
-			"planSummary":  planSummary,
-			"issues":       issuesForTemplate,
-			"architecture": archMd,
-			"prd":          prdMd,
-			"metadata": map[string]any{
-				"repoUrl":         cfg.RepoURL,
-				"goalDescription": req.Goal,
-				"agentNodeId":     nodeID,
-				"executionId":     req.ExecutionID,
-			},
-			"revisionNumber":  revisionIter,
-			"revisionHistory": revisionHistory,
-		}
-
-		descr := "Review the proposed implementation plan before execution begins"
-		created, err := createHaxRequestWithTimeout(ctx, deps, hax, hitl.CreateRequestParams{
-			Type:             "plan-review-v2",
-			Title:            title,
-			Description:      &descr,
-			Payload:          haxPayload,
-			WebhookURL:       webhookURL,
-			ExpiresInSeconds: expiresHours * 3600,
-			UserID:           userID,
-		}, revisionIter)
-		if err != nil {
-			return ApprovalOutcome{}, err
+		if hax != nil {
+			planSummary, prdMd, archMd, issuesForTemplate := formatPlanForApproval(planResult)
+			title := "SWE-AF Plan Review"
+			if revisionIter > 0 {
+				title = fmt.Sprintf("SWE-AF Plan Review (Revision %d)", revisionIter)
+			}
+			haxPayload := map[string]any{
+				"planSummary":  planSummary,
+				"issues":       issuesForTemplate,
+				"architecture": archMd,
+				"prd":          prdMd,
+				"metadata": map[string]any{
+					"repoUrl":         cfg.RepoURL,
+					"goalDescription": req.Goal,
+					"agentNodeId":     nodeID,
+					"executionId":     req.ExecutionID,
+				},
+				"revisionNumber":  revisionIter,
+				"revisionHistory": revisionHistory,
+			}
+			descr := "Review the proposed implementation plan before execution begins"
+			created, err := createHaxRequestWithTimeout(ctx, deps, hax, hitl.CreateRequestParams{
+				Type:             "plan-review-v2",
+				Title:            title,
+				Description:      &descr,
+				Payload:          haxPayload,
+				WebhookURL:       webhookURL,
+				ExpiresInSeconds: expiresHours * 3600,
+				UserID:           userID,
+			}, revisionIter)
+			if err != nil {
+				// Hax is an extra door, not the gate: the plan is still asked
+				// on the control plane, where every other door can answer it.
+				deps.Note(ctx, "hax is unavailable — asking for plan approval on the control plane only",
+					"build", "approval", "hax", "degraded")
+			} else {
+				question.RequestID = created.ID
+				question.RequestURL = created.URL
+			}
 		}
 
 		writeApprovalState(approvalStatePath, map[string]any{
 			"decision":        "pending",
 			"feedback":        "",
-			"request_id":      created.ID,
-			"request_url":     created.URL,
+			"request_id":      question.RequestID,
+			"request_url":     question.RequestURL,
 			"revision_number": revisionIter,
 		})
 
-		decision, feedback, err := pauseForApproval(ctx, pauser, req.ExecutionID, created, expiresHours)
+		decision, feedback, err := pauseForApproval(ctx, pauser, question)
 		if err != nil {
 			return ApprovalOutcome{}, err
 		}
@@ -146,8 +160,8 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 		writeApprovalState(approvalStatePath, map[string]any{
 			"decision":         decision,
 			"feedback":         feedback,
-			"request_id":       created.ID,
-			"request_url":      created.URL,
+			"request_id":       question.RequestID,
+			"request_url":      question.RequestURL,
 			"revision_number":  revisionIter,
 			"revision_history": revisionHistory,
 		})
@@ -189,7 +203,7 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 			continue
 		}
 
-		// Terminal: rejected, expired, or error.
+		// Terminal: rejected, expired, cancelled or error.
 		reason := feedback
 		if reason == "" {
 			reason = decision
@@ -239,29 +253,20 @@ func createHaxRequestWithTimeout(
 }
 
 // pauseForApproval pauses the execution for plan approval via agent.Pause: it
-// transitions the execution to "waiting" on the control plane and blocks until
-// the /webhooks/approval callback resolves it (or it expires — decision
-// "expired") — the direct port of app.pause (design §4.6, webhook-resumed, no
-// polling). Returns the decision string (approved / request_changes / rejected /
-// expired / error) plus any free-text feedback. The callback URL is derived by
-// the SDK from the agent's public URL, so no CallbackURL is passed here.
+// transitions the execution to "waiting" on the control plane with the plan
+// question attached, and blocks until an answer resolves it (or it expires —
+// decision "expired"). Returns the decision string (approved / request_changes
+// / rejected / expired / error) plus the person's words.
 func pauseForApproval(
 	ctx context.Context,
 	pauser hitl.Pauser,
-	executionID string,
-	created *hitl.CreatedRequest,
-	expiresHours int,
+	question hitl.NativeQuestion,
 ) (decision string, feedback string, err error) {
-	result, err := pauser.Pause(ctx, agent.PauseOptions{
-		ApprovalRequestID:  created.ID,
-		ApprovalRequestURL: created.URL,
-		ExpiresInHours:     expiresHours,
-		ExecutionID:        executionID,
-	})
+	result, err := pauser.Pause(ctx, question.PauseOptions())
 	if err != nil {
 		return "", "", err
 	}
-	return result.Decision, result.Feedback, nil
+	return result.Decision, strings.TrimSpace(result.Feedback), nil
 }
 
 // replanWithFeedback re-runs Architect → Tech Lead loop → Sprint Planner with

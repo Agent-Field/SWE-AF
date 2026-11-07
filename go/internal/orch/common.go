@@ -261,6 +261,9 @@ type ApprovalRequest struct {
 	ArtifactsDir    string
 	AbsArtifactsDir string
 	ExecutionID     string
+	// ReviewTitle names the work in the one-line question a person is asked
+	// ("#12: Add a Len() method to Ledger"). Empty falls back to the goal.
+	ReviewTitle string
 }
 
 // ApprovalOutcome is the gate's verdict. Terminal means the gate ended the build
@@ -273,8 +276,10 @@ type ApprovalOutcome struct {
 	PlanResult map[string]any
 }
 
-// ApprovalGate runs the hax plan-approval loop (engaged only when HAX_API_KEY is
-// set). Implemented by the approval-gate task; build calls it when configured.
+// ApprovalGate runs the plan-approval loop. build engages it when HAX_API_KEY
+// is set, when the caller asked for plan_review, or when SWE_HITL_NATIVE is on;
+// the gate pauses on the control plane with the full plan either way, and also
+// files a hax request when hax is configured.
 type ApprovalGate func(ctx context.Context, req ApprovalRequest) (ApprovalOutcome, error)
 
 // ---------------------------------------------------------------------------

@@ -48,7 +48,7 @@ var roleAreas = map[string]string{
 // run from. execute is deliberately absent (its plan_result comes from plan) and
 // so is pro_execute (an execute_fn_target). A caller-facing utility landing on
 // this node — e.g. get_workspace_handle — joins this list when it does.
-var wantEntrypoints = []string{"build", "implement_issue", "plan", "resolve", "resume_build"}
+var wantEntrypoints = []string{"build", "build_issue", "implement_issue", "plan", "resolve", "resume_build"}
 
 // TestRoleReasonersAreMarkedInternal: every role reasoner must carry the
 // "internal" tag AND a description saying an orchestrator drives it. Without

@@ -45,6 +45,11 @@ type buildInput struct {
 	MaxTurns          int            `json:"max_turns"`
 	PermissionMode    string         `json:"permission_mode"`
 	EnableLearning    bool           `json:"enable_learning"`
+	// PlanReview pauses for a person to approve the plan before any code is
+	// written, with or without hax. build_issue sets it.
+	PlanReview bool `json:"plan_review"`
+	// ReviewTitle is the short name of the work the plan question uses.
+	ReviewTitle string `json:"review_title"`
 }
 
 // Build is the end-to-end orchestrator: clone → plan (+ git init) → approval →
@@ -293,11 +298,14 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			mapStr(gitInit, "error_message", "unknown")), "build", "git_init", "error")
 	}
 
-	// 1.5 APPROVAL CHECKPOINT (hax plan review; engaged only when HAX_API_KEY set
-	// and a gate is wired — see the ApprovalGate seam in common.go).
+	// 1.5 APPROVAL CHECKPOINT. A person reviews the plan when hax is configured,
+	// when the caller asked for it (plan_review — WorkAF's build_issue always
+	// does), or when SWE_HITL_NATIVE is on. Without hax the whole plan travels
+	// on the control-plane pause itself — see the ApprovalGate seam in common.go.
 	haxAPIKey := strings.TrimSpace(os.Getenv("HAX_API_KEY"))
 	execID := executionIDFromCtx(ctx)
-	if haxAPIKey != "" && execID != "" && deps.ApprovalGate != nil {
+	wantReview := haxAPIKey != "" || in.PlanReview || hitl.NativeEnabled()
+	if wantReview && execID != "" && deps.ApprovalGate != nil {
 		outcome, aerr := deps.ApprovalGate(ctx, ApprovalRequest{
 			Deps:            deps,
 			Cfg:             cfg,
@@ -309,6 +317,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			ArtifactsDir:    in.ArtifactsDir,
 			AbsArtifactsDir: absArtifactsDir,
 			ExecutionID:     execID,
+			ReviewTitle:     in.ReviewTitle,
 		})
 		if aerr != nil {
 			return nil, aerr

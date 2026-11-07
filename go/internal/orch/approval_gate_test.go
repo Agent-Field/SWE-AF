@@ -521,31 +521,8 @@ func TestApprovalExpired(t *testing.T) {
 	}
 }
 
-// no hax client (HAX_API_KEY unset) -> gate skipped, PlanResult unchanged, no
-// hax hit, no approval calls.
-func TestApprovalNoHaxClientSkips(t *testing.T) {
-	fake := &fakePauser{decisions: []string{"approved"}}
-	defer wireHax(t, nil, fake)() // nil server => haxClientProvider returns nil
-
-	deps := &Deps{App: &mockApp{handler: func(context.Context, string, map[string]any) (map[string]any, error) {
-		return map[string]any{}, nil
-	}}, NodeID: "swe-planner"}
-	plan := samplePlan()
-
-	out, err := PlanApprovalGate(context.Background(), req(deps, testCfg(t, 2), plan, t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Terminal {
-		t.Fatal("no hax client must be a non-terminal skip")
-	}
-	if !reflect.DeepEqual(out.PlanResult, plan) {
-		t.Fatal("PlanResult must be unchanged when gate skipped")
-	}
-	if fake.calls != 0 {
-		t.Fatal("no pause when hax disabled")
-	}
-}
+// no hax client (HAX_API_KEY unset) -> the gate still asks, on the control
+// plane alone: see native_plan_test.go.
 
 // no pauser wired -> gate skipped even with a hax client.
 func TestApprovalNoClientWiredSkips(t *testing.T) {

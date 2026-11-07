@@ -206,6 +206,7 @@ func (n *Node) registerOrchestrators() {
 	handlers["execute"] = orch.ExecuteHandler
 	handlers["resolve"] = orch.ResolveHandler
 	handlers["resume_build"] = orch.ResumeBuildHandler
+	handlers["build_issue"] = orch.BuildIssue
 
 	// Python registers the orchestrators via @app.reasoner(): only `build`
 	// carries an explicit routing description, the others get their docstring
@@ -298,6 +299,7 @@ var orchestratorEntrypoints = map[string]bool{
 	"plan":         true,
 	"resolve":      true,
 	"resume_build": true,
+	"build_issue":  true,
 }
 
 // orchestratorDescriptions mirrors the Python side: build's explicit
@@ -315,6 +317,7 @@ var orchestratorDescriptions = map[string]string{
 		"resuming a custom pipeline.",
 	"resolve":      "Update an existing PR: merge base, fix CI, address review comments, push.",
 	"resume_build": "Resume a crashed build from the last checkpoint.",
+	"build_issue":  orch.BuildIssueDescription,
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +470,10 @@ func schema(raw string) json.RawMessage { return json.RawMessage(raw) }
 
 // orchestratorSchemas maps the 5 orchestrator names to their input schemas.
 var orchestratorSchemas = map[string]json.RawMessage{
+	// build_issue(title, body, repo_url|repo_path, base_branch, issue_number,
+	//             issue_url, plan_review=true, config) — WorkAF's entry.
+	"build_issue": schema(orch.BuildIssueSchema),
+
 	// build(goal, repo_path="", repo_url="", artifacts_dir=".artifacts",
 	//       additional_context="", config=None, execute_fn_target="",
 	//       max_turns=0, permission_mode="", enable_learning=False)
