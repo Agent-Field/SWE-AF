@@ -108,6 +108,6 @@ case ${1:-} in
   build) build;; start) start;; stop) stop;; restart) stop; start;;
   status) running && say "$ID up" || say "$ID down";;
   logs) remote "tail -n ${2:-80} $R/logs/swe-planner.log";;
-  clean) stop; remote "chmod -R u+w $RN 2>/dev/null; rm -rf $RN $R/bin/swe-planner $R/bin/gh $R/logs/swe-planner.log"; rm -f $STAGE/swe-planner $STAGE/gh; say "removed swe-planner state on $NODE_HOST and its staged binaries";;
+  clean) stop; remote "chmod -R u+w $RN 2>/dev/null; rm -rf $RN $R/bin/swe-planner $R/bin/gh $R/bin/codeaf $R/secrets $R/logs/swe-planner.log; rmdir $R/bin $R/logs $R 2>/dev/null; true"; rm -f $STAGE/swe-planner $STAGE/gh; say "removed swe-planner state, its binaries and its key files on $NODE_HOST";;
   *) die "usage: swe-node.sh build|start|stop|restart|status|logs|clean";;
 esac
