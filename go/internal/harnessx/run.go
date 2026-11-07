@@ -3,6 +3,8 @@ package harnessx
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/fence"
 	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
@@ -193,5 +195,16 @@ func fenceCodeAF(opts harness.Options) harness.Options {
 	}
 	opts.BinPath = self
 	opts.Env = fence.Stamp(opts.Env, real, scope)
+	// THE LAUNCHER FRONTS CODEAF, SO THE RUN IS NAMED CODEAF. The SDK reads
+	// provider "aforge" with a bin path of its own as a pin on the legacy
+	// aforge binary (its contract F1) and runs `exec --json -w`, which has no
+	// --events or --steer: a fenced step then had no live chat, no steer and
+	// no way to ask the person anything (job 70, 2026-11-07). Naming the
+	// provider "codeaf" keeps the launcher path and the watched
+	// `chat --once --events --steer` run together. A real binary that is
+	// itself the old aforge keeps the old name, because it has only exec.
+	if !strings.HasPrefix(filepath.Base(real), "aforge") {
+		opts.Provider = harness.ProviderCodeAF
+	}
 	return opts
 }
