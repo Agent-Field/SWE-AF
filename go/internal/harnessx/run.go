@@ -1,6 +1,12 @@
 package harnessx
 
 import (
+	"os"
+	"os/exec"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/fence"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
+
 	"context"
 	"encoding/json"
 
@@ -63,6 +69,7 @@ func Run[T any](ctx context.Context, app HarnessCaller, prompt string, opts harn
 	schema := schemaFor[T]()
 
 	opts.Env = hitl.InjectCredentialsIntoEnv(opts.Env, credentialScopeID(ctx))
+	opts = fenceCodeAF(opts)
 
 	var dest T
 	result, err := app.Harness(ctx, prompt, schema, &dest, opts)
@@ -151,4 +158,40 @@ func (r RoleOptions) ToOptions() harness.Options {
 		Cwd:            r.Cwd,
 		Env:            r.Env,
 	}
+}
+
+// fenceCodeAF starts a codeaf run inside its build's own folder (package
+// fence): the harness is pointed at this binary as the launcher, and the
+// call's environment names the real codeaf and the folder it may see. Other
+// harnesses are passed through unchanged; only codeaf is fenced today.
+func fenceCodeAF(opts harness.Options) harness.Options {
+	if fence.Off() || (opts.Provider != "aforge" && opts.Provider != "codeaf") {
+		return opts
+	}
+	cwd := opts.ProjectDir
+	if cwd == "" {
+		cwd = opts.Cwd
+	}
+	scope, ok := fence.ScopeFor(workspace.Root(), cwd)
+	if !ok {
+		return opts
+	}
+	real := opts.BinPath
+	if real == "" {
+		real = os.Getenv("CODEAF_BIN")
+	}
+	if real == "" {
+		real = "codeaf"
+	}
+	real, err := exec.LookPath(real)
+	if err != nil {
+		return opts // the harness reports codeaf missing in its own words
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return opts
+	}
+	opts.BinPath = self
+	opts.Env = fence.Stamp(opts.Env, real, scope)
+	return opts
 }
