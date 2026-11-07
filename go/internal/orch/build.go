@@ -80,6 +80,15 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	if cfg.RepoURL != "" && repoPath == "" {
 		repoName := deriveRepoName(cfg.RepoURL)
 		repoPath = filepath.Join(workspace.Root(), fmt.Sprintf("%s-%s", repoName, buildID))
+		// A WORKSPACE THE BUILD MADE IS REMOVED WHEN THE BUILD ENDS, however
+		// it ends. Left behind, it is a neighbour the next build's planners
+		// can read: live on 2026-11-07 a build for issue #184 found a
+		// cancelled build's plan for #83 one directory over and planned
+		// around it. SWE_KEEP_WORKSPACES=1 keeps them for debugging.
+		if os.Getenv("SWE_KEEP_WORKSPACES") != "1" {
+			derived := repoPath
+			defer func() { _ = os.RemoveAll(derived) }()
+		}
 	}
 
 	// Multi-repo: derive repo_path from the primary repo.
