@@ -712,6 +712,10 @@ func singleRepoPR(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 		baseBranch = "main"
 	}
 
+	// The harness may not push (pr_push.go), so the orchestrator does.
+	branch := mapStr(gitConfig, "integration_branch", "")
+	pushed := pushIntegrationBranch(ctx, deps, repoPath, branch)
+
 	prResult, perr := deps.Call(ctx, "run_github_pr", map[string]any{
 		"repo_path":          repoPath,
 		"integration_branch": mapGet(gitConfig, "integration_branch", ""),
@@ -732,6 +736,9 @@ func singleRepoPR(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 
 	prURL := mapStr(prResult, "pr_url", "")
 	prNumber := asInt(prResult["pr_number"])
+	if prURL == "" && pushed {
+		prURL, prNumber = openPRWithGH(ctx, deps, repoPath, baseBranch, branch, goal, buildSummary)
+	}
 	if prURL != "" {
 		deps.Note(ctx, fmt.Sprintf("PR created: %s", prURL), "build", "github_pr", "complete")
 		appendPlanDocsToPR(ctx, deps, repoPath, prNumber, prdMarkdown, architectureMarkdown)

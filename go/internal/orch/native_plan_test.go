@@ -114,6 +114,24 @@ func TestApprovalWithoutHaxAsksOnTheControlPlane(t *testing.T) {
 	if architectFeedback != "also document Len in the README" {
 		t.Fatalf("the architect got feedback %v, want the person's words", architectFeedback)
 	}
+	// The revised plan is a whole new plan: issue files rewritten, levels
+	// recomputed, and the words an acceptance check the verifier reads.
+	wroteIssues := false
+	for _, c := range *calls {
+		if strings.HasSuffix(c["target"].(string), ".run_issue_writer") {
+			wroteIssues = true
+		}
+	}
+	if !wroteIssues {
+		t.Fatal("a revised plan must rewrite its issue files")
+	}
+	if got := out.PlanResult["levels"]; len(got.([][]string)) != 1 || got.([][]string)[0][0] != "i2" {
+		t.Fatalf("levels = %v, want the revised plan's", got)
+	}
+	ac := coerceAnyList(out.PlanResult["prd"].(map[string]any)["acceptance_criteria"])
+	if len(ac) == 0 || !strings.Contains(ac[len(ac)-1].(string), "also document Len in the README") {
+		t.Fatalf("PRD acceptance = %v", ac)
+	}
 }
 
 // Reject stops before any code with the person's words in the summary.

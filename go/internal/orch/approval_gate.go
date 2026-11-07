@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/dagutil"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
@@ -389,8 +390,14 @@ func replanWithFeedback(
 		review = dumpToMap(auto)
 	}
 
+	// The person's words become an acceptance check on the PRD, so the sprint
+	// planner, the issue writers, the coders and the verifier all read what
+	// was asked — PM does not re-run, and without this the PRD would still
+	// describe the plan the person sent back.
+	revisedPRD := prdWithReviewerRequest(prd, feedback)
+
 	sprint, err := deps.Call(ctx, "run_sprint_planner", map[string]any{
-		"prd":                prd,
+		"prd":                revisedPRD,
 		"architecture":       arch,
 		"repo_path":          req.RepoPath,
 		"artifacts_dir":      req.ArtifactsDir,
@@ -403,14 +410,37 @@ func replanWithFeedback(
 		return nil, "", err
 	}
 
-	// plan_result = {**plan_result, architecture, review, issues, rationale}.
-	revised := make(map[string]any, len(planResult)+4)
+	// A revised plan is a new plan: its levels, sequence numbers and file
+	// conflicts are computed again, and its issue files are written again —
+	// the coders read those files, and the first plan's would build what the
+	// person sent back.
+	issues := asMapList(mapGet(sprint, "issues", []any{}))
+	levels, err := dagutil.ComputeLevels(issues)
+	if err != nil {
+		return nil, "", err
+	}
+	issues = dagutil.AssignSequenceNumbers(issues, levels)
+	fileConflicts := dagutil.ValidateFileConflicts(issues, levels)
+	if _, err := writeIssueFiles(ctx, deps, issueWriteParams{
+		RepoPath: req.RepoPath, ArtifactsDir: req.ArtifactsDir, PRD: revisedPRD, Arch: arch, Issues: issues,
+		Model: resolved["issue_writer_model"], PermissionMode: cfg.PermissionMode, AIProvider: provider,
+		WorkspaceManifest: manifest,
+	}); err != nil {
+		return nil, "", err
+	}
+
+	// plan_result = {**plan_result, prd, architecture, review, issues, levels,
+	// file_conflicts, rationale}.
+	revised := make(map[string]any, len(planResult)+6)
 	for k, v := range planResult {
 		revised[k] = v
 	}
+	revised["prd"] = revisedPRD
 	revised["architecture"] = arch
 	revised["review"] = review
-	revised["issues"] = mapGet(sprint, "issues", []any{})
+	revised["issues"] = issues
+	revised["levels"] = levels
+	revised["file_conflicts"] = fileConflicts
 	revised["rationale"] = mapGet(sprint, "rationale", "")
 	return revised, revisionErr, nil
 }
@@ -550,4 +580,22 @@ func writeApprovalState(path string, state map[string]any) {
 		return
 	}
 	_ = os.WriteFile(path, raw, 0o644)
+}
+
+// prdWithReviewerRequest returns a copy of prd whose acceptance criteria end
+// with the plan reviewer's words.
+func prdWithReviewerRequest(prd any, feedback string) map[string]any {
+	src, _ := prd.(map[string]any)
+	out := make(map[string]any, len(src)+1)
+	for k, v := range src {
+		out[k] = v
+	}
+	feedback = strings.TrimSpace(feedback)
+	if feedback == "" {
+		return out
+	}
+	ac := append([]any(nil), coerceAnyList(out["acceptance_criteria"])...)
+	ac = append(ac, "Asked for in plan review (this overrides anything above it disagrees with): "+feedback)
+	out["acceptance_criteria"] = ac
+	return out
 }

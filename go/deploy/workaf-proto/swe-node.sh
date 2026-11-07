@@ -36,7 +36,21 @@ build() {
   fi
 }
 
+# secrets pipes the three keys into mode-600 files on the node box, exactly as
+# the kit's node.sh does: never through argv or this terminal.
+secrets() {
+  remote "mkdir -p $R/secrets && chmod 700 $R/secrets"
+  remote "test -s $R/secrets/openrouter" || {
+    ssh -o BatchMode=yes $ENGINE_HOST 'python3 -c "import json,os;print(json.load(open(os.path.expanduser(\"~/.codeaf/config.json\")))[\"api_key\"])"' \
+      | remote "umask 077; cat > $R/secrets/openrouter"
+  }
+  remote "test -s $R/secrets/github" || gh auth token | remote "umask 077; cat > $R/secrets/github"
+  remote "umask 077; cat > $R/secrets/cpkey" < $LOCAL/cp/secrets/cpkey
+  remote "chmod 600 $R/secrets/*"
+}
+
 ship() {
+  secrets
   [[ -x $STAGE/swe-planner && -x $STAGE/gh && -x $STAGE/codeaf ]] || die "run swe-node.sh build (and the kit's build.sh codeaf)"
   remote "mkdir -p $R/bin $RN/home $RN/work $RN/workspaces $R/logs; test -s $R/secrets/openrouter && test -s $R/secrets/github && test -s $R/secrets/cpkey" \
     || die "kit secrets missing on $NODE_HOST; run the kit's node.sh start once"

@@ -326,83 +326,14 @@ func Plan(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	fileConflicts := dagutil.ValidateFileConflicts(issues, levels)
 
 	// 4b. Parallel issue writing (issues now have sequence_number set).
-	absRepo, aerr := filepath.Abs(in.RepoPath)
-	if aerr != nil {
-		absRepo = in.RepoPath
-	}
-	base := filepath.Join(absRepo, in.ArtifactsDir)
-	issuesDir := filepath.Join(base, "plan", "issues")
-	prdPath := filepath.Join(base, "plan", "prd.md")
-	if err := os.MkdirAll(issuesDir, 0o755); err != nil {
+	base, err := writeIssueFiles(ctx, deps, issueWriteParams{
+		RepoPath: in.RepoPath, ArtifactsDir: in.ArtifactsDir, PRD: prd, Arch: arch, Issues: issues,
+		Model: issueWriterModel, PermissionMode: in.PermissionMode, AIProvider: aiProvider,
+		WorkspaceManifest: in.WorkspaceManifest,
+	})
+	if err != nil {
 		return nil, err
 	}
-
-	prdSummary := mapStr(prd, "validated_description", "")
-	prdAC := asStrList(prd["acceptance_criteria"])
-	if len(prdAC) > 0 {
-		var b strings.Builder
-		for i, c := range prdAC {
-			if i > 0 {
-				b.WriteString("\n")
-			}
-			b.WriteString("- " + c)
-		}
-		prdSummary += "\n\nAcceptance Criteria:\n" + b.String()
-	}
-
-	deps.Note(ctx, fmt.Sprintf("Phase 4b: Writing %d issue files in parallel", len(issues)),
-		"pipeline", "issue_writers")
-
-	architectureSummary := mapStr(arch, "summary", "")
-	succeededFlags := make([]bool, len(issues))
-	var g errgroup.Group
-	for idx, issue := range issues {
-		idx, issue := idx, issue
-		name := mapStr(issue, "name", "")
-		siblings := make([]map[string]any, 0, len(issues))
-		for _, other := range issues {
-			if mapStr(other, "name", "") != name {
-				siblings = append(siblings, map[string]any{
-					"name":     other["name"],
-					"title":    mapGet(other, "title", ""),
-					"provides": any0(other["provides"]),
-				})
-			}
-		}
-		g.Go(func() error {
-			// return_exceptions=True: a failed writer never aborts the others; it
-			// simply does not count as a success.
-			res, cerr := deps.Call(ctx, "run_issue_writer", map[string]any{
-				"issue":                issue,
-				"prd_summary":          prdSummary,
-				"architecture_summary": architectureSummary,
-				"issues_dir":           issuesDir,
-				"repo_path":            in.RepoPath,
-				"prd_path":             prdPath,
-				"architecture_path":    architecturePath,
-				"sibling_issues":       siblings,
-				"model":                issueWriterModel,
-				"permission_mode":      in.PermissionMode,
-				"ai_provider":          aiProvider,
-				"workspace_manifest":   in.WorkspaceManifest,
-			}, "run_issue_writer")
-			if cerr == nil && res != nil && asBool(res["success"]) {
-				succeededFlags[idx] = true
-			}
-			return nil
-		})
-	}
-	_ = g.Wait()
-
-	succeeded := 0
-	for _, ok := range succeededFlags {
-		if ok {
-			succeeded++
-		}
-	}
-	failed := len(succeededFlags) - succeeded
-	deps.Note(ctx, fmt.Sprintf("Issue writers complete: %d succeeded, %d failed", succeeded, failed),
-		"pipeline", "issue_writers", "complete")
 
 	// 6. Write rationale to disk.
 	rationalePath := filepath.Join(base, "rationale.md")
@@ -527,4 +458,102 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// issueWriteParams is what writeIssueFiles needs from a plan.
+type issueWriteParams struct {
+	RepoPath, ArtifactsDir string
+	PRD, Arch              map[string]any
+	Issues                 []map[string]any
+	Model, PermissionMode  string
+	AIProvider             string
+	WorkspaceManifest      map[string]any
+}
+
+// writeIssueFiles runs one issue writer per planned issue, in parallel, and
+// returns the plan's artifacts base directory. The plan pipeline runs it once;
+// a plan revised in review runs it AGAIN, because the coders read these files
+// and a revision that left them as they were would build the plan the person
+// asked to change.
+func writeIssueFiles(ctx context.Context, deps *Deps, p issueWriteParams) (string, error) {
+	architecturePath := architectureArtifactPath(p.RepoPath, p.ArtifactsDir)
+	absRepo, aerr := filepath.Abs(p.RepoPath)
+	if aerr != nil {
+		absRepo = p.RepoPath
+	}
+	base := filepath.Join(absRepo, p.ArtifactsDir)
+	issuesDir := filepath.Join(base, "plan", "issues")
+	prdPath := filepath.Join(base, "plan", "prd.md")
+	if err := os.MkdirAll(issuesDir, 0o755); err != nil {
+		return "", err
+	}
+
+	prdSummary := mapStr(p.PRD, "validated_description", "")
+	prdAC := asStrList(p.PRD["acceptance_criteria"])
+	if len(prdAC) > 0 {
+		var b strings.Builder
+		for i, c := range prdAC {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString("- " + c)
+		}
+		prdSummary += "\n\nAcceptance Criteria:\n" + b.String()
+	}
+
+	deps.Note(ctx, fmt.Sprintf("Phase 4b: Writing %d issue files in parallel", len(p.Issues)),
+		"pipeline", "issue_writers")
+
+	architectureSummary := mapStr(p.Arch, "summary", "")
+	succeededFlags := make([]bool, len(p.Issues))
+	var g errgroup.Group
+	for idx, issue := range p.Issues {
+		idx, issue := idx, issue
+		name := mapStr(issue, "name", "")
+		siblings := make([]map[string]any, 0, len(p.Issues))
+		for _, other := range p.Issues {
+			if mapStr(other, "name", "") != name {
+				siblings = append(siblings, map[string]any{
+					"name":     other["name"],
+					"title":    mapGet(other, "title", ""),
+					"provides": any0(other["provides"]),
+				})
+			}
+		}
+		g.Go(func() error {
+			// return_exceptions=True: a failed writer never aborts the others; it
+			// simply does not count as a success.
+			res, cerr := deps.Call(ctx, "run_issue_writer", map[string]any{
+				"issue":                issue,
+				"prd_summary":          prdSummary,
+				"architecture_summary": architectureSummary,
+				"issues_dir":           issuesDir,
+				"repo_path":            p.RepoPath,
+				"prd_path":             prdPath,
+				"architecture_path":    architecturePath,
+				"sibling_issues":       siblings,
+				"model":                p.Model,
+				"permission_mode":      p.PermissionMode,
+				"ai_provider":          p.AIProvider,
+				"workspace_manifest":   p.WorkspaceManifest,
+			}, "run_issue_writer")
+			if cerr == nil && res != nil && asBool(res["success"]) {
+				succeededFlags[idx] = true
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	succeeded := 0
+	for _, ok := range succeededFlags {
+		if ok {
+			succeeded++
+		}
+	}
+	failed := len(succeededFlags) - succeeded
+	deps.Note(ctx, fmt.Sprintf("Issue writers complete: %d succeeded, %d failed", succeeded, failed),
+		"pipeline", "issue_writers", "complete")
+
+	return base, nil
 }

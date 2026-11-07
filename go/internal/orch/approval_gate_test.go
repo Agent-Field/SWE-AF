@@ -145,7 +145,7 @@ func req(deps *Deps, cfg *config.BuildConfig, plan map[string]any, artifactsDir 
 		Deps: deps, Cfg: cfg, Resolved: map[string]string{
 			"architect_model": "sonnet", "tech_lead_model": "sonnet", "sprint_planner_model": "sonnet",
 		},
-		PlanResult: plan, RepoPath: "/repo", Goal: "g",
+		PlanResult: plan, RepoPath: artifactsDir, Goal: "g",
 		ArtifactsDir: ".artifacts", AbsArtifactsDir: artifactsDir, ExecutionID: "exec-1",
 	}
 }
