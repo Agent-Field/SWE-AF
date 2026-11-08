@@ -101,11 +101,12 @@ func planReviewMarkdown(
 	compIDs := componentIDs(planResult)
 	t := func(s string) string { return personText(nameComponents(s, compIDs), revisionIter) }
 	var b strings.Builder
-	heading := "Plan: " + title
-	if revisionIter > 0 {
-		heading = fmt.Sprintf("Plan: %s — %s", title, revisedAfter(revisionIter))
-	}
-	b.WriteString("# " + heading + "\n\n")
+	// The question already says which note revised the plan, and the desk
+	// shows it as the card's title right above this heading, so the heading
+	// stays the plan's name alone: saying it in both read "revised after your
+	// first note" twice in one view (live r3, 2026-11-07). The body still
+	// opens a revision with "What you asked to change".
+	b.WriteString("# Plan: " + title + "\n\n")
 
 	prd, _ := mapGet(planResult, "prd", map[string]any{}).(map[string]any)
 	arch, _ := mapGet(planResult, "architecture", map[string]any{}).(map[string]any)

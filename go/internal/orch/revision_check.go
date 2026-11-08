@@ -434,7 +434,7 @@ func duplicateProblems(plan map[string]any) []string {
 		if strings.HasPrefix(l, reviewerRequestPrefix) || seen[l] {
 			continue
 		}
-		if protectsLeftover(l, dupNames) {
+		if protectsLeftover(l, dupNames, tests) {
 			seen[l] = true
 			out = append(out, "the plan protects a duplicate instead of removing it: "+oneLineCut(l, 160))
 		}
@@ -451,9 +451,30 @@ var (
 
 // protectsLeftover is a line that guards tests against being removed or
 // merged, or names a duplicate pair, rather than describing the change.
-func protectsLeftover(line string, dupNames []string) bool {
+//
+// A line that names tests, none of which the plan adds, CANNOT protect a
+// leftover of it: the test it talks about is not in the plan to be kept. Live
+// r3 (2026-11-07) renamed TestRefunds to TestRefundsSumsAbsoluteValues, and
+// the revision said four times that "no TestRefunds duplicate" may survive;
+// every one of those lines — the removal itself — was reported as protecting
+// a duplicate. The line is judged by the tests it names, against the tests
+// the plan adds.
+func protectsLeftover(line string, dupNames, planned []string) bool {
 	if !testWordCue.MatchString(line) || !protectCue.MatchString(line) {
 		return false
+	}
+	if named := goTestPattern.FindAllString(line, -1); len(named) > 0 {
+		adds := false
+		for _, n := range named {
+			for _, p := range planned {
+				if n == p {
+					adds = true
+				}
+			}
+		}
+		if !adds {
+			return false
+		}
 	}
 	if len(dupNames) == 0 {
 		// Without a duplicate pair in the tests, only words that defend

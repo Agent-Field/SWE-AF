@@ -134,9 +134,12 @@ func TestTheGateReplansAContradictoryRevisionBeforeAsking(t *testing.T) {
 		t.Fatal("the person's words come before the summary")
 	}
 	// ONE COUNTER, in the person's terms: the planner's "Revision 2" is said
-	// as "this revision", and the plan is named by the note that produced it.
-	if regexp.MustCompile(`(?i)revision \d`).MatchString(body) || !strings.Contains(body, "revised after your first note") {
-		t.Fatalf("revision numbering must come from the gate:\n%s", body)
+	// as "this revision", and the plan is named by the note that produced it
+	// — once, in the question the card is titled with, not again in the body.
+	q := p.seen[1].Question
+	if regexp.MustCompile(`(?i)revision \d`).MatchString(body) || !strings.Contains(q, "revised after your first note") ||
+		strings.Contains(body, "revised after your") {
+		t.Fatalf("revision numbering must come from the gate, once:\n%s\n%s", q, body)
 	}
 }
 
