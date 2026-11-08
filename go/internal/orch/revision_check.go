@@ -363,13 +363,27 @@ func additiveProblems(feedback string, beforeTests []string, revised map[string]
 	for _, n := range planTests(revised) {
 		now[n] = true
 	}
-	// A test the person gave a new name is renamed, not dropped.
+	// A test the person gave a new name is renamed, not dropped — that test
+	// exactly, never everything that shares its stem: "TestRefunds" renamed
+	// does not excuse dropping TestRefundsEmpty. A name whose test cannot be
+	// told excuses ONE of the tests it could be, once the new name is there.
+	renamed := map[string]bool{}
+	spare := 0
 	for _, r := range readRenames(personWords(feedback), beforeTests) {
-		reshaped = append(reshaped, r.From)
+		switch {
+		case r.From != "":
+			renamed[r.From] = true
+		case now[r.To]:
+			spare++
+		}
 	}
 	var out []string
 	for _, n := range beforeTests {
-		if now[n] || stemsFrom(n, reshaped) {
+		if now[n] || renamed[n] || stemsFrom(n, reshaped) {
+			continue
+		}
+		if spare > 0 {
+			spare--
 			continue
 		}
 		out = append(out, fmt.Sprintf("the revision no longer adds %s, but you asked to add, not to replace", n))
@@ -595,12 +609,23 @@ var (
 )
 
 // testRename is one rename the person asked for: From is the test the plan
-// sent back added, To the name they gave it.
-type testRename struct{ From, To string }
+// sent back added, To the name they gave it. A name whose test cannot be told
+// has no From; Among is then every test it could be.
+type testRename struct {
+	From, To string
+	Among    []string
+}
 
 // readRenames reads the renames out of the person's words, against the tests
-// the plan they sent back would have added. "The test" names a test only when
-// that plan added exactly one other; with several it is not knowable which.
+// the plan they sent back would have added. "The test" is the one test that
+// plan added; with several, it is the test the new name EXTENDS — the
+// longest one the name starts with, as "TestRefundsSumsAbsoluteValues"
+// extends TestRefunds and not TestRefundsEmpty. Job 76 (2026-11-07) asked
+// "name the test TestRefundsSumsAbsoluteValues" of a plan adding TestRefunds,
+// TestRefundsEmpty and TestRefundsNone; reading nothing there, the gate then
+// held the revision to "add, not replace" and the plan grew a fourth test.
+// When no test is extended, which one is meant cannot be told, and the
+// rename carries Among instead: one of them takes the name, none is added.
 func readRenames(feedback string, beforeTests []string) []testRename {
 	var out []testRename
 	for _, s := range sentenceSplit.Split(feedback, -1) {
@@ -618,9 +643,26 @@ func readRenames(feedback string, beforeTests []string) []testRename {
 				others = append(others, b)
 			}
 		}
-		if len(others) == 1 && len(others) == len(beforeTests) {
-			out = append(out, testRename{From: others[0], To: m[1]})
+		if len(others) != len(beforeTests) || len(others) == 0 {
+			// The name is already one the plan adds, or there was no test
+			// to rename: nothing to read.
+			continue
 		}
+		if len(others) == 1 {
+			out = append(out, testRename{From: others[0], To: m[1]})
+			continue
+		}
+		extended := ""
+		for _, o := range others {
+			if strings.HasPrefix(m[1], o) && len(o) > len(extended) {
+				extended = o
+			}
+		}
+		if extended != "" {
+			out = append(out, testRename{From: extended, To: m[1]})
+			continue
+		}
+		out = append(out, testRename{To: m[1], Among: others})
 	}
 	return out
 }
@@ -630,6 +672,11 @@ func readRenames(feedback string, beforeTests []string) []testRename {
 func renameReading(feedback string, beforeTests []string) string {
 	var lines []string
 	for _, r := range readRenames(feedback, beforeTests) {
+		if r.From == "" {
+			lines = append(lines, fmt.Sprintf("%s is a new name for ONE of %s, the one it describes: rename that test to %s and keep the same number of tests; do not add %s beside all of them.",
+				r.To, strings.Join(r.Among, ", "), r.To, r.To))
+			continue
+		}
 		lines = append(lines, fmt.Sprintf("%s is a new name for %s: rename %s to %s everywhere and keep ONE test; do not add a second test beside it.",
 			r.To, r.From, r.From, r.To))
 	}
@@ -640,7 +687,8 @@ func renameReading(feedback string, beforeTests []string) string {
 }
 
 // renameProblems holds a revision to a rename: the old name must be gone from
-// the tests it adds once the new one is there.
+// the tests it adds once the new one is there — or, for a name whose test
+// could not be told, one of the tests it could be.
 func renameProblems(feedback string, beforeTests []string, revised map[string]any) []string {
 	now := map[string]bool{}
 	for _, n := range planTests(revised) {
@@ -648,9 +696,25 @@ func renameProblems(feedback string, beforeTests []string, revised map[string]an
 	}
 	var out []string
 	for _, r := range readRenames(feedback, beforeTests) {
-		if now[r.From] && now[r.To] {
-			out = append(out, fmt.Sprintf("you asked to name the test %s, not to add a second one, but the plan still adds %s beside it; rename %s to %s",
-				r.To, r.From, r.From, r.To))
+		if !now[r.To] {
+			continue
+		}
+		if r.From != "" {
+			if now[r.From] {
+				out = append(out, fmt.Sprintf("you asked to name the test %s, not to add a second one, but the plan still adds %s beside it; rename %s to %s",
+					r.To, r.From, r.From, r.To))
+			}
+			continue
+		}
+		kept := 0
+		for _, a := range r.Among {
+			if now[a] {
+				kept++
+			}
+		}
+		if kept == len(r.Among) {
+			out = append(out, fmt.Sprintf("you asked to name a test %s, not to add one, but the plan adds it beside %s; rename the one it describes",
+				r.To, strings.Join(r.Among, ", ")))
 		}
 	}
 	return out

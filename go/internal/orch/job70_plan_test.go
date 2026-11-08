@@ -78,7 +78,7 @@ func TestJob70SummaryFieldsAreNotSwallowedByTheFilesList(t *testing.T) {
 func TestJob70NamingTheTestIsARename(t *testing.T) {
 	before := []string{"TestNegatives"}
 	got := readRenames(job70Note, before)
-	if len(got) != 1 || got[0] != (testRename{From: "TestNegatives", To: "TestNegativesCountsRefunds"}) {
+	if len(got) != 1 || got[0].From != "TestNegatives" || got[0].To != "TestNegativesCountsRefunds" || got[0].Among != nil {
 		t.Fatalf("renames = %+v", got)
 	}
 	reading := renameReading(job70Note, before)
@@ -110,17 +110,13 @@ func TestJob70NamingTheTestIsARename(t *testing.T) {
 		t.Fatalf("a renamed test is reported as dropped: %q", p)
 	}
 
-	// Not renames: a NEW test named X, and "the test" when there were several.
-	for _, c := range []struct {
-		note   string
-		before []string
-	}{
-		{"Add a test named TestNegativesCountsRefunds", before},
-		{"Also add another test, TestNegativesCountsRefunds", before},
-		{"name the test TestNegativesCountsRefunds", []string{"TestNegatives", "TestNegativesEmpty"}},
+	// Not renames: a NEW test named X.
+	for _, note := range []string{
+		"Add a test named TestNegativesCountsRefunds",
+		"Also add another test, TestNegativesCountsRefunds",
 	} {
-		if r := readRenames(c.note, c.before); len(r) != 0 {
-			t.Errorf("%q over %v read as a rename: %+v", c.note, c.before, r)
+		if r := readRenames(note, before); len(r) != 0 {
+			t.Errorf("%q over %v read as a rename: %+v", note, before, r)
 		}
 	}
 	if r := readRenames("Rename TestNegatives to TestNegativesCountsRefunds", []string{"TestNegatives", "TestOther"}); len(r) != 1 {
