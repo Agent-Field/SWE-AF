@@ -106,6 +106,14 @@ func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }
 // AskUserBody renders an ask_user form as the markdown a person reads: the
 // description, then every field with what kind of answer it wants and, for a
 // choice, the choices. The answer comes back as the person's words.
+//
+// THE BODY SPEAKS OF THE CHOICES, NEVER OF THE APPROVAL BUTTONS. A door shows
+// a form as its choices plus "answer in your own words" and "skip"; a closing
+// sentence about **approve**, **request changes** and **Reject** named
+// controls that card does not have (WorkAF r5–r7). A field's default is the
+// form's machine value ("stdlib_crc32", "provide_module"), so it is shown as
+// the field's `suggested:` property spelled as the label of the choice it
+// names; a default that names none of the choices is not shown at all.
 func AskUserBody(spec schemas.AskUserForm) string {
 	var b strings.Builder
 	if spec.Description != nil && strings.TrimSpace(*spec.Description) != "" {
@@ -115,6 +123,7 @@ func AskUserBody(spec schemas.AskUserForm) string {
 	if len(spec.Fields) > 0 {
 		b.WriteString("## What it needs from you\n\n")
 	}
+	hasChoices := false
 	for _, f := range spec.Fields {
 		label := strings.TrimSpace(f.Label)
 		if label == "" {
@@ -129,22 +138,62 @@ func AskUserBody(spec schemas.AskUserForm) string {
 		}
 		b.WriteString("\n")
 		if len(f.Options) > 0 {
+			hasChoices = true
 			labels := make([]string, 0, len(f.Options))
 			for _, o := range f.Options {
-				l := o["label"]
-				if l == "" {
-					l = o["value"]
-				}
-				labels = append(labels, l)
+				labels = append(labels, optionLabel(o))
 			}
 			fmt.Fprintf(&b, "  - choices: %s\n", strings.Join(labels, " · "))
 		}
-		if f.DefaultValue != nil {
-			fmt.Fprintf(&b, "  - default: %v\n", f.DefaultValue)
+		if s := suggestedOf(f); s != "" {
+			fmt.Fprintf(&b, "  - suggested: %s\n", s)
 		}
 	}
-	b.WriteString("\nAnswer in your own words with **request changes**, or **approve** to let it use its own judgement. **Reject** tells it to carry on without an answer.")
+	if hasChoices {
+		b.WriteString("\nPick one of the choices, or answer in your own words. Without an answer it goes on with its own judgement.")
+	} else {
+		b.WriteString("\nAnswer in your own words. Without an answer it goes on with its own judgement.")
+	}
 	return b.String()
+}
+
+// optionLabel is what a person reads for one choice: its label, else its value.
+func optionLabel(o map[string]string) string {
+	if l := strings.TrimSpace(o["label"]); l != "" {
+		return l
+	}
+	return strings.TrimSpace(o["value"])
+}
+
+// suggestedOf is a field's default as a person reads it. For a field with
+// choices it is the label of the choice whose value (or label) the default
+// names, and "" when it names none; a free field's default is shown as given.
+// Booleans and empty values say nothing a person can use and are left out.
+func suggestedOf(f schemas.AskUserFormField) string {
+	if f.DefaultValue == nil {
+		return ""
+	}
+	var def string
+	switch v := f.DefaultValue.(type) {
+	case string:
+		def = strings.TrimSpace(v)
+	case bool:
+		return ""
+	default:
+		def = strings.TrimSpace(fmt.Sprint(v))
+	}
+	if def == "" {
+		return ""
+	}
+	if len(f.Options) == 0 {
+		return def
+	}
+	for _, o := range f.Options {
+		if strings.EqualFold(strings.TrimSpace(o["value"]), def) || strings.EqualFold(strings.TrimSpace(o["label"]), def) {
+			return optionLabel(o)
+		}
+	}
+	return ""
 }
 
 // RequestUserInputNative pauses for an ask_user form with no hax. The person's

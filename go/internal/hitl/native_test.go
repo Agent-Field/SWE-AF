@@ -92,3 +92,46 @@ func TestOneLineCapsTheQuestion(t *testing.T) {
 	}
 	_ = schemas.AskUserForm{}
 }
+
+// r5–r7: the body ended "Answer in your own words with **request changes**, or
+// **approve** … **Reject** …" under a card whose buttons are the choices, In my
+// words… and Skip, and printed the default as its raw value ("default:
+// stdlib_crc32"). The body now speaks of the choices, and the default is the
+// field's `suggested:` property spelled as its choice's label.
+func TestAskUserBodyMatchesItsChoices(t *testing.T) {
+	desc := "crckit does not exist. Pick one approach."
+	other := "describe it"
+	form := schemas.AskUserForm{Title: "How should Checksum() be implemented?", Description: &desc, Fields: []schemas.AskUserFormField{
+		{ID: "approach", Type: "radio", Label: "How should Checksum() be implemented?", Required: true, DefaultValue: "stdlib_crc32",
+			Options: []map[string]string{
+				{"label": "Use the Go standard library hash/crc32", "value": "stdlib_crc32"},
+				{"label": "Create a local crckit package", "value": "local_pkg"},
+			}},
+		{ID: "mode", Type: "radio", Label: "Mode", DefaultValue: "provide_module",
+			Options: []map[string]string{{"label": "A", "value": "a"}, {"label": "B", "value": "b"}}},
+		{ID: "other", Type: "text", Label: "If you chose Other, describe the approach", Description: &other, DefaultValue: ""},
+	}}
+	body := AskUserBody(form)
+	for _, want := range []string{
+		"  - choices: Use the Go standard library hash/crc32 · Create a local crckit package\n  - suggested: Use the Go standard library hash/crc32\n",
+		"Pick one of the choices, or answer in your own words.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q:\n%s", want, body)
+		}
+	}
+	for _, banned := range []string{"default:", "stdlib_crc32", "provide_module", "**approve**", "**request changes**", "**Reject**"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("body still says %q:\n%s", banned, body)
+		}
+	}
+	// A default that names none of the choices is not shown at all.
+	if strings.Count(body, "suggested:") != 1 {
+		t.Errorf("want exactly one suggested line:\n%s", body)
+	}
+
+	free := AskUserBody(schemas.AskUserForm{Fields: []schemas.AskUserFormField{{ID: "path", Label: "Module path", DefaultValue: "github.com/x/y"}}})
+	if !strings.Contains(free, "  - suggested: github.com/x/y\n") || strings.Contains(free, "choices") {
+		t.Errorf("free field body:\n%s", free)
+	}
+}
