@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Agent-Field/SWE-AF/go/internal/critcheck"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -340,6 +341,13 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		}
 	}
 
+	// A criterion its tool refuses can fail every implementation (issue
+	// #291); the forms known to be refused are respelled before work starts.
+	for _, rw := range critcheck.FixPlan(planResult) {
+		deps.Note(ctx, fmt.Sprintf("Acceptance check respelled before work: %q became %q", rw.From, rw.To),
+			"plan", "criterion_check", "respelled")
+	}
+
 	// 2. EXECUTE
 	execConfig := cfg.ToExecutionConfigDict()
 	dagResult, err := deps.Call(ctx, "execute", map[string]any{
@@ -389,7 +397,9 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		applyProjectGate(ctx, deps, verification, projectTargets(manifest, repoPath, buildBaseSHA))
+		targets := projectTargets(manifest, repoPath, buildBaseSHA)
+		applyCriterionAudit(ctx, deps, verification, targets)
+		applyProjectGate(ctx, deps, verification, targets)
 
 		if asBool(verification["passed"]) || cycle >= cfg.MaxVerifyFixCycles {
 			break

@@ -199,6 +199,8 @@ func (o Outcome) Fold(verification map[string]any, where string) {
 		"passed":     false,
 		"evidence":   o.Evidence(),
 		"issue_name": "",
+		// Marks the gate's own criterion so no later pass reconsiders it.
+		"project_check": true,
 	}
 	switch list := verification["criteria_results"].(type) {
 	case []any:

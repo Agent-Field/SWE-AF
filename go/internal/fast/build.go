@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
+	"github.com/Agent-Field/SWE-AF/go/internal/critcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/harnessx"
 	"github.com/Agent-Field/SWE-AF/go/internal/projectcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
@@ -161,6 +162,10 @@ type gitResult struct {
 
 // runProjectCheck is the seam tests replace; the default is the real check.
 var runProjectCheck = projectcheck.Run
+
+// reconcileCriteria is the seam tests replace; the default re-runs failed
+// criteria and repairs or stops counting the malformed ones (package critcheck).
+var reconcileCriteria = critcheck.Reconcile
 
 func runGit(ctx context.Context, dir string, args ...string) gitResult {
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -427,6 +432,11 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		if err != nil {
 			return nil, nil, err
 		}
+		// Respell the criteria forms their tool is known to refuse (#291).
+		for _, rw := range critcheck.FixPlan(planResult) {
+			deps.note(ctx, fmt.Sprintf("Acceptance check respelled before work: %q became %q", rw.From, rw.To),
+				"fast_build", "plan", "criterion_check", "respelled")
+		}
 		tasks := planResult["tasks"]
 		if tasks == nil {
 			tasks = []any{}
@@ -507,6 +517,17 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		}
 	} else {
 		verification = rawVerify
+	}
+	// A check the tool refused to run is repaired or not counted (issue #291);
+	// this runs before the project check, which it can never lift.
+	if !mapBool(verification, "passed") {
+		for _, f := range reconcileCriteria(ctx, repoPath, verification) {
+			tag := "not_counted"
+			if f.Action != critcheck.NotCounted {
+				tag = "repaired"
+			}
+			deps.note(ctx, f.Note(), "fast_build", "verify", "criterion_check", tag)
+		}
 	}
 	// A RED BUILD FAILS THE RUN WHATEVER THE VERIFIER SAID: the project's own
 	// build and test commands run here, in code, outside the plan.

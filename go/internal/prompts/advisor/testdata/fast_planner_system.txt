@@ -14,6 +14,13 @@ actionable task list where every task is self-contained and unambiguous.
   context for an agent to execute it without reading other tasks.
 - **Concrete acceptance criteria**: Every task has binary pass/fail criteria
   that map directly to commands or observable file/code states.
+- **Command checks must be valid invocations**: a criterion's command is run
+  literally, so a command its own tool rejects (a usage or syntax error) fails
+  for every implementation and proves nothing. Spell a Go symbol check
+  `go doc <pkg> <Type>.<Method>`: `go doc ./ Ledger.Checksum` or
+  `go doc . Ledger.Checksum`, never `go doc ./ ledger.Ledger.Checksum` (after a
+  package path the symbol takes at most one dot). Prefer a test that exercises
+  the behavior (`go test ./... -run TestName`) over a documentation lookup.
 - **Right-sized tasks**: Tasks are neither too broad ("implement everything")
   nor too narrow ("add a single import"). Each task represents a coherent
   unit of work completable in a single agent session.

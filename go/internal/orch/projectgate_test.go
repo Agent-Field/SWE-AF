@@ -39,6 +39,17 @@ func writeCommit(t *testing.T, dir, msg string, files map[string]string) {
 // returns the reasoners called and the final verification.
 func buildIssue269(t *testing.T, work string) (calls []string, result map[string]any) {
 	t.Helper()
+	return buildWithVerifier(t, work, func() map[string]any {
+		return map[string]any{"passed": true, "summary": "OVERALL: PASS", "criteria_results": []any{
+			map[string]any{"criterion": "ledger.go imports github.com/santoshkumarradha/hashkit-does-not-exist", "passed": true},
+		}}
+	})
+}
+
+// buildWithVerifier runs Build over a Go repository whose merged work is
+// work, with a verifier that answers verdict().
+func buildWithVerifier(t *testing.T, work string, verdict func() map[string]any) (calls []string, result map[string]any) {
+	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not installed")
 	}
@@ -68,11 +79,7 @@ func buildIssue269(t *testing.T, work string) (calls []string, result map[string
 			"failed_issues":    []any{}, "skipped_issues": []any{}, "accumulated_debt": []any{},
 		}
 	}
-	base := buildHandler(exec, func(map[string]any) map[string]any {
-		return map[string]any{"passed": true, "summary": "OVERALL: PASS", "criteria_results": []any{
-			map[string]any{"criterion": "ledger.go imports github.com/santoshkumarradha/hashkit-does-not-exist", "passed": true},
-		}}
-	})
+	base := buildHandler(exec, func(map[string]any) map[string]any { return verdict() })
 	var mu sync.Mutex
 	app := &mockApp{handler: func(ctx context.Context, target string, input map[string]any) (map[string]any, error) {
 		mu.Lock()
@@ -138,5 +145,73 @@ func TestABuildThatCompilesStillOpensItsPullRequest(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(calls, " "), "run_github_pr") {
 		t.Fatalf("a passing build did not call the PR role: %v", calls)
+	}
+}
+
+// issue291Verdict is what the verifier said on issue #291 (WorkAF r8): every
+// criterion passed except the one the planner spelled
+// `go doc ./ ledger.Ledger.Checksum`, which the Go tool refuses ("too many
+// periods") for every implementation.
+func issue291Verdict(extra ...map[string]any) func() map[string]any {
+	return func() map[string]any {
+		list := []any{
+			map[string]any{"criterion": "1. `go test ./...` exits 0", "passed": true},
+			map[string]any{"criterion": "3. go doc ./ ledger.Ledger.Checksum (run from the repo root) prints func (l *Ledger) Checksum() uint32.",
+				"passed": false, "evidence": "doc: too many periods in symbol specification (exit 2)"},
+		}
+		for _, e := range extra {
+			list = append(list, e)
+		}
+		return map[string]any{"passed": false, "summary": "Overall verdict: FAIL", "criteria_results": list}
+	}
+}
+
+const checksumWork = "package ledger\n\n// Checksum is the CRC of the entries.\nfunc (l *Ledger) Checksum() uint32 { return 0 }\n"
+
+// Issue #291: code that builds, passes its tests and has the method failed on
+// a check the Go tool cannot run as written. The check is repaired, passes,
+// and the pull request opens.
+func TestAMalformedAcceptanceCheckDoesNotFailWorkThatBuilds(t *testing.T) {
+	defer withExecCtx("run-291", "exec-291")()
+	calls, v := buildWithVerifier(t, checksumWork, issue291Verdict())
+	if v["passed"] != true {
+		t.Fatalf("a malformed check failed the run: %v", v)
+	}
+	if !strings.Contains(strings.Join(calls, " "), "run_github_pr") {
+		t.Fatalf("no pull request: %v", calls)
+	}
+	if !strings.Contains(mapStr(v, "summary", ""), "go doc ./ Ledger.Checksum") {
+		t.Fatalf("summary does not name the repair: %q", v["summary"])
+	}
+}
+
+// A real assertion beside the malformed check still fails the run.
+func TestATrueFailingCheckStillFailsBesideAMalformedOne(t *testing.T) {
+	defer withExecCtx("run-291b", "exec-291b")()
+	calls, v := buildWithVerifier(t, checksumWork, issue291Verdict(map[string]any{
+		"criterion": "`grep -q 'func (l \\*Ledger) Digest' ledger.go` exits 0", "passed": false,
+	}))
+	if v["passed"] != false {
+		t.Fatalf("a real failure was lifted: %v", v)
+	}
+	for _, c := range calls {
+		if c == "run_github_pr" {
+			t.Fatalf("a failing build called the PR role: %v", calls)
+		}
+	}
+}
+
+// THE PROJECT GATE STAYS: a malformed check is repaired, but work that does
+// not compile still fails the run and opens no pull request.
+func TestARepairedCheckCannotLiftARedBuild(t *testing.T) {
+	defer withExecCtx("run-291c", "exec-291c")()
+	calls, v := buildWithVerifier(t, checksumWork+"\nfunc broken() { undefined() }\n", issue291Verdict())
+	if v["passed"] != false {
+		t.Fatalf("a red build passed: %v", v)
+	}
+	for _, c := range calls {
+		if c == "run_github_pr" {
+			t.Fatalf("a build that does not compile called the PR role: %v", calls)
+		}
 	}
 }

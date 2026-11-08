@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/critcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/projectcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
@@ -31,6 +32,29 @@ func projectTargets(manifest *schemas.WorkspaceManifest, repoPath, buildBaseSHA 
 		return out
 	}
 	return []projectTarget{{path: repoPath, base: buildBaseSHA}}
+}
+
+// reconcileCriteria is the seam tests replace; the default is the real pass.
+var reconcileCriteria = critcheck.Reconcile
+
+// applyCriterionAudit re-runs the commands of the verifier's failed criteria
+// and repairs, or stops counting, the ones the tool itself refused to run
+// (issue #291: `go doc ./ ledger.Ledger.Checksum`, "too many periods"). It
+// runs BEFORE applyProjectGate, so a red project build fails the run whatever
+// this pass lifted.
+func applyCriterionAudit(ctx context.Context, deps *Deps, verification map[string]any, targets []projectTarget) {
+	if verification == nil || asBool(verification["passed"]) {
+		return
+	}
+	for _, t := range targets {
+		for _, f := range reconcileCriteria(ctx, t.path, verification) {
+			tag := "not_counted"
+			if f.Action != critcheck.NotCounted {
+				tag = "repaired"
+			}
+			deps.Note(ctx, f.Note(), "build", "verify", "criterion_check", tag)
+		}
+	}
 }
 
 // runProjectCheck is the seam tests replace; the default is the real check.
