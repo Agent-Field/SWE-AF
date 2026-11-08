@@ -3,6 +3,7 @@ package gitops
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/afx"
 	gitprompts "github.com/Agent-Field/SWE-AF/go/internal/prompts/gitops"
@@ -21,6 +22,9 @@ type repoFinalizeInput struct {
 	Model          string `json:"model"`
 	PermissionMode string `json:"permission_mode"`
 	AIProvider     string `json:"ai_provider"`
+	// BaseRef is the commit the run started from. The cleanup may remove only
+	// tracked files that did not exist there (see finalizeguard.go).
+	BaseRef string `json:"base_ref"`
 }
 
 // RunRepoFinalize cleans up the repository after verification — removes
@@ -34,7 +38,8 @@ func RunRepoFinalize(ctx context.Context, deps *Deps, input map[string]any) (any
 
 	deps.App.Note(ctx, "Repo finalize starting", "repo_finalize", "start")
 
-	taskPrompt := gitprompts.RepoFinalizeTaskPrompt(in.RepoPath)
+	scope, guarded := openFinalizeScope(ctx, in.RepoPath, in.BaseRef)
+	taskPrompt := gitprompts.RepoFinalizeTaskPrompt(in.RepoPath, scope.created...)
 
 	provider, err := resolveProvider(in.AIProvider)
 	if err != nil {
@@ -51,16 +56,68 @@ func RunRepoFinalize(ctx context.Context, deps *Deps, input map[string]any) (any
 	if err != nil {
 		return nil, err
 	}
-	if ok {
-		deps.App.Note(ctx, fmt.Sprintf("Repo finalize complete: %d files removed, gitignore_updated=%s",
-			len(val.FilesRemoved), pyBool(val.GitignoreUpdated)), "repo_finalize", "complete")
-		return *val, nil
+
+	// The guard runs whatever the agent answered: a cleanup that deleted a
+	// file and then failed to report is exactly the one to check.
+	var restored []string
+	if guarded {
+		restored = scope.restore(ctx)
+		if len(restored) > 0 {
+			deps.App.Note(ctx, fmt.Sprintf(
+				"Repo finalize removed or changed %d file(s) that existed before it ran; restored: %s",
+				len(restored), strings.Join(restored, ", ")), "repo_finalize", "restored")
+		}
 	}
 
-	return schemas.RepoFinalizeResult{
+	if ok {
+		res := *val
+		applyRestored(&res, restored)
+		deps.App.Note(ctx, fmt.Sprintf("Repo finalize complete: %d files removed, gitignore_updated=%s",
+			len(res.FilesRemoved), pyBool(res.GitignoreUpdated)), "repo_finalize", "complete")
+		return res, nil
+	}
+
+	res := schemas.RepoFinalizeResult{
 		Success: false,
 		Summary: "Repo finalize agent failed to produce a valid result.",
-	}, nil
+	}
+	applyRestored(&res, restored)
+	return res, nil
+}
+
+// applyRestored reports the guard's restorations on the result: the restored
+// paths leave files_removed (they were not removed in the end), join
+// files_restored, and are named in the summary.
+func applyRestored(res *schemas.RepoFinalizeResult, restored []string) {
+	if len(restored) == 0 {
+		return
+	}
+	back := make(map[string]bool, len(restored))
+	for _, p := range restored {
+		back[p] = true
+	}
+	kept := res.FilesRemoved[:0:0]
+	for _, p := range res.FilesRemoved {
+		if !back[strings.TrimSuffix(p, "/")] && !restoredUnder(p, restored) {
+			kept = append(kept, p)
+		}
+	}
+	res.FilesRemoved = kept
+	res.FilesRestored = restored
+	res.Summary = strings.TrimSpace(res.Summary + " Restored files that existed before the cleanup and are not its to remove: " +
+		strings.Join(restored, ", ") + ".")
+}
+
+// restoredUnder reports whether a removed directory entry (".codeaf/") held
+// any restored path.
+func restoredUnder(removed string, restored []string) bool {
+	dir := strings.TrimSuffix(removed, "/") + "/"
+	for _, p := range restored {
+		if strings.HasPrefix(p, dir) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

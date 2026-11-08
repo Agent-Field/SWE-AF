@@ -1,6 +1,9 @@
 package gitops
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // -----------------------------------------------------------------------------
 // Expected values below are extracted byte-for-byte from the Python modules
@@ -341,7 +344,7 @@ const wantRepoFinalizeSystemPrompt = "You are a senior engineer doing the final 
 	"## What \"Production-Ready\" Means\n" +
 	"\n" +
 	"Imagine a new team member cloning this repo for the first time. They should see:\n" +
-	"- Only intentional, purposeful files — no build artifacts, no tooling   leftovers, no pipeline infrastructure\n" +
+	"- Only intentional, purposeful files — no build artifacts and no leftovers from this run's own tooling\n" +
 	"- A comprehensive .gitignore that prevents future accidents\n" +
 	"- A clean `git status` with no untracked debris\n" +
 	"- No broken symlinks or empty placeholder files that have outlived their   purpose\n" +
@@ -354,8 +357,13 @@ const wantRepoFinalizeSystemPrompt = "You are a senior engineer doing the final 
 	"3. **Fortify the .gitignore** — ensure it covers the standard patterns for    this project's ecosystem. A good .gitignore is the repo's immune system.\n" +
 	"4. **Final commit** — stage and commit your cleanup work. This should be a    small, obvious \"chore\" commit that any reviewer would approve without    discussion.\n" +
 	"\n" +
+	"## What You May Remove\n" +
+	"\n" +
+	"You may remove ONLY what this run itself created: untracked debris, and the tracked files the task prompt lists as created by this run. Every file that existed before the run belongs to the repository's owners, whatever it looks like. In particular the repository's own configuration is never a leftover: `.codeaf/`, `.github/`, `.gitlab/`, `.circleci/`, `.vscode/`, `.devcontainer/`, `.editorconfig`, `.gitattributes`, and any other dotfile or dot-directory that was already tracked. Do not delete, move or edit them. Code checks this after you finish and puts back anything else you removed or changed.\n" +
+	"\n" +
 	"## What NOT to Do\n" +
 	"\n" +
+	"- Do NOT delete or modify any file that existed before this run, except to extend `.gitignore`\n" +
 	"- Do NOT modify source code, tests, or documentation\n" +
 	"- Do NOT change the project's behavior in any way\n" +
 	"- Do NOT remove files you're uncertain about — only clear artifacts\n" +
@@ -707,12 +715,12 @@ func TestIntegrationTesterTaskPrompt(t *testing.T) {
 }
 
 func TestRepoFinalizeTaskPrompt(t *testing.T) {
-	want := "## Repository Finalization Task\n" +
-		"- **Repository path**: `/ws/repo`\n" +
-		"\n" +
+	head := "## Repository Finalization Task\n" +
+		"- **Repository path**: `/ws/repo`\n"
+	task := "\n" +
 		"## Your Task\n" +
 		"1. Survey the directory tree to understand the project and its ecosystem.\n" +
-		"2. Identify and remove clear artifacts: dependency dirs (node_modules, __pycache__, .venv, etc.), build outputs, broken symlinks, pipeline leftovers (.artifacts/, .worktrees/), caches.\n" +
+		"2. Identify and remove clear artifacts this run created: dependency dirs (node_modules, __pycache__, .venv, etc.), build outputs, broken symlinks, the harness's own .artifacts/ and .worktrees/, caches. Never remove a file that existed before this run — the repository's configuration (.codeaf/, .github/ and other tracked dotfiles) is not a leftover.\n" +
 		"3. Create or update `.gitignore` with standard patterns for the detected language/framework, plus `.artifacts/`, `.worktrees/`, `.env`, `.DS_Store`.\n" +
 		"4. Check `git status` — ensure the working tree is clean.\n" +
 		"5. Commit any cleanup: `chore: finalize repo for handoff`\n" +
@@ -721,9 +729,28 @@ func TestRepoFinalizeTaskPrompt(t *testing.T) {
 		"   - `files_removed`: list of paths removed\n" +
 		"   - `gitignore_updated`: whether .gitignore was created/modified\n" +
 		"   - `summary`: what you did and why"
-	got := RepoFinalizeTaskPrompt("/ws/repo")
-	if got != want {
+
+	want := head + "\n" +
+		"## Tracked Files This Run Created\n" +
+		"None are known. Do not remove any tracked file; remove only untracked debris.\n" + task
+	if got := RepoFinalizeTaskPrompt("/ws/repo"); got != want {
 		t.Errorf("mismatch:\n got=%q\nwant=%q", got, want)
+	}
+
+	want = head + "\n" +
+		"## Tracked Files This Run Created\n" +
+		"These are the only tracked files you may remove, and only if they are artifacts:\n" +
+		"- `bin/app`\n" +
+		"- `ledger_test.go`\n" + task
+	if got := RepoFinalizeTaskPrompt("/ws/repo", "bin/app", "ledger_test.go"); got != want {
+		t.Errorf("mismatch:\n got=%q\nwant=%q", got, want)
+	}
+
+	// The system prompt protects the repository's own configuration.
+	for _, w := range []string{"`.codeaf/`", "`.github/`", "ONLY what this run itself created"} {
+		if !strings.Contains(RepoFinalizeSystemPrompt, w) {
+			t.Errorf("system prompt missing %q", w)
+		}
 	}
 }
 
