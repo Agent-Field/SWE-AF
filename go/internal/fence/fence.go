@@ -41,6 +41,11 @@ const (
 	EnvRoot = "SWE_FENCE_ROOT"   // the shared workspace root to hide
 	EnvDir  = "SWE_FENCE_DIR"    // the build's own folder to keep visible
 	EnvOff  = "SWE_FENCE"        // "off": run without a fence (operator opt-out)
+
+	// A linked git worktree's own metadata, when it lives outside the
+	// build's folder (see Scope.GitDir).
+	EnvGitDir    = "SWE_FENCE_GITDIR"    // the worktree's private gitdir
+	EnvGitCommon = "SWE_FENCE_GITCOMMON" // the repository's shared git dir
 )
 
 // Off reports the operator's explicit opt-out.
@@ -48,7 +53,15 @@ func Off() bool { return strings.EqualFold(strings.TrimSpace(os.Getenv(EnvOff)),
 
 // Scope is what one call may see of the workspace root: Deny is hidden,
 // except Allow inside it.
-type Scope struct{ Deny, Allow string }
+//
+// GitDir and GitCommon are set only when the run's working directory is a
+// linked git worktree whose metadata lives in the hidden root OUTSIDE Allow.
+// A worktree's `.git` is a file naming <common>/worktrees/<name>, and git
+// cannot commit without that folder and the shared objects, refs and config
+// in <common>. So the fence opens GitCommon, closes <common>/worktrees again,
+// and reopens only GitDir: the run gets the repository's shared history and
+// its own worktree's index and HEAD, never another worktree's.
+type Scope struct{ Deny, Allow, GitDir, GitCommon string }
 
 // ScopeFor is the fence for a run whose working directory is cwd under the
 // shared workspace root: the root hidden, the build's own folder (the first
@@ -64,11 +77,89 @@ func ScopeFor(root, cwd string) (Scope, bool) {
 	if err != nil || rel == "." {
 		return Scope{}, false // the root itself is no build's folder
 	}
-	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
-		return Scope{Deny: r, Allow: c}, true
+	s := Scope{Deny: r, Allow: c}
+	if !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+		first := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		s.Allow = filepath.Join(r, first)
 	}
-	first := strings.SplitN(rel, string(filepath.Separator), 2)[0]
-	return Scope{Deny: r, Allow: filepath.Join(r, first)}, true
+	s.GitDir, s.GitCommon = linkedGitDirs(c, s)
+	return s, true
+}
+
+// linkedGitDirs finds the linked worktree that cwd sits in, walking up no
+// further than the folder the fence already opens, and returns its private
+// gitdir and the repository's shared git dir when the fence would otherwise
+// hide them. It returns nothing for an ordinary repository, for metadata the
+// fence already shows, and for a `.git` file that does not check out.
+//
+// THE `.git` FILE IS NOT TRUSTED ON ITS OWN WORD. It sits in a folder the
+// previous run could write, so a run could point it at another build's
+// repository and be handed that repository by the next fence. git's own
+// back-link is required too: <common>/worktrees/<name>/gitdir must name this
+// very `.git` file, and that file lives where the run cannot write.
+func linkedGitDirs(cwd string, s Scope) (gitDir, common string) {
+	for dir := cwd; ; dir = filepath.Dir(dir) {
+		dotgit := filepath.Join(dir, ".git")
+		if fi, err := os.Lstat(dotgit); err == nil {
+			if !fi.Mode().IsRegular() {
+				return "", "" // an ordinary repository: its .git is a folder
+			}
+			return checkedGitDirs(dir, dotgit, s)
+		}
+		if dir == s.Allow || !within(s.Allow, dir) {
+			return "", ""
+		}
+	}
+}
+
+func checkedGitDirs(dir, dotgit string, s Scope) (string, string) {
+	gd, ok := pointer(dotgit, "gitdir:")
+	if !ok {
+		return "", ""
+	}
+	gd = canonical(resolve(dir, gd))
+	common := gd
+	if c, ok := pointer(filepath.Join(gd, "commondir"), ""); ok {
+		common = canonical(resolve(gd, c))
+	}
+	if filepath.Dir(gd) != filepath.Join(common, "worktrees") {
+		return "", "" // not git's own layout for a linked worktree
+	}
+	back, ok := pointer(filepath.Join(gd, "gitdir"), "")
+	if !ok || canonical(resolve(gd, back)) != canonical(dotgit) {
+		return "", ""
+	}
+	if within(s.Allow, gd) || !within(s.Deny, gd) {
+		return "", "" // already visible to the run; nothing to open
+	}
+	return gd, common
+}
+
+// pointer reads a one-line git pointer file, without its prefix.
+func pointer(path, prefix string) (string, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	line := strings.TrimSpace(strings.SplitN(string(b), "\n", 2)[0])
+	if !strings.HasPrefix(line, prefix) {
+		return "", false
+	}
+	v := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+	return v, v != ""
+}
+
+func resolve(base, p string) string {
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(base, p)
+}
+
+// within reports whether p is parent or below it.
+func within(parent, p string) bool {
+	rel, err := filepath.Rel(parent, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // Stamp returns env with the launcher's variables for one call: run through
@@ -82,17 +173,49 @@ func Stamp(env map[string]string, real string, scope Scope) map[string]string {
 	out[EnvReal] = real
 	out[EnvRoot] = scope.Deny
 	out[EnvDir] = scope.Allow
+	out[EnvGitDir] = scope.GitDir
+	out[EnvGitCommon] = scope.GitCommon
 	return out
 }
 
 // SeatbeltProfile hides deny except allow. Seatbelt applies the LAST rule
 // that matches, so the allow below the deny wins inside the build's folder.
+//
+// THE ROOT ITSELF CAN BE STAT'D, NEVER LISTED. A `subpath` deny covers the
+// root directory too, and git canonicalises every path it is handed by
+// lstat'ing each component on the way down: with the root unstattable every
+// git command in the build's own worktree died with "stat …/workspaces:
+// Operation not permitted", and the coder for issue #221 could not commit at
+// all (2026-11-08). file-read-metadata on the literal root (and on each folder
+// between it and an opened git dir) answers stat and readlink; listing a
+// directory is file-read-data, which stays denied, so the neighbours' names
+// stay hidden.
 func SeatbeltProfile(s Scope) string {
-	return fmt.Sprintf(`(version 1)
-(allow default)
-(deny file-read* file-write* (subpath %q))
-(allow file-read* file-write* (subpath %q))
-`, s.Deny, s.Allow)
+	var b strings.Builder
+	fmt.Fprintf(&b, "(version 1)\n(allow default)\n")
+	fmt.Fprintf(&b, "(deny file-read* file-write* (subpath %q))\n", s.Deny)
+	fmt.Fprintf(&b, "(allow file-read-metadata (literal %q))\n", s.Deny)
+	fmt.Fprintf(&b, "(allow file-read* file-write* (subpath %q))\n", s.Allow)
+	if s.GitDir != "" && s.GitCommon != "" {
+		for _, d := range between(s.Deny, s.GitCommon) {
+			fmt.Fprintf(&b, "(allow file-read-metadata (literal %q))\n", d)
+		}
+		wt := filepath.Join(s.GitCommon, "worktrees")
+		fmt.Fprintf(&b, "(allow file-read* file-write* (subpath %q))\n", s.GitCommon)
+		fmt.Fprintf(&b, "(deny file-read* file-write* (subpath %q))\n", wt)
+		fmt.Fprintf(&b, "(allow file-read-metadata (literal %q))\n", wt)
+		fmt.Fprintf(&b, "(allow file-read* file-write* (subpath %q))\n", s.GitDir)
+	}
+	return b.String()
+}
+
+// between is every folder strictly below root on the way to p.
+func between(root, p string) []string {
+	var out []string
+	for d := filepath.Dir(p); d != root && within(root, d); d = filepath.Dir(d) {
+		out = append([]string{d}, out...)
+	}
+	return out
 }
 
 // Command is the argv that starts real with args inside the fence on goos.
@@ -106,9 +229,16 @@ func Command(goos, real string, args []string, s Scope) ([]string, error) {
 			return nil, errors.New("bubblewrap (bwrap) is not installed, so the run cannot be fenced to its build's folder")
 		}
 		// The host stays as it is; an empty tmpfs covers the workspace root,
-		// and only the build's own folder is bound back onto it.
-		return append([]string{bwrap, "--dev-bind", "/", "/", "--tmpfs", s.Deny,
-			"--bind", s.Allow, s.Allow, "--die-with-parent", "--", real}, args...), nil
+		// and only the build's own folder is bound back onto it. A linked
+		// worktree's shared git dir is bound back too, its worktrees/ folder
+		// covered again, and only this worktree's own gitdir bound into that.
+		argv := []string{bwrap, "--dev-bind", "/", "/", "--tmpfs", s.Deny, "--bind", s.Allow, s.Allow}
+		if s.GitDir != "" && s.GitCommon != "" {
+			wt := filepath.Join(s.GitCommon, "worktrees")
+			argv = append(argv, "--bind", s.GitCommon, s.GitCommon, "--tmpfs", wt, "--bind", s.GitDir, s.GitDir)
+		}
+		argv = append(argv, "--die-with-parent", "--", real)
+		return append(argv, args...), nil
 	}
 	return nil, fmt.Errorf("no fence is known on %s, so the run cannot be fenced to its build's folder", goos)
 }
@@ -121,7 +251,8 @@ func Main(args []string) int {
 		fmt.Fprintln(os.Stderr, "fence: no codeaf binary named ("+EnvReal+")")
 		return 126
 	}
-	s := Scope{Deny: os.Getenv(EnvRoot), Allow: os.Getenv(EnvDir)}
+	s := Scope{Deny: os.Getenv(EnvRoot), Allow: os.Getenv(EnvDir),
+		GitDir: os.Getenv(EnvGitDir), GitCommon: os.Getenv(EnvGitCommon)}
 	env := withoutLauncherVars(os.Environ())
 	argv := append([]string{real}, args...)
 	if !Off() && s.Deny != "" && s.Allow != "" {
