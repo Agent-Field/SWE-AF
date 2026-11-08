@@ -488,10 +488,21 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	ciGateResults := []map[string]any{}
 	buildSummary := buildSummaryText(success, completed, total, verification)
 
-	if manifest != nil && len(manifest.Repos) > 1 {
+	// A BUILD THAT DID NOT PASS VERIFICATION OPENS NO PULL REQUEST. Live on
+	// 2026-11-08 (issue #221) the coder could not commit inside its fence, the
+	// verifier said so ("OVERALL FAIL … its change is NOT present in the
+	// repository"), and this phase still pushed the integration branch and
+	// opened PR #227, which carried nothing but git_init's .gitignore. A
+	// failed run then read as both failed and published. The result below
+	// still carries the verification and the debt; only the publish is held.
+	switch {
+	case !success:
+		deps.Note(ctx, "No pull request: the build did not pass verification ("+
+			buildSummary+")", "build", "github_pr", "skipped")
+	case manifest != nil && len(manifest.Repos) > 1:
 		prResults, ciGateResults = multiRepoPRs(ctx, deps, cfg, resolved, manifest,
 			dagResult, planArtifactsDir, in.Goal, buildSummary)
-	} else {
+	default:
 		prResults, ciGateResults = singleRepoPR(ctx, deps, cfg, resolved, gitConfig,
 			dagResult, repoPath, planArtifactsDir, in.Goal, buildSummary,
 			prdMarkdown, architectureMarkdown)
