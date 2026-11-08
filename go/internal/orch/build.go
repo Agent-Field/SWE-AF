@@ -19,6 +19,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/envelope"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
+	"github.com/Agent-Field/SWE-AF/go/internal/nochange"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
@@ -516,7 +517,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	default:
 		prResults, ciGateResults = singleRepoPR(ctx, deps, cfg, resolved, gitConfig,
 			dagResult, repoPath, planArtifactsDir, in.Goal, buildSummary,
-			prdMarkdown, architectureMarkdown)
+			prdMarkdown, architectureMarkdown, buildBaseSHA)
 	}
 
 	// 5. WORKSPACE CLEANUP (non-blocking).
@@ -725,7 +726,7 @@ func failedCriteriaOf(verification map[string]any) []map[string]any {
 // singleRepoPR ports the single-repo push + PR + CI-gate block (app.py:1264-1367).
 func singleRepoPR(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	resolved map[string]string, gitConfig, dagResult map[string]any,
-	repoPath, artifactsDir, goal, buildSummary, prdMarkdown, architectureMarkdown string,
+	repoPath, artifactsDir, goal, buildSummary, prdMarkdown, architectureMarkdown, buildBaseSHA string,
 ) ([]schemas.RepoPRResult, []map[string]any) {
 
 	prResults := []schemas.RepoPRResult{}
@@ -750,6 +751,10 @@ func singleRepoPR(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 
 	// The harness may not push (pr_push.go), so the orchestrator does.
 	branch := mapStr(gitConfig, "integration_branch", "")
+	if madeNoChanges(ctx, repoPath, branch, baseBranch, buildBaseSHA) {
+		deps.Note(ctx, nochange.Note, "build", "github_pr", "skipped", "no_changes")
+		return prResults, ciGateResults
+	}
 	pushed := pushIntegrationBranch(ctx, deps, repoPath, branch)
 
 	prResult, perr := deps.Call(ctx, "run_github_pr", map[string]any{
@@ -831,6 +836,14 @@ func multiRepoPRs(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	ciGateResults := []map[string]any{}
 
 	deps.Note(ctx, "Phase 4: Multi-repo Push + PRs", "build", "github_pr", "multi-repo")
+	eligible, unchanged := 0, 0
+	defer func() {
+		// Only when no repository changed does the run as a whole end with the
+		// plain outcome; a repository that changed still opens its own PR.
+		if eligible > 0 && unchanged == eligible {
+			deps.Note(ctx, nochange.Note, "build", "github_pr", "skipped", "no_changes")
+		}
+	}()
 	for i := range manifest.Repos {
 		wsRepo := manifest.Repos[i]
 		if !wsRepo.CreatePR || !cfg.EnableGithubPR {
@@ -857,6 +870,15 @@ func multiRepoPRs(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 		}
 		if repoBaseBranch == "" {
 			repoBaseBranch = "main"
+		}
+
+		eligible++
+		if madeNoChanges(ctx, wsRepo.AbsolutePath, repoIntegrationBranch, repoBaseBranch,
+			mapStr(repoGitInit, "initial_commit_sha", "")) {
+			unchanged++
+			deps.Note(ctx, fmt.Sprintf("%s: the run made no changes there, so it opens no PR", wsRepo.RepoName),
+				"build", "github_pr", "skipped", "no_changes")
+			continue
 		}
 
 		completedForRepo := filterCompletedForRepo(dagResult, wsRepo.RepoName)

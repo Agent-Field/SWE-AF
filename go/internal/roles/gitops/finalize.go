@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/afx"
+	"github.com/Agent-Field/SWE-AF/go/internal/nochange"
 	gitprompts "github.com/Agent-Field/SWE-AF/go/internal/prompts/gitops"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
@@ -146,6 +147,15 @@ func RunGitHubPR(ctx context.Context, deps *Deps, input map[string]any) (any, er
 	in, err := afx.Bind[githubPRInput](input)
 	if err != nil {
 		return nil, err
+	}
+
+	// A BRANCH THAT CHANGES NO FILE OPENS NO PULL REQUEST, whatever commits it
+	// carries (issue #309: two empty commits opened the 0-file PR #315). The
+	// orchestrators check this before pushing; the role checks again so no
+	// caller can open one.
+	if v := nochange.Check(ctx, in.RepoPath, in.IntegrationBranch, in.BaseBranch); v.Known && v.Empty {
+		deps.App.Note(ctx, nochange.Note, "github_pr", "skipped", "no_changes")
+		return schemas.GitHubPRResult{Success: false, ErrorMessage: nochange.Note}, nil
 	}
 
 	deps.App.Note(ctx, fmt.Sprintf("GitHub PR: pushing %s and creating PR",

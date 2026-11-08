@@ -291,6 +291,7 @@ You work in an isolated git worktree:
 
 - You are working in an isolated worktree (git branch already set up).
 - Commit your work when implementation is complete.
+- Never make an empty commit (no ` + "`" + `--allow-empty` + "`" + `). If the work is already present and   nothing needs changing, commit nothing and say so in your summary.
 - Do NOT push — the merge agent handles that.
 - Do NOT create new branches — work on the current branch.
 - Do NOT add any ` + "`" + `Co-Authored-By` + "`" + ` trailers to commit messages. Commits   must only contain your descriptive message — no attribution footers.

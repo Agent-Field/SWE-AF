@@ -27,6 +27,7 @@ import (
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/critcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/harnessx"
+	"github.com/Agent-Field/SWE-AF/go/internal/nochange"
 	"github.com/Agent-Field/SWE-AF/go/internal/projectcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
@@ -165,7 +166,7 @@ var runProjectCheck = projectcheck.Run
 
 // reconcileCriteria is the seam tests replace; the default re-runs failed
 // criteria and repairs or stops counting the malformed ones (package critcheck).
-var reconcileCriteria = critcheck.Reconcile
+var reconcileCriteria = critcheck.ReconcileFrom
 
 func runGit(ctx context.Context, dir string, args ...string) gitResult {
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -521,7 +522,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	// A check the tool refused to run is repaired or not counted (issue #291);
 	// this runs before the project check, which it can never lift.
 	if !mapBool(verification, "passed") {
-		for _, f := range reconcileCriteria(ctx, repoPath, verification) {
+		for _, f := range reconcileCriteria(ctx, repoPath, baseSHA, verification) {
 			tag := "not_counted"
 			if f.Action != critcheck.NotCounted {
 				tag = "repaired"
@@ -573,19 +574,28 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			partialOrSuccess(success), completedCount, totalCount, getString(verification, "summary", ""))
 
 		completedIssues := completedIssuesFromResults(taskResults)
-		rawPR, prErr := deps.Call(ctx, node+".run_github_pr", map[string]any{
-			"repo_path":          repoPath,
-			"integration_branch": gitConfig["integration_branch"],
-			"base_branch":        baseBranch,
-			"goal":               in.Goal,
-			"build_summary":      buildSummary,
-			"completed_issues":   completedIssues,
-			"accumulated_debt":   []any{},
-			"artifacts_dir":      absArtifactsDir,
-			"model":              resolved["git_model"],
-			"permission_mode":    cfg.PermissionMode,
-			"ai_provider":        aiProvider,
-		})
+		// A NOTHING-TO-CHANGE RUN OPENS NO PULL REQUEST (issue #309): the
+		// branch is compared with the base by its tree, not its commits.
+		integrationBranch, _ := gitConfig["integration_branch"].(string)
+		var rawPR map[string]any
+		var prErr error
+		if v := nochange.Check(ctx, repoPath, integrationBranch, baseBranch, baseSHA); v.Known && v.Empty {
+			deps.note(ctx, nochange.Note, "fast_build", "github_pr", "skipped", "no_changes")
+		} else {
+			rawPR, prErr = deps.Call(ctx, node+".run_github_pr", map[string]any{
+				"repo_path":          repoPath,
+				"integration_branch": gitConfig["integration_branch"],
+				"base_branch":        baseBranch,
+				"goal":               in.Goal,
+				"build_summary":      buildSummary,
+				"completed_issues":   completedIssues,
+				"accumulated_debt":   []any{},
+				"artifacts_dir":      absArtifactsDir,
+				"model":              resolved["git_model"],
+				"permission_mode":    cfg.PermissionMode,
+				"ai_provider":        aiProvider,
+			})
+		}
 		if prErr != nil {
 			deps.note(ctx, fmt.Sprintf("PR creation failed (non-fatal): %s", prErr),
 				"fast_build", "github_pr", "error")

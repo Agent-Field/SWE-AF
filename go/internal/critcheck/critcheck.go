@@ -45,9 +45,17 @@ const (
 	// RepairedFailed: the repaired command ran and failed for real, so the
 	// criterion stays failed with the repaired command's evidence.
 	RepairedFailed Action = "repaired_failed"
-	// NotCounted: the command was malformed and no repair is known; the
-	// criterion no longer counts against the run.
+	// NotCounted: the command was malformed and no repair is known, or it
+	// read uncommitted state and the rewritten command's output cannot be
+	// judged from the criterion's words; the criterion no longer counts
+	// against the run.
 	NotCounted Action = "not_counted"
+	// Rewritten: the command read the working tree after the work was
+	// committed; the base-comparing command ran in its place and passed.
+	Rewritten Action = "rewritten"
+	// RewrittenFailed: the base-comparing command ran and the work fails it
+	// for real, so the criterion stays failed with that evidence.
+	RewrittenFailed Action = "rewritten_failed"
 )
 
 // Finding is one failed criterion Reconcile found malformed.
@@ -59,10 +67,28 @@ type Finding struct {
 	// Repair is the command run in its place, "" when none was known.
 	Repair string
 	Action Action
+	// WorkingTree is true when the check read uncommitted state (see
+	// WorkingTreeRewrite) rather than being refused by its tool.
+	WorkingTree bool
 }
+
+// workingTreeProblem is the reason a working-tree check proves nothing.
+const workingTreeProblem = "it reads uncommitted changes, and the work is committed"
 
 // Note is the sentence a run records for the finding.
 func (f Finding) Note() string {
+	if f.WorkingTree {
+		switch f.Action {
+		case Rewritten:
+			return fmt.Sprintf("Acceptance check rewritten: `%s` %s; `%s` passed in its place",
+				f.Command, workingTreeProblem, f.Repair)
+		case RewrittenFailed:
+			return fmt.Sprintf("Acceptance check rewritten: `%s` %s; `%s` ran in its place and failed",
+				f.Command, workingTreeProblem, f.Repair)
+		default:
+			return fmt.Sprintf("Acceptance check not counted: `%s` %s", f.Command, workingTreeProblem)
+		}
+	}
 	switch f.Action {
 	case Repaired:
 		return fmt.Sprintf("Acceptance check repaired: `%s` cannot run as written (%s); `%s` passed in its place",
@@ -115,11 +141,19 @@ var runShell = func(ctx context.Context, dir, line string) (int, string, error) 
 // reconsidered here.
 const ProjectCheckField = "project_check"
 
-// Reconcile re-runs the commands of verification's failed criteria in repo
-// and rewrites the ones the tool itself refused (see the package comment).
-// When it changed something and no failed criterion remains, verification
-// passes. It returns what it found, in criterion order.
+// Reconcile is ReconcileFrom without a base commit: only checks the tool
+// itself refused are reconsidered.
 func Reconcile(ctx context.Context, repo string, verification map[string]any) []Finding {
+	return ReconcileFrom(ctx, repo, "", verification)
+}
+
+// ReconcileFrom re-runs the commands of verification's failed criteria in
+// repo and rewrites the ones the tool itself refused (see the package
+// comment). With base (the commit the run started from) it also rewrites the
+// checks that read uncommitted working-tree state once the work is committed
+// (see WorkingTreeRewrite). When it changed something and no failed criterion
+// remains, verification passes. It returns what it found, in criterion order.
+func ReconcileFrom(ctx context.Context, repo, base string, verification map[string]any) []Finding {
 	if verification == nil || strings.TrimSpace(repo) == "" {
 		return nil
 	}
@@ -127,6 +161,7 @@ func Reconcile(ctx context.Context, repo string, verification map[string]any) []
 		return nil
 	}
 	list := criteriaList(verification["criteria_results"])
+	committed := strings.TrimSpace(base) != "" && workIsCommitted(ctx, repo, base)
 	var findings []Finding
 	tried := 0
 	for _, c := range list {
@@ -147,6 +182,12 @@ func Reconcile(ctx context.Context, repo string, verification map[string]any) []
 			continue
 		}
 		tried++
+		if committed {
+			if f, ok := reconcileWorkingTree(ctx, repo, base, c, crit, cmds); ok {
+				findings = append(findings, f)
+				continue
+			}
+		}
 		if f, ok := reconcileOne(ctx, repo, c, crit, cmds); ok {
 			findings = append(findings, f)
 		}
@@ -347,7 +388,7 @@ var backtickSpan = regexp.MustCompile("`([^`\n]+)`")
 // planner wrote #291's: "go doc ./ ledger.Ledger.Checksum (run from the repo
 // root) prints …". It ends at a parenthesis, a verb describing the result,
 // or punctuation.
-var inlineCommand = regexp.MustCompile(`(?:^|[\s:])((?:go|cargo|grep|egrep|rg|test|npm|pytest)\s[^\n]*?)(?:\s+\(|\s+(?:prints|outputs|shows|exits|returns|passes|succeeds|fails|reports|lists|must|should|yields|produces|contains)\b|[;,]\s|\.\s+[A-Z]|$)`)
+var inlineCommand = regexp.MustCompile(`(?:^|[\s:])((?:go|cargo|git|grep|egrep|rg|test|npm|pytest)\s[^\n]*?)(?:\s+\(|\s+(?:prints|outputs|shows|exits|returns|passes|succeeds|fails|reports|lists|must|should|yields|produces|contains)\b|[;,]\s|\.\s+[A-Z]|$)`)
 
 // Commands returns the commands a criterion names: its backticked spans, or
 // failing those, a command spelled inline.
@@ -388,6 +429,9 @@ var checkPrograms = map[string][]string{
 	"test":   nil,
 	"[":      nil,
 	"pytest": nil,
+	// git only to read what changed: status and diff are the working-tree
+	// checks WorkingTreeRewrite turns into base comparisons.
+	"git": {"status", "diff"},
 }
 
 // segmentSplit separates the parts of a compound command line.
@@ -483,4 +527,8 @@ const PlannerRule = "- **Command checks must be valid invocations**: a criterion
 	"  `go doc <pkg> <Type>.<Method>`: `go doc ./ Ledger.Checksum` or\n" +
 	"  `go doc . Ledger.Checksum`, never `go doc ./ ledger.Ledger.Checksum` (after a\n" +
 	"  package path the symbol takes at most one dot). Prefer a test that exercises\n" +
-	"  the behavior (`go test ./... -run TestName`) over a documentation lookup.\n"
+	"  the behavior (`go test ./... -run TestName`) over a documentation lookup.\n" +
+	"- **Never check the working tree**: the work is committed before it is\n" +
+	"  verified, so `git status` and a bare `git diff` (or `git diff --cached`)\n" +
+	"  print nothing for every implementation. To check which files changed,\n" +
+	"  compare with the base branch, naming it: `git diff --name-only main...HEAD`.\n"

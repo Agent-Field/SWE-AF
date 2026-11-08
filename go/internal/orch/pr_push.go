@@ -14,7 +14,20 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/nochange"
 )
+
+// madeNoChanges reports whether branch changes no file against the base
+// branch (or, when that does not resolve, the commit the run started from).
+// A NOTHING-TO-CHANGE RUN OPENS NO PULL REQUEST: issue #309 (WorkAF r9) made two
+// empty commits, so GitHub's "No commits between" refusal never fired and PR
+// #315 opened with 0 files claiming to add what main already had. Unknown
+// (no branch, no base) is not "no changes"; the publish goes ahead as before.
+func madeNoChanges(ctx context.Context, repoPath, branch, baseBranch, startSHA string) bool {
+	v := nochange.Check(ctx, repoPath, branch, baseBranch, startSHA)
+	return v.Known && v.Empty
+}
 
 // pushIntegrationBranch pushes branch to origin and reports whether it landed.
 func pushIntegrationBranch(ctx context.Context, deps *Deps, repoPath, branch string) bool {

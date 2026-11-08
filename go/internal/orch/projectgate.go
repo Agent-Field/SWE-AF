@@ -35,7 +35,7 @@ func projectTargets(manifest *schemas.WorkspaceManifest, repoPath, buildBaseSHA 
 }
 
 // reconcileCriteria is the seam tests replace; the default is the real pass.
-var reconcileCriteria = critcheck.Reconcile
+var reconcileCriteria = critcheck.ReconcileFrom
 
 // applyCriterionAudit re-runs the commands of the verifier's failed criteria
 // and repairs, or stops counting, the ones the tool itself refused to run
@@ -47,7 +47,7 @@ func applyCriterionAudit(ctx context.Context, deps *Deps, verification map[strin
 		return
 	}
 	for _, t := range targets {
-		for _, f := range reconcileCriteria(ctx, t.path, verification) {
+		for _, f := range reconcileCriteria(ctx, t.path, t.base, verification) {
 			tag := "not_counted"
 			if f.Action != critcheck.NotCounted {
 				tag = "repaired"

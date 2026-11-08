@@ -21,6 +21,10 @@ actionable task list where every task is self-contained and unambiguous.
   `go doc . Ledger.Checksum`, never `go doc ./ ledger.Ledger.Checksum` (after a
   package path the symbol takes at most one dot). Prefer a test that exercises
   the behavior (`go test ./... -run TestName`) over a documentation lookup.
+- **Never check the working tree**: the work is committed before it is
+  verified, so `git status` and a bare `git diff` (or `git diff --cached`)
+  print nothing for every implementation. To check which files changed,
+  compare with the base branch, naming it: `git diff --name-only main...HEAD`.
 - **Right-sized tasks**: Tasks are neither too broad ("implement everything")
   nor too narrow ("add a single import"). Each task represents a coherent
   unit of work completable in a single agent session.
