@@ -135,7 +135,7 @@ func planReviewMarkdown(
 			}
 			b.WriteString("\n")
 			if len(problems) > 0 {
-				b.WriteString("## Not reflected yet\n\nThe plan was revised twice and still says this; approve only if you accept it:\n\n")
+				b.WriteString("## Not reflected yet\n\n" + revisedTimes(len(history)) + " and still says this; approve only if you accept it:\n\n")
 				for _, p := range problems {
 					b.WriteString("- " + t(p) + "\n")
 				}
@@ -943,4 +943,20 @@ func firstLine(s string) string {
 		s = s[:i]
 	}
 	return strings.TrimSpace(s)
+}
+
+// revisedTimes says how many times the PERSON had the plan revised: one entry
+// in the history per note they sent back. The gate may redraft a revision a
+// second time on its own (approval_gate.go's recheck), but that is one
+// revision to the person, who asked once; live r7 (job 267, 2026-11-08)
+// read "The plan was revised twice" after a single note.
+func revisedTimes(n int) string {
+	switch n {
+	case 0, 1:
+		return "The plan was revised once"
+	case 2:
+		return "The plan was revised twice"
+	default:
+		return fmt.Sprintf("The plan was revised %d times", n)
+	}
 }

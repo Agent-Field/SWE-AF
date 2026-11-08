@@ -477,11 +477,40 @@ func protectsLeftover(line string, dupNames, planned []string) bool {
 		}
 	}
 	if len(dupNames) == 0 {
-		// Without a duplicate pair in the tests, only words that defend
-		// a duplicate by name count ("near-identical", "on purpose").
-		return regexp.MustCompile(`(?i)near-identical|duplicate|on purpose|either allocation|both allocation`).MatchString(line)
+		// Without a duplicate pair in the tests, a line that names a test
+		// the plan does NOT add beside one it does is describing a rename's
+		// removal, not defending a leftover. Live r7 (job 267, 2026-11-08)
+		// renamed TestRefunds to TestRefundsSumsAbsoluteValues once, and the
+		// assumption "The two-refund test is named
+		// TestRefundsSumsAbsoluteValues, and no function named TestRefunds
+		// exists … nothing to duplicate" was shown as protecting a
+		// duplicate, under "Not reflected yet", while it confirmed the
+		// change. ERR TOWARD SILENCE: a false "not reflected" teaches the
+		// person to ignore the section that matters.
+		for _, n := range goTestPattern.FindAllString(line, -1) {
+			if !containsString(planned, n) {
+				return false
+			}
+		}
+		// Only words that defend a duplicate by name count ("near-identical",
+		// "on purpose"), and never a duplicate the line says there is none of.
+		return duplicateDefence.MatchString(negatedDuplicate.ReplaceAllString(line, ""))
 	}
 	return true
+}
+
+var (
+	duplicateDefence = regexp.MustCompile(`(?i)near-identical|duplicate|on purpose|either allocation|both allocation`)
+	negatedDuplicate = regexp.MustCompile(`(?i)\b(?:no|not an?|nor an?|never an?|without an?|nothing to)\s+(?:\w+\s+)?duplicat\w*`)
+)
+
+func containsString(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // sameCheck: two test names that, past their shared subject, name the same
