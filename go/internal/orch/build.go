@@ -389,6 +389,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		applyProjectGate(ctx, deps, verification, projectTargets(manifest, repoPath, buildBaseSHA))
 
 		if asBool(verification["passed"]) || cycle >= cfg.MaxVerifyFixCycles {
 			break
@@ -481,7 +482,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	prdMarkdown, architectureMarkdown := readPlanDocs(planResult)
 
 	// 3b. FINALIZE.
-	finalizeRepos(ctx, deps, cfg, resolved, manifest, repoPath, planArtifactsDir)
+	finalizeRepos(ctx, deps, cfg, resolved, manifest, repoPath, planArtifactsDir, buildBaseSHA)
 
 	// 4. PUSH & PR (+ CI gate).
 	prResults := []schemas.RepoPRResult{}
@@ -607,9 +608,11 @@ func prepareSingleRepo(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 // finalizeRepos ports the FINALIZE phase (app.py:1117-1175) for multi- and
 // single-repo builds. A finalize failure is non-blocking (noted, not raised).
 func finalizeRepos(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
-	resolved map[string]string, manifest *schemas.WorkspaceManifest, repoPath, artifactsDir string) {
+	resolved map[string]string, manifest *schemas.WorkspaceManifest, repoPath, artifactsDir, buildBaseSHA string) {
 
-	callFinalize := func(path, repoName string) {
+	// base_ref is each repo's starting commit: the cleanup may remove only
+	// tracked files the run created since it (roles/gitops/finalizeguard.go).
+	callFinalize := func(path, repoName, baseRef string) {
 		label := "run_repo_finalize"
 		if repoName != "" {
 			label = fmt.Sprintf("run_repo_finalize (%s)", repoName)
@@ -620,6 +623,7 @@ func finalizeRepos(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 			"model":           resolved["git_model"],
 			"permission_mode": cfg.PermissionMode,
 			"ai_provider":     cfg.AIProvider(),
+			"base_ref":        baseRef,
 		}, label)
 		if ferr != nil {
 			suffix := ""
@@ -648,12 +652,13 @@ func finalizeRepos(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 		deps.Note(ctx, fmt.Sprintf("Phase 3b: Multi-repo finalization (%d repos)", len(manifest.Repos)),
 			"build", "finalize", "multi-repo")
 		for i := range manifest.Repos {
-			callFinalize(manifest.Repos[i].AbsolutePath, manifest.Repos[i].RepoName)
+			callFinalize(manifest.Repos[i].AbsolutePath, manifest.Repos[i].RepoName,
+				mapStr(manifest.Repos[i].GitInitResult, "initial_commit_sha", ""))
 		}
 		return
 	}
 	deps.Note(ctx, "Phase 3b: Repo finalization", "build", "finalize")
-	callFinalize(repoPath, "")
+	callFinalize(repoPath, "", buildBaseSHA)
 }
 
 // newBuildID returns an 8-hex-char build id (uuid.uuid4().hex[:8] parity).

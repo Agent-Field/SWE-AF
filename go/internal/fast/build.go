@@ -26,6 +26,7 @@ import (
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/harnessx"
+	"github.com/Agent-Field/SWE-AF/go/internal/projectcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
@@ -157,6 +158,9 @@ type gitResult struct {
 	stderr   string
 	exitCode int
 }
+
+// runProjectCheck is the seam tests replace; the default is the real check.
+var runProjectCheck = projectcheck.Run
 
 func runGit(ctx context.Context, dir string, args ...string) gitResult {
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -351,6 +355,10 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		return nil, err
 	}
 
+	// The commit the work starts from: the project build check compares the
+	// finished work against it (see package projectcheck).
+	baseSHA := strings.TrimSpace(runGit(ctx, repoPath, "rev-parse", "--verify", "--quiet", "HEAD").stdout)
+
 	resolved, err := config.FastResolveModels(cfg)
 	if err != nil {
 		return nil, err
@@ -500,6 +508,13 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	} else {
 		verification = rawVerify
 	}
+	// A RED BUILD FAILS THE RUN WHATEVER THE VERIFIER SAID: the project's own
+	// build and test commands run here, in code, outside the plan.
+	if check := runProjectCheck(ctx, repoPath, baseSHA); check.Ran && !check.Passed {
+		deps.note(ctx, fmt.Sprintf("Project build check failed: `%s` exited %d",
+			check.FailedCommand, check.ExitCode), "fast_build", "verify", "project_check", "failed")
+		check.Fold(verification, "")
+	}
 	success := mapBool(verification, "passed")
 
 	// ── 4. REPO FINALIZE (non-fatal) ────────────────────────────────────────
@@ -510,6 +525,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		"model":           resolved["git_model"],
 		"permission_mode": cfg.PermissionMode,
 		"ai_provider":     aiProvider,
+		"base_ref":        baseSHA,
 	}); finErr != nil {
 		deps.note(ctx, fmt.Sprintf("Finalize failed (non-fatal): %s", finErr),
 			"fast_build", "finalize", "error")
