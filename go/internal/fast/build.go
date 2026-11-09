@@ -25,7 +25,10 @@ import (
 	"time"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/config"
+	"github.com/Agent-Field/SWE-AF/go/internal/critcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/harnessx"
+	"github.com/Agent-Field/SWE-AF/go/internal/nochange"
+	"github.com/Agent-Field/SWE-AF/go/internal/projectcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
 )
@@ -157,6 +160,13 @@ type gitResult struct {
 	stderr   string
 	exitCode int
 }
+
+// runProjectCheck is the seam tests replace; the default is the real check.
+var runProjectCheck = projectcheck.Run
+
+// reconcileCriteria is the seam tests replace; the default re-runs failed
+// criteria and repairs or stops counting the malformed ones (package critcheck).
+var reconcileCriteria = critcheck.ReconcileFrom
 
 func runGit(ctx context.Context, dir string, args ...string) gitResult {
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -351,6 +361,10 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		return nil, err
 	}
 
+	// The commit the work starts from: the project build check compares the
+	// finished work against it (see package projectcheck).
+	baseSHA := strings.TrimSpace(runGit(ctx, repoPath, "rev-parse", "--verify", "--quiet", "HEAD").stdout)
+
 	resolved, err := config.FastResolveModels(cfg)
 	if err != nil {
 		return nil, err
@@ -418,6 +432,11 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		})
 		if err != nil {
 			return nil, nil, err
+		}
+		// Respell the criteria forms their tool is known to refuse (#291).
+		for _, rw := range critcheck.FixPlan(planResult) {
+			deps.note(ctx, fmt.Sprintf("Acceptance check respelled before work: %q became %q", rw.From, rw.To),
+				"fast_build", "plan", "criterion_check", "respelled")
 		}
 		tasks := planResult["tasks"]
 		if tasks == nil {
@@ -500,17 +519,44 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	} else {
 		verification = rawVerify
 	}
+	// A check the tool refused to run is repaired or not counted (issue #291);
+	// this runs before the project check, which it can never lift.
+	if !mapBool(verification, "passed") {
+		for _, f := range reconcileCriteria(ctx, repoPath, baseSHA, verification) {
+			tag := "not_counted"
+			if f.Action != critcheck.NotCounted {
+				tag = "repaired"
+			}
+			deps.note(ctx, f.Note(), "fast_build", "verify", "criterion_check", tag)
+		}
+	}
+	// A RED BUILD FAILS THE RUN WHATEVER THE VERIFIER SAID: the project's own
+	// build and test commands run here, in code, outside the plan, when
+	// SWE_STRICT_BUILD is enabled.
+	strict := config.StrictBuildEnabled()
+	if strict {
+		if check := runProjectCheck(ctx, repoPath, baseSHA); check.Ran && !check.Passed {
+			deps.note(ctx, fmt.Sprintf("Project build check failed: `%s` exited %d",
+				check.FailedCommand, check.ExitCode), "fast_build", "verify", "project_check", "failed")
+			check.Fold(verification, "")
+		}
+	}
 	success := mapBool(verification, "passed")
 
 	// ── 4. REPO FINALIZE (non-fatal) ────────────────────────────────────────
 	deps.note(ctx, "Fast build: finalize", "fast_build", "finalize")
-	if _, finErr := deps.Call(ctx, node+".run_repo_finalize", map[string]any{
+	finalizeInput := map[string]any{
 		"repo_path":       repoPath,
 		"artifacts_dir":   absArtifactsDir,
 		"model":           resolved["git_model"],
 		"permission_mode": cfg.PermissionMode,
 		"ai_provider":     aiProvider,
-	}); finErr != nil {
+		"base_ref":        baseSHA,
+	}
+	if strict {
+		finalizeInput["strict"] = true
+	}
+	if _, finErr := deps.Call(ctx, node+".run_repo_finalize", finalizeInput); finErr != nil {
 		deps.note(ctx, fmt.Sprintf("Finalize failed (non-fatal): %s", finErr),
 			"fast_build", "finalize", "error")
 	}
@@ -536,19 +582,37 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			partialOrSuccess(success), completedCount, totalCount, getString(verification, "summary", ""))
 
 		completedIssues := completedIssuesFromResults(taskResults)
-		rawPR, prErr := deps.Call(ctx, node+".run_github_pr", map[string]any{
-			"repo_path":          repoPath,
-			"integration_branch": gitConfig["integration_branch"],
-			"base_branch":        baseBranch,
-			"goal":               in.Goal,
-			"build_summary":      buildSummary,
-			"completed_issues":   completedIssues,
-			"accumulated_debt":   []any{},
-			"artifacts_dir":      absArtifactsDir,
-			"model":              resolved["git_model"],
-			"permission_mode":    cfg.PermissionMode,
-			"ai_provider":        aiProvider,
-		})
+		// A NOTHING-TO-CHANGE RUN OPENS NO PULL REQUEST (issue #309): when
+		// SWE_STRICT_BUILD is enabled, the branch is compared with the base by
+		// its tree, not its commits.
+		integrationBranch, _ := gitConfig["integration_branch"].(string)
+		var rawPR map[string]any
+		var prErr error
+		var nc nochange.Verdict
+		if strict {
+			nc = nochange.Check(ctx, repoPath, integrationBranch, baseBranch, baseSHA)
+		}
+		if strict && nc.Known && nc.Empty {
+			deps.note(ctx, nochange.Note, "fast_build", "github_pr", "skipped", "no_changes")
+		} else {
+			prInput := map[string]any{
+				"repo_path":          repoPath,
+				"integration_branch": gitConfig["integration_branch"],
+				"base_branch":        baseBranch,
+				"goal":               in.Goal,
+				"build_summary":      buildSummary,
+				"completed_issues":   completedIssues,
+				"accumulated_debt":   []any{},
+				"artifacts_dir":      absArtifactsDir,
+				"model":              resolved["git_model"],
+				"permission_mode":    cfg.PermissionMode,
+				"ai_provider":        aiProvider,
+			}
+			if strict {
+				prInput["strict"] = true
+			}
+			rawPR, prErr = deps.Call(ctx, node+".run_github_pr", prInput)
+		}
 		if prErr != nil {
 			deps.note(ctx, fmt.Sprintf("PR creation failed (non-fatal): %s", prErr),
 				"fast_build", "github_pr", "error")

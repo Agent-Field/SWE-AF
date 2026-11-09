@@ -1,0 +1,962 @@
+// This file (native_plan.go) renders a plan_result as the plan review a person
+// reads on the control-plane pause. It is written for an engineer deciding in a
+// minute whether to approve:
+//
+//   - On a revision, the person's own words come first, then one line per
+//     request saying how the plan changed (revision_check.go holds the plan to
+//     them), and anything the revision still does not reflect.
+//   - Then a SUMMARY of at most summaryCap lines: what changes, every file it
+//     touches and why, the tests it adds, what it will not change, and the
+//     risks or "none".
+//   - Then `## Details`: the full requirements, design, every planned change
+//     with its checks, and the order — the substance, unabridged.
+//
+// THE BODY IS SELF-CONTAINED. Everything in it is text the planner wrote for
+// other agents, so personText strips what the person cannot follow: machine
+// paths, HTML comments copied from the issue, and references to documents they
+// never see (AC numbers, §4, C1, D9, F2, "tech-lead finding"). Revision numbers
+// come from ONE counter, the gate's. There is no answer list: every door that
+// shows this draws its own answers.
+package orch
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
+)
+
+// maxPlanBody keeps the body inside the control plane's 256 KiB limit with
+// room to spare; a plan that large is cut with a line saying so.
+const maxPlanBody = 200 * 1024
+
+// summaryCap is the most lines the Summary may hold.
+const summaryCap = 12
+
+// NativePlanQuestion is the plan_review pause for one round of the gate.
+// revisionIter is 0 for the first plan; history carries the words that asked
+// for each earlier revision and what the check found.
+func NativePlanQuestion(
+	req ApprovalRequest,
+	planResult map[string]any,
+	revisionIter int,
+	history []map[string]any,
+) hitl.NativeQuestion {
+	title := personText(strings.TrimSpace(req.ReviewTitle), revisionIter)
+	if title == "" {
+		title = personText(firstLine(req.Goal), revisionIter)
+	}
+	question := fmt.Sprintf("Approve the plan for %s?", title)
+	if revisionIter > 0 {
+		question = fmt.Sprintf("Approve the plan for %s, %s?", title, revisedAfter(revisionIter))
+	}
+	id := ""
+	if req.ExecutionID != "" {
+		id = fmt.Sprintf("swe-plan-%s-r%d", req.ExecutionID, revisionIter+1)
+	}
+	expires := 0
+	if req.Cfg != nil {
+		expires = req.Cfg.ApprovalExpiresInHours
+	}
+	return hitl.NativeQuestion{
+		RequestID:      id,
+		Kind:           hitl.KindPlanReview,
+		Question:       question,
+		Body:           planReviewMarkdown(title, req.Goal, planResult, revisionIter, history, existingTestNames(req.RepoPath)),
+		Options:        hitl.ReviewOptions,
+		ExpiresInHours: expires,
+		ExecutionID:    req.ExecutionID,
+	}
+}
+
+// PlanReviewMarkdown renders the plan as markdown: summary first, details below.
+func PlanReviewMarkdown(
+	title, goal string,
+	planResult map[string]any,
+	revisionIter int,
+	history []map[string]any,
+) string {
+	return planReviewMarkdown(title, goal, planResult, revisionIter, history, nil)
+}
+
+// planReviewMarkdown is PlanReviewMarkdown knowing which tests the repository
+// already has, so the summary lists only the tests the plan ADDS.
+func planReviewMarkdown(
+	title, goal string,
+	planResult map[string]any,
+	revisionIter int,
+	history []map[string]any,
+	existingTests map[string]bool,
+) string {
+	// The architect often names components "C1 — Ledger.Len (root package)"
+	// and then cites them by id ("implemented in order C1 → C2 → C3"). The
+	// id is a reference the person never sees, so it is replaced by the
+	// component's own short name BEFORE references are stripped; stripping
+	// alone left "implemented in order → →" (live, 2026-11-07).
+	compIDs := componentIDs(planResult)
+	t := func(s string) string { return personText(nameComponents(s, compIDs), revisionIter) }
+	var b strings.Builder
+	// The question already says which note revised the plan, and the desk
+	// shows it as the card's title right above this heading, so the heading
+	// stays the plan's name alone: saying it in both read "revised after your
+	// first note" twice in one view (live r3, 2026-11-07). The body still
+	// opens a revision with "What you asked to change".
+	b.WriteString("# Plan: " + title + "\n\n")
+
+	prd, _ := mapGet(planResult, "prd", map[string]any{}).(map[string]any)
+	arch, _ := mapGet(planResult, "architecture", map[string]any{}).(map[string]any)
+	issues := asMapList(mapGet(planResult, "issues", nil))
+	order := issueOrder(planResult, issues)
+
+	// --- the person's words, and how the plan changed -------------------------
+	var avoided []string
+	if len(history) > 0 {
+		last := history[len(history)-1]
+		if fb, _ := last["feedback"].(string); strings.TrimSpace(fb) != "" {
+			reqs := readReviewRequests(fb)
+			beforeTests := stringList(last["before_tests"])
+			problems := revisionChecks(planResult, reqs, fb, beforeTests)
+			diff := []string(nil)
+			if _, ok := last["before_tests"]; ok {
+				diff = planDiff(beforeTests, stringList(last["before_files"]), planResult, existingTests)
+			}
+			b.WriteString("## What you asked to change\n\n" + quote(strings.TrimSpace(fb)) + "\n\n")
+			b.WriteString("## How the plan changed\n\n")
+			for _, l := range howThePlanChanged(reqs, problems, len(diff) > 0) {
+				b.WriteString(l + "\n")
+			}
+			for _, l := range diff {
+				b.WriteString(l + "\n")
+			}
+			b.WriteString("\n")
+			if len(problems) > 0 {
+				b.WriteString("## Not reflected yet\n\n" + revisedTimes(len(history)) + " and still says this; approve only if you accept it:\n\n")
+				for _, p := range problems {
+					b.WriteString("- " + t(p) + "\n")
+				}
+				b.WriteString("\n")
+			}
+			if re, _ := last["revision_error"].(string); re != "" {
+				b.WriteString("The design could not be fully revised, so this is the last complete design.\n\n")
+			}
+			for _, r := range reqs {
+				if r.Avoid != "" {
+					avoided = append(avoided, r.Avoid)
+				}
+			}
+		}
+	}
+
+	// --- summary ---------------------------------------------------------------
+	b.WriteString("## Summary\n\n")
+	b.WriteString(summaryBlock(summaryLines(prd, approverSummary(planResult), order, avoided, existingTests, t)))
+	b.WriteString("\n")
+
+	// --- details ---------------------------------------------------------------
+	b.WriteString("## Details\n\n")
+	if g := t(goal); g != "" {
+		b.WriteString("### Goal\n\n" + g + "\n\n")
+	}
+	if vd := t(mapStr(prd, "validated_description", "")); vd != "" {
+		b.WriteString("### What it will deliver\n\n" + demoteHeadings(vd) + "\n\n")
+	}
+	bulletSection(&b, "Must have", prd["must_have"], t)
+	bulletSection(&b, "Nice to have", prd["nice_to_have"], t)
+	bulletSection(&b, "Left out on purpose", prd["out_of_scope"], t)
+	numberedSection(&b, "How you will know it is done", prd["acceptance_criteria"], t)
+	bulletSection(&b, "Assumptions", prd["assumptions"], t)
+	bulletSection(&b, "Risks", prd["risks"], t)
+
+	if len(arch) > 0 {
+		b.WriteString("### Design\n\n")
+		if s := t(mapStr(arch, "summary", "")); s != "" {
+			b.WriteString(demoteHeadings(s) + "\n\n")
+		}
+		for _, comp := range asMapList(mapGet(arch, "components", nil)) {
+			fmt.Fprintf(&b, "- **%s**: %s", t(mapStr(comp, "name", "Component")), t(mapStr(comp, "responsibility", "")))
+			if files := codeList(comp["touches_files"]); files != "" {
+				b.WriteString(" (" + files + ")")
+			}
+			b.WriteString("\n")
+		}
+		if decs := asMapList(mapGet(arch, "decisions", nil)); len(decs) > 0 {
+			b.WriteString("\nDecisions:\n\n")
+			for _, dec := range decs {
+				// A decision the architect wrote as a bullet ("- Total() is
+				// not modified") would render as "**- Total()…**".
+				name := strings.TrimSpace(strings.TrimLeft(t(mapStr(dec, "decision", "")), "-*• "))
+				fmt.Fprintf(&b, "- **%s** — %s\n", name, t(mapStr(dec, "rationale", "")))
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	if len(issues) > 0 {
+		fmt.Fprintf(&b, "### Planned changes (%d)\n\n", len(issues))
+		for i, iss := range order {
+			fmt.Fprintf(&b, "#### %d. %s\n\n", i+1, t(mapStr(iss, "title", mapStr(iss, "name", ""))))
+			if d := t(mapStr(iss, "description", "")); d != "" {
+				b.WriteString(demoteHeadings(d) + "\n\n")
+			}
+			if f := codeList(iss["files_to_modify"]); f != "" {
+				b.WriteString("- Changes: " + f + "\n")
+			}
+			if f := codeList(iss["files_to_create"]); f != "" {
+				b.WriteString("- Creates: " + f + "\n")
+			}
+			if deps := coerceAnyList(iss["depends_on"]); len(deps) > 0 {
+				b.WriteString("- After: " + strings.Join(titlesFor(deps, issues), ", ") + "\n")
+			}
+			if ts := t(mapStr(iss, "testing_strategy", "")); ts != "" {
+				b.WriteString("- Tested by: " + ts + "\n")
+			}
+			if ac := coerceAnyList(iss["acceptance_criteria"]); len(ac) > 0 {
+				b.WriteString("- Done when:\n")
+				for _, c := range ac {
+					b.WriteString("  - " + t(fmt.Sprint(c)) + "\n")
+				}
+			}
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString("### Planned changes\n\nThe planner produced no changes. Approving builds nothing.\n\n")
+	}
+
+	if levels := levelLines(planResult, issues); len(levels) > 1 {
+		b.WriteString("### Order\n\n")
+		for _, l := range levels {
+			b.WriteString(t(l) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	out := strings.TrimRight(b.String(), "\n") + "\n"
+	if len(out) > maxPlanBody {
+		cut := maxPlanBody
+		for cut > 0 && out[cut]&0xC0 == 0x80 {
+			cut--
+		}
+		out = out[:cut] + "\n\n… the plan is longer than this page can carry; the rest was cut.\n"
+	}
+	return out
+}
+
+// summaryBlock lays the summary's lines out as markdown blocks. Each field is
+// its own paragraph and only a list item follows the line before it directly.
+// Written one line after another, "**Tests it adds:**" directly below the
+// Files list was a lazy continuation of its last item, and the fields below
+// it ran on into the same paragraph (job 70, 2026-11-07).
+func summaryBlock(lines []string) string {
+	var b strings.Builder
+	for i, l := range lines {
+		if i > 0 {
+			if strings.HasPrefix(l, "- ") {
+				b.WriteString("\n")
+			} else {
+				b.WriteString("\n\n")
+			}
+		}
+		b.WriteString(l)
+	}
+	if len(lines) > 0 {
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// summaryLines is the Summary: at most summaryCap lines.
+//
+// The sprint planner writes it for the approver as its own field
+// (approver_summary): one or two plain sentences of what changes, each file
+// with ITS OWN purpose, the new tests, and short phrases for what is left
+// alone and what could go wrong. A plan without that field (an older planner,
+// a model that skipped it) falls back to what the plan's other parts say. In
+// either case every entry is a COMPLETE phrase: an entry too long for the
+// summary is shortened to its first sentence or clause, or left out for
+// Details to carry, and is never cut mid-word (owner review, 2026-11-07).
+func summaryLines(prd, as map[string]any, order []map[string]any, avoided []string, existingTests map[string]bool, t func(string) string) []string {
+	var lines []string
+	avoid := map[string]bool{}
+	for _, f := range avoided {
+		avoid[strings.ToLower(strings.Trim(f, "`"))] = true
+	}
+
+	what := phrase(t(mapStr(as, "what_changes", "")), 280)
+	if what == "" {
+		what = phrase(t(stripMarkdownHeadings(mapStr(prd, "validated_description", ""))), 280)
+	}
+	if what == "" && len(order) > 0 {
+		what = phrase(t(mapStr(order[0], "title", "")), 160)
+	}
+	if what != "" {
+		lines = append(lines, "**What changes:** "+what)
+	}
+
+	// Files: the planner's own list and purposes first, then any file a
+	// planned change touches that the list forgot, with a purpose derived
+	// from that change.
+	purposes := map[string]string{}
+	var files []string
+	addFile := func(name, purpose string) {
+		name = strings.Trim(strings.TrimSpace(name), "`")
+		if name == "" || avoid[strings.ToLower(name)] {
+			return
+		}
+		if _, ok := purposes[name]; ok {
+			if purposes[name] == "" {
+				purposes[name] = purpose
+			}
+			return
+		}
+		files = append(files, name)
+		purposes[name] = purpose
+	}
+	for _, fp := range asMapList(as["files"]) {
+		addFile(mapStr(fp, "path", ""), phrase(t(mapStr(fp, "purpose", "")), 90))
+	}
+	for _, iss := range order {
+		for _, k := range []string{"files_to_modify", "files_to_create"} {
+			for _, f := range coerceAnyList(iss[k]) {
+				name := strings.TrimSpace(fmt.Sprint(f))
+				addFile(name, derivedPurpose(name, k == "files_to_create", iss, existingTests, t))
+			}
+		}
+	}
+	sort.SliceStable(files, func(i, j int) bool { return !isTestFile(files[i]) && isTestFile(files[j]) })
+	if len(files) > 0 {
+		lines = append(lines, "**Files:**")
+		const max = 5
+		for i, f := range files {
+			if i == max {
+				lines = append(lines, fmt.Sprintf("- and %d more (see Details)", len(files)-max))
+				break
+			}
+			if p := purposes[f]; p != "" {
+				lines = append(lines, fmt.Sprintf("- `%s` — %s", f, p))
+			} else {
+				lines = append(lines, fmt.Sprintf("- `%s`", f))
+			}
+		}
+	}
+
+	// Tests: the planner's list, held to the same law as the derived one —
+	// a test the repository already has is not one the plan adds.
+	var tests []string
+	seen := map[string]bool{}
+	for _, it := range coerceAnyList(as["tests_added"]) {
+		n := strings.Trim(strings.TrimSpace(fmt.Sprint(it)), "`")
+		if goTestPattern.MatchString(n) && !existingTests[n] && !seen[n] {
+			seen[n] = true
+			tests = append(tests, n)
+		}
+	}
+	if len(tests) == 0 {
+		tests = testNames(order, existingTests)
+	}
+	if len(tests) > 0 {
+		lines = append(lines, "**Tests it adds:** "+codeJoin(tests))
+	}
+
+	var not []string
+	for _, f := range avoided {
+		not = append(not, "`"+f+"`")
+	}
+	notSource := coerceAnyList(as["will_not_change"])
+	if len(notSource) == 0 {
+		notSource = coerceAnyList(prd["out_of_scope"])
+	}
+	for _, it := range notSource {
+		if len(not) >= 3 {
+			break
+		}
+		p := phrase(t(fmt.Sprint(it)), 90)
+		if p == "" || mentionsAny(p, avoided) {
+			continue
+		}
+		not = append(not, p)
+	}
+	if len(not) > 0 {
+		lines = append(lines, "**Will not change:** "+joinPhrases(not))
+	}
+
+	risks := coerceAnyList(as["risks"])
+	_, plannerSpoke := as["risks"]
+	if len(risks) == 0 && !plannerSpoke {
+		risks = coerceAnyList(prd["risks"])
+	}
+	var rs []string
+	for _, it := range risks {
+		if p := phrase(t(fmt.Sprint(it)), 120); p != "" {
+			rs = append(rs, p)
+		}
+	}
+	risk := "none"
+	switch {
+	case len(rs) == 0 && len(risks) > 0:
+		risk = "listed in Details"
+	case len(rs) == 1:
+		risk = rs[0]
+	case len(rs) >= 2:
+		risk = joinPhrases(rs[:2])
+		if len(rs) > 2 {
+			risk += fmt.Sprintf(" (+%d more in Details)", len(rs)-2)
+		}
+	}
+	lines = append(lines, "**Risks:** "+risk)
+
+	if len(lines) > summaryCap {
+		lines = lines[:summaryCap]
+	}
+	return lines
+}
+
+// derivedPurpose is a file's purpose when the planner gave none: a test file
+// names the new tests its change adds; any other file is the change's title.
+func derivedPurpose(file string, created bool, iss map[string]any, existing map[string]bool, t func(string) string) string {
+	if isTestFile(file) {
+		if names := testNames([]map[string]any{iss}, existing); len(names) > 0 {
+			return strings.Join(names, ", ")
+		}
+	}
+	p := phrase(t(mapStr(iss, "title", "")), 90)
+	if created && p != "" {
+		p = "new: " + p
+	}
+	return p
+}
+
+func mentionsAny(s string, needles []string) bool {
+	ls := strings.ToLower(s)
+	for _, n := range needles {
+		if n != "" && strings.Contains(ls, strings.ToLower(strings.Trim(n, "`"))) {
+			return true
+		}
+	}
+	return false
+}
+
+// phrase is s as one COMPLETE phrase of at most max runes: whole if it fits,
+// else its first sentence, else its first clause, else nothing. It never
+// cuts a word, because a summary line that ends "Do not mo…" tells the
+// approver less than no line at all.
+func phrase(s string, max int) string {
+	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+	if s == "" {
+		return ""
+	}
+	// A cut inside a code span would leave an unclosed backtick and turn the
+	// rest of the Summary into code (live, 2026-11-07: "`*…;"), so a
+	// shortened phrase must close every span it opens.
+	fits := func(x string) bool { return len([]rune(x)) <= max && strings.Count(x, "`")%2 == 0 }
+	if fits(s) {
+		return s
+	}
+	if loc := sentenceBreak.FindStringIndex(s); loc != nil {
+		if first := strings.TrimSpace(s[:loc[0]+1]); fits(first) {
+			return first
+		}
+	}
+	// A bare comma is not a clause boundary here: cutting "do not modify A,
+	// B or C" at its first comma would tell the approver only A is safe.
+	// Nor is a colon: what comes after it is usually the point ("The frozen
+	// shape matters: …" said nothing on its own, live 2026-11-07).
+	for _, sep := range []string{"; ", " — ", " (", ", because ", ", since ", ", so ", ", which ", ", but "} {
+		for off := 0; ; {
+			i := strings.Index(s[off:], sep)
+			if i < 0 {
+				break
+			}
+			first := strings.TrimRight(strings.TrimSpace(s[:off+i]), ",;:")
+			if len([]rune(first)) > max {
+				break
+			}
+			if fits(first) && len([]rune(first)) >= 12 {
+				return first
+			}
+			off += i + len(sep)
+		}
+	}
+	return ""
+}
+
+// revisedAfter names a revised plan by the note that produced it. The person
+// saw the first plan, then "(revision 1)", and could not tell which was which
+// (owner review, 2026-11-07); counting their notes can't be misread.
+func revisedAfter(n int) string {
+	ord := []string{"", "first", "second", "third", "fourth", "fifth"}
+	if n > 0 && n < len(ord) {
+		return "revised after your " + ord[n] + " note"
+	}
+	return fmt.Sprintf("revised after your note %d", n)
+}
+
+// joinPhrases joins summary phrases with "; ", without the full stop each
+// may end with ("untouched.; Nothing", live 2026-11-07).
+func joinPhrases(items []string) string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = strings.TrimRight(strings.TrimSpace(it), ".")
+	}
+	return strings.Join(out, "; ")
+}
+
+// approverSummary is the planner's approver_summary, or an empty map.
+func approverSummary(planResult map[string]any) map[string]any {
+	if m, ok := planResult["approver_summary"].(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
+}
+
+var componentIDName = regexp.MustCompile(`^\s*([CDFR]\d{1,2})\s*(?:[—–:-]|\.)\s*(.+?)\s*$`)
+
+// componentIDs maps a component id ("C1") to its short name ("Ledger.Len"):
+// the name after the id, without a trailing parenthetical.
+func componentIDs(planResult map[string]any) map[string]string {
+	arch, _ := mapGet(planResult, "architecture", map[string]any{}).(map[string]any)
+	out := map[string]string{}
+	for _, comp := range asMapList(mapGet(arch, "components", nil)) {
+		m := componentIDName.FindStringSubmatch(mapStr(comp, "name", ""))
+		if m == nil {
+			continue
+		}
+		short := strings.TrimSpace(m[2])
+		if i := strings.Index(short, " ("); i > 0 {
+			short = strings.TrimSpace(short[:i])
+		}
+		if short != "" {
+			out[m[1]] = short
+		}
+	}
+	return out
+}
+
+// nameComponents says each component id as its name: "C1 — Ledger.Len" as
+// "Ledger.Len", and a bare "C2" as that component's name.
+func nameComponents(s string, ids map[string]string) string {
+	if len(ids) == 0 || s == "" {
+		return s
+	}
+	for id, name := range ids {
+		s = regexp.MustCompile(`\b`+id+`\s*[—–:-]\s*`+regexp.QuoteMeta(name)).ReplaceAllString(s, name)
+		s = regexp.MustCompile(`\b`+id+`\b`).ReplaceAllString(s, name)
+	}
+	return s
+}
+
+func isTestFile(f string) bool {
+	return strings.HasSuffix(f, "_test.go") || strings.Contains(f, "test")
+}
+
+// testNames lists the Go test functions the planned changes name.
+func testNames(issues []map[string]any, existing map[string]bool) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, iss := range issues {
+		text := mapStr(iss, "description", "") + " " + mapStr(iss, "testing_strategy", "") + " " +
+			mapStr(iss, "title", "")
+		for _, c := range coerceAnyList(iss["acceptance_criteria"]) {
+			text += " " + fmt.Sprint(c)
+		}
+		for _, m := range goTestPattern.FindAllString(text, -1) {
+			if !seen[m] && !existing[m] {
+				seen[m] = true
+				out = append(out, m)
+			}
+		}
+	}
+	if len(out) > 6 {
+		out = out[:6]
+	}
+	return out
+}
+
+var testFuncDecl = regexp.MustCompile(`(?m)^func (Test[A-Z]\w*|Benchmark[A-Z]\w*)\(`)
+
+// existingTestNames reads the test functions already in the repository's
+// _test.go files, skipping the build's own worktrees and artifacts.
+func existingTestNames(repoPath string) map[string]bool {
+	out := map[string]bool{}
+	if strings.TrimSpace(repoPath) == "" {
+		return out
+	}
+	_ = filepath.WalkDir(repoPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".worktrees", ".artifacts", "vendor", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			if raw, rerr := os.ReadFile(path); rerr == nil {
+				for _, m := range testFuncDecl.FindAllStringSubmatch(string(raw), -1) {
+					out[m[1]] = true
+				}
+			}
+		}
+		return nil
+	})
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// personText — what the person can read.
+// ---------------------------------------------------------------------------
+
+var (
+	htmlComment    = regexp.MustCompile(`(?s)<!--.*?-->`)
+	absWorktree    = regexp.MustCompile(`(?:/Users|/home|/private|/tmp|/var|/root)/\S*?/(?:\.worktrees|workspaces)/[^/\s` + "`" + `]+/?`)
+	artifactRef    = regexp.MustCompile("`\\.artifacts/[^`\\s]*`|(?:^|[\\s(\\[])\\.artifacts/[^\\s`'\")]*")
+	homeDir        = regexp.MustCompile(`(?:/Users|/home)/[^/\s]+/`)
+	absPath        = regexp.MustCompile("(?:/Users|/home|/private|/tmp|/var|/root)/[^\\s`'\")]+")
+	refParen       = regexp.MustCompile(`\s*\((?:[^()]*?\b(?:AC\s?\d+|§\s?\d|[CDFR]\d{1,2}\b|[Rr]ev(?:ision)?\.?\s?\d|finding)[^()]*)\)`)
+	refACNamed     = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+\s*\(([^()]{3,40})\)`)
+	refACBare      = regexp.MustCompile(`(?i)\b(by|and|fails|failing|per|see|under|in|via|or)\s+(?:PRD\s+)?AC\s?\d+\b`)
+	refAC          = regexp.MustCompile(`\b(?:PRD\s+)?AC\s?\d+(?:\s*(?:[-–,/]|and|to)\s*(?:AC\s?)?\d+)*\b`)
+	refSection     = regexp.MustCompile(`(?:\b(?:architecture|PRD|design)\s+)?§\s?\d+(?:\.\d+)*`)
+	refCode        = regexp.MustCompile(`\b(?:review\s+)?[CDFR]\d{1,2}\b`)
+	refFinding     = regexp.MustCompile(`(?i)\btech[- ]lead(?:'s)?\s+finding(?:s)?(?:\s*\([a-z0-9]\))?`)
+	refArchRev     = regexp.MustCompile(`(?i)\barchitecture\s+(?:rev(?:ision)?\.?\s*\d+(?:\.\d+)*|\d+(?:\.\d+)+)`)
+	refRevision    = regexp.MustCompile(`(?i)\brev(?:ision)?\.?\s*\d+\b`)
+	refMerger      = regexp.MustCompile(`(?i)\bmerger agent\b`)
+	refReviewerAsk = regexp.MustCompile(`\b[Tt]he (?:plan )?reviewer asked\b`)
+	refReviewerReq = regexp.MustCompile(`(?i)\breviewer[- ]requested\b`)
+	refScopeRule   = regexp.MustCompile(`(?i)\bthe scope rule\b`)
+	refPRD         = regexp.MustCompile(`\bPRD\b`)
+	emptyParens    = regexp.MustCompile(`\((?:\s+|\s*[,;/&–-]+\s*(?:and\s*)?)\)`)
+	spaceBeforeP   = regexp.MustCompile(`[ \t]+([,;:])(\s|$)`)
+	refLabel       = regexp.MustCompile(`(?m)\b(?:PRD\s+)?(?:AC|[CDFR])\s?\d{1,2}\s*[:)]\s*`)
+	leadingPunct   = regexp.MustCompile(`(?m)^\s*[:;,]\s*`)
+	doublePunct    = regexp.MustCompile(`([,;])\s*[,;]+`)
+	manySpaces     = regexp.MustCompile(`[ \t]{2,}`)
+	mdHeading      = regexp.MustCompile(`(?m)^(#{1,6})\s`)
+	sentenceBreak  = regexp.MustCompile(`([.!?])\s+`)
+)
+
+// personText rewrites planner text so a person can read it with nothing else
+// open. revision is the gate's one counter: any revision number the planner
+// wrote is replaced by it.
+func personText(s string, revision int) string {
+	if s == "" {
+		return s
+	}
+	s = htmlComment.ReplaceAllString(s, "")
+	// The build's own records (the approval state, the planner's drafts) are
+	// files the person never sees; the one that holds their review is said
+	// as "your review" (live, 2026-11-07: "the override in
+	// `.artifacts/approval_state.json`").
+	s = artifactRef.ReplaceAllStringFunc(s, func(m string) string {
+		lead := ""
+		if i := strings.Index(m, ".artifacts"); i > 0 && !strings.HasPrefix(m, "`") {
+			lead = m[:i]
+		}
+		if strings.Contains(m, "approval") {
+			return lead + "your review"
+		}
+		return lead + "the build's notes"
+	})
+	s = absWorktree.ReplaceAllString(s, "")
+	// Code spans keep their paths, because a command must still run: live,
+	// "> /tmp/len.out && grep … /tmp/len.out" became "> the repo && grep …
+	// the repo". Only a home directory is shortened to "~/" inside code.
+	parts := strings.Split(s, "`")
+	for i := range parts {
+		if i%2 == 0 {
+			parts[i] = proseText(absPath.ReplaceAllString(parts[i], "the repo"), revision, i == 0)
+		} else {
+			parts[i] = homeDir.ReplaceAllString(parts[i], "~/")
+		}
+	}
+	return strings.TrimSpace(manySpaces.ReplaceAllString(strings.Join(parts, "`"), " "))
+}
+
+// proseText strips references from text outside code spans.
+// Only the text's first stretch loses leading punctuation: after a code span,
+// a leading comma belongs to the sentence ("`Len()`, an O(1) count").
+func proseText(s string, revision int, first bool) string {
+	s = refLabel.ReplaceAllString(s, "")
+	s = refParen.ReplaceAllString(s, "")
+	s = refFinding.ReplaceAllString(s, "your review")
+	s = refArchRev.ReplaceAllString(s, "the design")
+	// A criterion cited by number is said as a check, keeping its name when
+	// it has one: stripping it left "mitigated by and the explicit
+	// statement" and "by (body-shape gate)" (live, 2026-11-07).
+	s = refACNamed.ReplaceAllString(s, "the $1 check")
+	s = refACBare.ReplaceAllString(s, "${1} a check")
+	s = refAC.ReplaceAllString(s, "")
+	s = refSection.ReplaceAllString(s, "")
+	s = refCode.ReplaceAllString(s, "")
+	if revision > 0 {
+		s = refRevision.ReplaceAllString(s, "this revision")
+	} else {
+		s = refRevision.ReplaceAllString(s, "this plan")
+	}
+	s = refMerger.ReplaceAllString(s, "the merge step")
+	// The person reading the plan IS the reviewer: "the reviewer-requested
+	// test" is said as "the requested test", and "the reviewer asked" as
+	// "you asked" (job 70, 2026-11-07).
+	s = refReviewerAsk.ReplaceAllStringFunc(s, func(m string) string {
+		if m[0] == 'T' {
+			return "You asked"
+		}
+		return "you asked"
+	})
+	s = refReviewerReq.ReplaceAllString(s, "requested")
+	s = refScopeRule.ReplaceAllString(s, "the keep-it-small guideline")
+	s = refPRD.ReplaceAllString(s, "requirements")
+	s = emptyParens.ReplaceAllString(s, "")
+	s = doublePunct.ReplaceAllString(s, "$1")
+	s = spaceBeforeP.ReplaceAllString(s, "$1$2")
+	if first {
+		s = leadingPunct.ReplaceAllString(s, "")
+	}
+	return manySpaces.ReplaceAllString(s, " ")
+}
+
+// detailHeading is the level a planner's own headings start at inside the
+// plan body: below its "###" sections and its "####" change items, and the
+// same level a shouted lead becomes in capsLeads.
+const detailHeading = 5
+
+// demoteHeadings keeps planner markdown headings below the body's own levels.
+// The shallowest heading in the block lands at detailHeading and deeper ones
+// keep their offset from it, CAPPED AT SIX MARKS: markdown has no seventh
+// level, and "########" renders as literal text (job 70, 2026-11-07, where
+// prefixing five marks onto a planner's "###" did exactly that).
+func demoteHeadings(s string) string {
+	shallowest := 0
+	for _, m := range mdHeading.FindAllStringSubmatch(s, -1) {
+		if n := len(m[1]); shallowest == 0 || n < shallowest {
+			shallowest = n
+		}
+	}
+	s = mdHeading.ReplaceAllStringFunc(s, func(m string) string {
+		marks := len(m) - len(strings.TrimLeft(m, "#"))
+		level := detailHeading + marks - shallowest
+		if level > 6 {
+			level = 6
+		}
+		return strings.Repeat("#", level) + m[marks:]
+	})
+	return capsLeads(s)
+}
+
+// capsLead is a paragraph that opens with an ALL-CAPS phrase ending in a full
+// stop or colon: "THE DELTA IS THREE FILES AND FIVE INSERTED PRODUCT LINES."
+var capsLead = regexp.MustCompile(`(?m)^([A-Z][A-Z0-9'’/(),-]*(?:\s+[A-Z0-9][A-Z0-9'’/(),-]*)+)[.:]\s+`)
+
+// keepCaps are words that stay capitals when a lead is said in sentence case.
+var keepCaps = map[string]bool{"API": true, "CLI": true, "CI": true, "PR": true, "PRS": true, "README": true,
+	"JSON": true, "HTTP": true, "URL": true, "ID": true, "OK": true, "UI": true, "SQL": true, "CSV": true, "GO": false}
+
+// capsLeads turns each ALL-CAPS paragraph lead into a short heading in
+// sentence case, so a planner that still writes run-on blocks led by
+// shouting reads as headed sections (owner review, 2026-11-07). The prompt
+// asks for headed sections first; this is the floor.
+func capsLeads(s string) string {
+	return capsLead.ReplaceAllStringFunc(s, func(m string) string {
+		lead := strings.TrimSpace(capsLead.FindStringSubmatch(m)[1])
+		return "##### " + sentenceCase(lead) + "\n\n"
+	})
+}
+
+func sentenceCase(s string) string {
+	words := strings.Fields(s)
+	for i, w := range words {
+		core := strings.Trim(w, "'’/(),-")
+		switch {
+		case keepCaps[core]:
+		case i == 0:
+			words[i] = strings.ToUpper(w[:1]) + strings.ToLower(w[1:])
+		default:
+			words[i] = strings.ToLower(w)
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func stripMarkdownHeadings(s string) string {
+	var keep []string
+	for _, l := range strings.Split(s, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			keep = append(keep, l)
+		}
+	}
+	return strings.Join(keep, " ")
+}
+
+// firstSentences is the first n sentences of s, at most max runes.
+func firstSentences(s string, n, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	idx := sentenceBreak.FindAllStringIndex(s, -1)
+	if len(idx) >= n {
+		s = s[:idx[n-1][0]+1]
+	}
+	return oneLineCut(s, max)
+}
+
+// ---------------------------------------------------------------------------
+// Structure helpers.
+// ---------------------------------------------------------------------------
+
+// issueOrder returns the issues in the order they run: by level, then the
+// order the planner listed them. Issues no level names keep their place at
+// the end.
+func issueOrder(planResult map[string]any, issues []map[string]any) []map[string]any {
+	byName := map[string]map[string]any{}
+	for _, iss := range issues {
+		byName[mapStr(iss, "name", "")] = iss
+	}
+	seen := map[string]bool{}
+	var out []map[string]any
+	for _, lvl := range levelsOf(planResult) {
+		for _, n := range lvl {
+			if iss, ok := byName[n]; ok && !seen[n] {
+				seen[n] = true
+				out = append(out, iss)
+			}
+		}
+	}
+	for _, iss := range issues {
+		if n := mapStr(iss, "name", ""); !seen[n] {
+			seen[n] = true
+			out = append(out, iss)
+		}
+	}
+	return out
+}
+
+func levelsOf(planResult map[string]any) [][]string {
+	if raw, ok := planResult["levels"].([][]string); ok {
+		return raw
+	}
+	var out [][]string
+	for _, lvl := range coerceAnyList(planResult["levels"]) {
+		var names []string
+		switch t := lvl.(type) {
+		case []any:
+			for _, n := range t {
+				names = append(names, fmt.Sprint(n))
+			}
+		case []string:
+			names = append(names, t...)
+		}
+		if len(names) > 0 {
+			out = append(out, names)
+		}
+	}
+	return out
+}
+
+// levelLines says which changes run together, by title.
+func levelLines(planResult map[string]any, issues []map[string]any) []string {
+	var out []string
+	for i, lvl := range levelsOf(planResult) {
+		anyLvl := make([]any, len(lvl))
+		for j, n := range lvl {
+			anyLvl[j] = n
+		}
+		names := titlesFor(anyLvl, issues)
+		line := fmt.Sprintf("%d. %s", i+1, strings.Join(names, "; "))
+		if len(names) > 1 {
+			line += " (together)"
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// titlesFor maps issue names to their titles; the kebab name is machinery.
+func titlesFor(names []any, issues []map[string]any) []string {
+	titles := map[string]string{}
+	for _, iss := range issues {
+		n := mapStr(iss, "name", "")
+		titles[n] = strings.TrimSpace(mapStr(iss, "title", n))
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		k := fmt.Sprint(n)
+		if t := titles[k]; t != "" {
+			out = append(out, t)
+		} else {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func bulletSection(b *strings.Builder, heading string, v any, t func(string) string) {
+	items := coerceAnyList(v)
+	if len(items) == 0 {
+		return
+	}
+	b.WriteString("### " + heading + "\n\n")
+	for _, it := range items {
+		b.WriteString("- " + t(fmt.Sprint(it)) + "\n")
+	}
+	b.WriteString("\n")
+}
+
+func numberedSection(b *strings.Builder, heading string, v any, t func(string) string) {
+	items := coerceAnyList(v)
+	if len(items) == 0 {
+		return
+	}
+	b.WriteString("### " + heading + "\n\n")
+	for i, it := range items {
+		fmt.Fprintf(b, "%d. %s\n", i+1, t(fmt.Sprint(it)))
+	}
+	b.WriteString("\n")
+}
+
+func codeList(v any) string {
+	items := coerceAnyList(v)
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		if s := strings.TrimSpace(fmt.Sprint(it)); s != "" {
+			parts = append(parts, "`"+s+"`")
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func quote(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = "> " + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}
+
+// revisedTimes says how many times the PERSON had the plan revised: one entry
+// in the history per note they sent back. The gate may redraft a revision a
+// second time on its own (approval_gate.go's recheck), but that is one
+// revision to the person, who asked once; live r7 (job 267, 2026-11-08)
+// read "The plan was revised twice" after a single note.
+func revisedTimes(n int) string {
+	switch n {
+	case 0, 1:
+		return "The plan was revised once"
+	case 2:
+		return "The plan was revised twice"
+	default:
+		return fmt.Sprintf("The plan was revised %d times", n)
+	}
+}

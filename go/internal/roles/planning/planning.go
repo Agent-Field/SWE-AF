@@ -141,7 +141,7 @@ func RunProductManager(ctx context.Context, deps *Deps, input map[string]any) (a
 			AdditionalContext:  additionalContext,
 			WorkspaceManifest:  wsManifest,
 			PriorUserResponses: prior,
-		})
+		}) + personReadableProse("validated_description")
 		opts := harnessx.RoleOptions{
 			Provider:       provider,
 			Model:          model,
@@ -353,7 +353,7 @@ func RunArchitect(ctx context.Context, deps *Deps, input map[string]any) (any, e
 		ArchitecturePath:  paths["architecture"],
 		Feedback:          feedback,
 		WorkspaceManifest: wsManifest,
-	})
+	}) + personReadableProse("summary")
 
 	provider, err := runtimex.RuntimeToHarnessAdapter(aiProvider)
 	if err != nil {
@@ -471,9 +471,44 @@ func RunTechLead(ctx context.Context, deps *Deps, input map[string]any) (any, er
 
 // sprintPlanOutput is the inline schema Python declares inside
 // run_sprint_planner (issues + rationale).
+// personReadableProse asks a planning role to write the field a person reads
+// in a plan's Details as short headed sections. Live on 2026-11-07 the PM's
+// description was four run-on blocks, each led by an ALL-CAPS phrase ("THE
+// DELTA IS THREE FILES…", "SCOPE BOUNDARIES."). Like the approver summary it
+// is a Go-only addition to the task prompt, so the system prompts stay
+// byte-identical to the Python port their golden tests pin.
+func personReadableProse(field string) string {
+	return "\n\n## How to write `" + field + "`\n\n" +
+		"A person approving this plan reads `" + field + "` when the summary is not enough. " +
+		"Write it as two to five short sections. Start each with a `### ` heading of a few words in " +
+		"sentence case (\"### What changes\", \"### What stays the same\"), followed by one to three " +
+		"plain sentences. Never start a paragraph or a heading with an ALL-CAPS phrase, and do not " +
+		"pack several topics into one paragraph."
+}
+
+// approverSummaryInstruction asks the sprint planner for the plan in the
+// approver's terms. It is a Go-only addition appended to the task prompt, so
+// the system prompt stays byte-identical to the Python port its golden test
+// pins. The Summary a person approves is rendered from this field, never cut
+// out of longer prose (owner review, 2026-11-07).
+const approverSummaryInstruction = `
+
+## Approver Summary
+
+Also return ` + "`approver_summary`" + `: what the person approving this plan reads first, in
+their terms. ` + "`what_changes`" + `: one or two plain sentences ("Adds Ledger.Len(), an O(1)
+count that does not copy entries, plus three tests."). ` + "`files`" + `: every file the
+plan touches, each with ITS OWN purpose in under ten words ("the new Len method",
+"TestLen and TestLenDoesNotAllocate"). ` + "`tests_added`" + `: only NEW test functions,
+never ones the repository already has. ` + "`will_not_change`" + `: up to three short,
+complete phrases. ` + "`risks`" + `: up to two short, complete phrases, or empty. Write
+complete phrases, never fragments; name no absolute paths and cite no
+acceptance-criterion numbers, section signs or component ids.`
+
 type sprintPlanOutput struct {
-	Issues    []schemas.PlannedIssue `json:"issues"`
-	Rationale string                 `json:"rationale"`
+	Issues          []schemas.PlannedIssue   `json:"issues"`
+	Rationale       string                   `json:"rationale"`
+	ApproverSummary *schemas.ApproverSummary `json:"approver_summary,omitempty"`
 }
 
 // planningRoleSchemaRetries is the number of extra *outer* schema-bound harness
@@ -942,7 +977,7 @@ func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (an
 		RepoPath:          repoPath,
 		PRDPath:           paths["prd"],
 		ArchitecturePath:  paths["architecture"],
-	})
+	}) + approverSummaryInstruction
 
 	provider, err := runtimex.RuntimeToHarnessAdapter(aiProvider)
 	if err != nil {
@@ -978,10 +1013,16 @@ func RunSprintPlanner(ctx context.Context, deps *Deps, input map[string]any) (an
 	}
 
 	deps.App.Note(ctx, "Sprint Planner complete", "sprint_planner", "complete")
-	return map[string]any{
+	out := map[string]any{
 		"issues":    issues,
 		"rationale": parsed.Rationale,
-	}, nil
+	}
+	if parsed.ApproverSummary != nil {
+		if m, err := toMap(parsed.ApproverSummary); err == nil {
+			out["approver_summary"] = m
+		}
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

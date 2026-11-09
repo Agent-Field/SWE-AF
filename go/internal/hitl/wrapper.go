@@ -105,7 +105,8 @@ func RunWithAskUser(
 			return result, nil
 		}
 
-		if p.Hax == nil {
+		native := p.Hax == nil && p.Pauser != nil && p.ExecutionID != "" && NativeEnabled()
+		if p.Hax == nil && !native {
 			noteSafe(ctx, p.App, fmt.Sprintf(
 				"%s: LLM emitted ask_user_form but HAX is disabled — ignoring and proceeding with current decision", label),
 				"ask_user", "skipped", "hax_disabled")
@@ -129,14 +130,22 @@ func RunWithAskUser(
 			"%s: pausing for ask_user_via_form (iteration %d, budget_remaining=%d)", label, iteration, budget.Remaining),
 			"ask_user", "pause", label)
 
-		response := RequestUserInputAndPause(ctx, p.App, p.Pauser, p.Hax, *spec, RequestUserInputParams{
+		params := RequestUserInputParams{
 			NodeID:         p.NodeID,
 			ExecutionID:    p.ExecutionID,
 			ExpiresInHours: p.ExpiresInHours,
 			UserID:         p.UserID,
 			WebhookURL:     p.WebhookURL,
 			Metadata:       p.Metadata,
-		})
+		}
+		var response schemas.AskUserResponse
+		if native {
+			// No hax: the question and its fields travel on the pause itself,
+			// so the control plane's own answering doors can show it.
+			response = RequestUserInputNative(ctx, p.App, p.Pauser, *spec, params, iteration+1)
+		} else {
+			response = RequestUserInputAndPause(ctx, p.App, p.Pauser, p.Hax, *spec, params)
+		}
 
 		prior := appendPriorResponse(kwargs["prior_user_responses"], PriorUserResponse{
 			Question: spec.Title,

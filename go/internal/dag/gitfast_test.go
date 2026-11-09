@@ -136,6 +136,29 @@ func TestFastMergeSingleBranchSkipsIntegrationTest(t *testing.T) {
 	}
 }
 
+// Issue #309 (WorkAF r9): the coder's branch carried only an empty commit,
+// and --no-ff turned it into a second empty commit on the integration branch.
+// A branch that changes nothing is counted as merged without a merge commit,
+// so the integration branch does not move.
+func TestFastMergeOfABranchThatChangesNothingMakesNoCommit(t *testing.T) {
+	repo := initFastRepo(t)
+	gitfastT(t, repo, "checkout", "-q", "-b", "issue/01-noop", "integration")
+	gitfastT(t, repo, "commit", "-q", "--allow-empty", "-m", "issue/noop: verify it is already there")
+	gitfastT(t, repo, "checkout", "-q", "integration")
+	before := gitfastT(t, repo, "rev-parse", "HEAD")
+
+	result, err := fastMergeBranches(repo, "integration", []string{"issue/01-noop"}, 0)
+	if err != nil {
+		t.Fatalf("fastMergeBranches: %v", err)
+	}
+	if got := asStringSlice(result["merged_branches"]); len(got) != 1 {
+		t.Errorf("merged = %v, want the no-op branch counted", got)
+	}
+	if after := gitfastT(t, repo, "rev-parse", "HEAD"); after != before {
+		t.Errorf("integration moved %s -> %s on a branch that changes nothing", before, after)
+	}
+}
+
 func TestFastCleanupWorktrees(t *testing.T) {
 	repo := initFastRepo(t)
 	wtDir := filepath.Join(repo, ".worktrees")

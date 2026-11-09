@@ -1,11 +1,13 @@
 // This file (approval_gate.go) ports the hax plan-approval gate from
 // swe_af/app.py: the _format_plan_for_approval formatter (:355-402), the
 // _create_hax_request_with_timeout wrapper (:411-471), and the inline
-// plan-approval revision loop build() runs when HAX_API_KEY is set (:754-964).
+// plan-approval revision loop build() runs when HAX_API_KEY is set (:754-964),
+// and extends it to run WITHOUT hax: the plan travels on the control-plane
+// pause itself (native_plan.go renders it), so WorkAF or the CP UI can answer.
 //
 // build.go drives the gate through the ApprovalGate seam (common.go): it calls
 // PlanApprovalGate once, acting on the returned ApprovalOutcome. The gate owns
-// the entire hax flow — request the plan review, pause the execution
+// the entire flow — request the plan review, pause the execution
 // (agent.Pause, webhook-resumed, design §4.6), and on request_changes re-run
 // Architect → Tech Lead → Sprint Planner with the reviewer feedback, bounded by
 // cfg.max_plan_revision_iterations.
@@ -19,15 +21,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Agent-Field/agentfield/sdk/go/agent"
-
+	"github.com/Agent-Field/SWE-AF/go/internal/dagutil"
 	"github.com/Agent-Field/SWE-AF/go/internal/hitl"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
 // PlanApprovalGate satisfies the ApprovalGate seam (common.go). build.go assigns
-// it to Deps.ApprovalGate; it engages only when a hax client can be built from
-// the environment (HAX_API_KEY set) AND a pauser is wired.
+// it to Deps.ApprovalGate; it engages whenever build asks for plan review and
+// a pauser is wired. Hax is optional.
 var _ ApprovalGate = PlanApprovalGate
 
 // ---------------------------------------------------------------------------
@@ -35,7 +36,8 @@ var _ ApprovalGate = PlanApprovalGate
 // ---------------------------------------------------------------------------
 
 // haxClientProvider builds the hax REST client. Returns nil when HAX_API_KEY is
-// unset (HITL disabled). Package seam so tests point it at a stub server.
+// unset; the gate then asks on the control plane alone. Package seam so tests
+// point it at a stub server.
 var haxClientProvider = hitl.BuildHaxClientFromEnv
 
 // pauserProvider yields the pause surface the gate drives (agent.Pause — the
@@ -51,21 +53,27 @@ func SetPauserProvider(f func(req ApprovalRequest) hitl.Pauser) {
 	pauserProvider = f
 }
 
-// PlanApprovalGate runs the hax plan-approval revision loop. Ports
-// app.py:754-964. Returns a terminal ApprovalOutcome (rejected / expired /
-// error / revision-limit reached) carrying the BuildResult build must return, or
-// a non-terminal outcome carrying the (possibly revised) plan to execute.
+// PlanApprovalGate runs the plan-approval revision loop. Ports app.py:754-964,
+// and goes further than it: hax is optional. Every round pauses the execution
+// on the control plane with the WHOLE plan as markdown (kind plan_review), so a
+// person answering from any door the control plane serves — WorkAF's Needs you
+// first — can judge it without opening another page. When hax is configured the
+// same round also files hax's plan-review-v2 request; hax's id names the pause
+// and whichever door answers first wins.
+//
+// Returns a terminal ApprovalOutcome (rejected / expired / error / revision
+// limit reached) carrying the BuildResult build must return, or a non-terminal
+// outcome carrying the (possibly revised) plan to execute.
 func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome, error) {
-	hax := haxClientProvider()
-	if hax == nil || pauserProvider == nil {
-		// HITL disabled (no HAX_API_KEY) or no pauser wired — skip approval and
-		// proceed with the plan unchanged.
+	if pauserProvider == nil {
+		// No pause substrate wired — proceed with the plan unchanged.
 		return ApprovalOutcome{Terminal: false, PlanResult: req.PlanResult}, nil
 	}
 	pauser := pauserProvider(req)
 	if pauser == nil {
 		return ApprovalOutcome{Terminal: false, PlanResult: req.PlanResult}, nil
 	}
+	hax := haxClientProvider() // nil without HAX_API_KEY: the CP pause alone asks
 
 	deps := req.Deps
 	cfg := req.Cfg
@@ -94,51 +102,61 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 		deps.Note(ctx, fmt.Sprintf("Phase 1.5: Requesting plan approval (iteration %d)", revisionIter),
 			"build", "approval")
 
-		planSummary, prdMd, archMd, issuesForTemplate := formatPlanForApproval(planResult)
+		question := NativePlanQuestion(req, planResult, revisionIter, revisionHistory)
 
-		title := "SWE-AF Plan Review"
-		if revisionIter > 0 {
-			title = fmt.Sprintf("SWE-AF Plan Review (Revision %d)", revisionIter)
-		}
-
-		haxPayload := map[string]any{
-			"planSummary":  planSummary,
-			"issues":       issuesForTemplate,
-			"architecture": archMd,
-			"prd":          prdMd,
-			"metadata": map[string]any{
-				"repoUrl":         cfg.RepoURL,
-				"goalDescription": req.Goal,
-				"agentNodeId":     nodeID,
-				"executionId":     req.ExecutionID,
-			},
-			"revisionNumber":  revisionIter,
-			"revisionHistory": revisionHistory,
-		}
-
-		descr := "Review the proposed implementation plan before execution begins"
-		created, err := createHaxRequestWithTimeout(ctx, deps, hax, hitl.CreateRequestParams{
-			Type:             "plan-review-v2",
-			Title:            title,
-			Description:      &descr,
-			Payload:          haxPayload,
-			WebhookURL:       webhookURL,
-			ExpiresInSeconds: expiresHours * 3600,
-			UserID:           userID,
-		}, revisionIter)
-		if err != nil {
-			return ApprovalOutcome{}, err
+		if hax != nil {
+			planSummary, prdMd, archMd, issuesForTemplate := formatPlanForApproval(planResult)
+			title := "SWE-AF Plan Review"
+			if revisionIter > 0 {
+				title = fmt.Sprintf("SWE-AF Plan Review (Revision %d)", revisionIter)
+			}
+			haxPayload := map[string]any{
+				"planSummary":  planSummary,
+				"issues":       issuesForTemplate,
+				"architecture": archMd,
+				"prd":          prdMd,
+				"metadata": map[string]any{
+					"repoUrl":         cfg.RepoURL,
+					"goalDescription": req.Goal,
+					"agentNodeId":     nodeID,
+					"executionId":     req.ExecutionID,
+				},
+				"revisionNumber":  revisionIter,
+				"revisionHistory": revisionHistory,
+			}
+			descr := "Review the proposed implementation plan before execution begins"
+			created, err := createHaxRequestWithTimeout(ctx, deps, hax, hitl.CreateRequestParams{
+				Type:             "plan-review-v2",
+				Title:            title,
+				Description:      &descr,
+				Payload:          haxPayload,
+				WebhookURL:       webhookURL,
+				ExpiresInSeconds: expiresHours * 3600,
+				UserID:           userID,
+			}, revisionIter)
+			if err != nil {
+				if !req.PlanReview && !hitl.NativeEnabled() {
+					return ApprovalOutcome{}, err
+				}
+				// Hax is an extra door, not the gate: the plan is still asked
+				// on the control plane, where every other door can answer it.
+				deps.Note(ctx, "hax is unavailable — asking for plan approval on the control plane only",
+					"build", "approval", "hax", "degraded")
+			} else {
+				question.RequestID = created.ID
+				question.RequestURL = created.URL
+			}
 		}
 
 		writeApprovalState(approvalStatePath, map[string]any{
 			"decision":        "pending",
 			"feedback":        "",
-			"request_id":      created.ID,
-			"request_url":     created.URL,
+			"request_id":      question.RequestID,
+			"request_url":     question.RequestURL,
 			"revision_number": revisionIter,
 		})
 
-		decision, feedback, err := pauseForApproval(ctx, pauser, req.ExecutionID, created, expiresHours)
+		decision, feedback, err := pauseForApproval(ctx, pauser, question)
 		if err != nil {
 			return ApprovalOutcome{}, err
 		}
@@ -146,8 +164,8 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 		writeApprovalState(approvalStatePath, map[string]any{
 			"decision":         decision,
 			"feedback":         feedback,
-			"request_id":       created.ID,
-			"request_url":      created.URL,
+			"request_id":       question.RequestID,
+			"request_url":      question.RequestURL,
 			"revision_number":  revisionIter,
 			"revision_history": revisionHistory,
 		})
@@ -166,18 +184,51 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 					fmt.Sprintf("Plan revision limit reached after %d iterations", revisionIter+1)), nil
 			}
 
+			// What the plan the person sent back added and touched, so the
+			// revision can be told apart from it ("How the plan changed") and
+			// held to an additive request (additiveProblems).
+			beforeTests, beforeFiles := planTests(planResult), planFiles(planResult)
 			revisionHistory = append(revisionHistory, map[string]any{
-				"iteration": revisionIter,
-				"feedback":  feedback,
+				"iteration":    revisionIter,
+				"feedback":     feedback,
+				"before_tests": beforeTests,
+				"before_files": beforeFiles,
 			})
 
 			deps.Note(ctx, fmt.Sprintf("Changes requested (iteration %d): %s",
 				revisionIter, runeTruncate(feedback, 200)),
 				"build", "approval", "request_changes")
 
-			revised, revisionErr, err := replanWithFeedback(ctx, req, planResult, feedback)
+			// A name given to "the test" renames the one the plan adds; it
+			// is said so before the planners read the words (renameReading).
+			told := feedback + renameReading(feedback, beforeTests)
+			revised, revisionErr, err := replanWithFeedback(ctx, req, planResult, told)
 			if err != nil {
 				return ApprovalOutcome{}, err
+			}
+			// HOLD THE REVISION TO THE WORDS (revision_check.go). A plan whose
+			// design did what was asked while its requirements still say the
+			// opposite is re-planned once more, with every contradiction
+			// spelled out, before anyone is asked to approve it.
+			reqs := readReviewRequests(feedback)
+			check := func(plan map[string]any) []string {
+				return revisionChecks(plan, reqs, feedback, beforeTests)
+			}
+			if problems := check(revised); len(problems) > 0 && revisionErr == "" {
+				deps.Note(ctx, fmt.Sprintf("Revised plan does not yet reflect the review (%d issue(s)); re-planning once more",
+					len(problems)), "build", "approval", "revision", "recheck")
+				again, againErr, err := replanWithFeedback(ctx, req, revised,
+					told+recheckMarker+
+						strings.Join(problems, "\n- "))
+				if err != nil {
+					return ApprovalOutcome{}, err
+				}
+				if againErr == "" {
+					revised = again
+				}
+			}
+			if problems := check(revised); len(problems) > 0 {
+				revisionHistory[len(revisionHistory)-1]["unreflected"] = problems
 			}
 			planResult = revised
 			if revisionErr != "" {
@@ -189,7 +240,7 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 			continue
 		}
 
-		// Terminal: rejected, expired, or error.
+		// Terminal: rejected, expired, cancelled or error.
 		reason := feedback
 		if reason == "" {
 			reason = decision
@@ -239,29 +290,20 @@ func createHaxRequestWithTimeout(
 }
 
 // pauseForApproval pauses the execution for plan approval via agent.Pause: it
-// transitions the execution to "waiting" on the control plane and blocks until
-// the /webhooks/approval callback resolves it (or it expires — decision
-// "expired") — the direct port of app.pause (design §4.6, webhook-resumed, no
-// polling). Returns the decision string (approved / request_changes / rejected /
-// expired / error) plus any free-text feedback. The callback URL is derived by
-// the SDK from the agent's public URL, so no CallbackURL is passed here.
+// transitions the execution to "waiting" on the control plane with the plan
+// question attached, and blocks until an answer resolves it (or it expires —
+// decision "expired"). Returns the decision string (approved / request_changes
+// / rejected / expired / error) plus the person's words.
 func pauseForApproval(
 	ctx context.Context,
 	pauser hitl.Pauser,
-	executionID string,
-	created *hitl.CreatedRequest,
-	expiresHours int,
+	question hitl.NativeQuestion,
 ) (decision string, feedback string, err error) {
-	result, err := pauser.Pause(ctx, agent.PauseOptions{
-		ApprovalRequestID:  created.ID,
-		ApprovalRequestURL: created.URL,
-		ExpiresInHours:     expiresHours,
-		ExecutionID:        executionID,
-	})
+	result, err := pauser.Pause(ctx, question.PauseOptions())
 	if err != nil {
 		return "", "", err
 	}
-	return result.Decision, result.Feedback, nil
+	return result.Decision, strings.TrimSpace(result.Feedback), nil
 }
 
 // replanWithFeedback re-runs Architect → Tech Lead loop → Sprint Planner with
@@ -277,6 +319,28 @@ func replanWithFeedback(
 	cfg := req.Cfg
 	resolved := req.Resolved
 	prd := mapGet(planResult, "prd", map[string]any{})
+	// The PRD is rebuilt from the person's words too. Without it the revised
+	// plan contradicts itself: its design does what was asked while its
+	// must-haves and checks still describe the plan the person sent back. A
+	// failed PM keeps the earlier PRD; the words still reach it as a check.
+	if revisedPRD, perr := deps.Call(ctx, "run_product_manager", map[string]any{
+		"goal":      req.Goal,
+		"repo_path": req.RepoPath, "artifacts_dir": req.ArtifactsDir,
+		"additional_context": strings.TrimSpace(req.AdditionalContext + "\n\n" +
+			"The person reviewing the plan asked for these changes, and they override anything above that disagrees: " + feedback),
+		"model":              resolved["pm_model"],
+		"permission_mode":    cfg.PermissionMode,
+		"ai_provider":        cfg.AIProvider(),
+		"workspace_manifest": req.ManifestMap,
+	}, "run_product_manager (human revision)"); perr != nil {
+		if isNonDegradableRevisionError(perr) {
+			return nil, "", perr
+		}
+		deps.Note(ctx, "Product revision did not complete; keeping the earlier PRD: "+truncateRevisionError(perr.Error()),
+			"pipeline", "revision", "degraded")
+	} else if mapStr(revisedPRD, "validated_description", "") != "" {
+		prd = revisedPRD
+	}
 	manifest := req.ManifestMap
 	provider := cfg.AIProvider()
 	architecturePath := architectureArtifactPath(req.RepoPath, req.ArtifactsDir)
@@ -384,8 +448,14 @@ func replanWithFeedback(
 		review = dumpToMap(auto)
 	}
 
+	// The person's words become an acceptance check on the PRD, so the sprint
+	// planner, the issue writers, the coders and the verifier all read what
+	// was asked — PM does not re-run, and without this the PRD would still
+	// describe the plan the person sent back.
+	revisedPRD := prdWithReviewerRequest(prd, personWords(feedback))
+
 	sprint, err := deps.Call(ctx, "run_sprint_planner", map[string]any{
-		"prd":                prd,
+		"prd":                revisedPRD,
 		"architecture":       arch,
 		"repo_path":          req.RepoPath,
 		"artifacts_dir":      req.ArtifactsDir,
@@ -398,15 +468,44 @@ func replanWithFeedback(
 		return nil, "", err
 	}
 
-	// plan_result = {**plan_result, architecture, review, issues, rationale}.
-	revised := make(map[string]any, len(planResult)+4)
+	// A revised plan is a new plan: its levels, sequence numbers and file
+	// conflicts are computed again, and its issue files are written again —
+	// the coders read those files, and the first plan's would build what the
+	// person sent back.
+	issues := asMapList(mapGet(sprint, "issues", []any{}))
+	levels, err := dagutil.ComputeLevels(issues)
+	if err != nil {
+		return nil, "", err
+	}
+	issues = dagutil.AssignSequenceNumbers(issues, levels)
+	fileConflicts := dagutil.ValidateFileConflicts(issues, levels)
+	if _, err := writeIssueFiles(ctx, deps, issueWriteParams{
+		RepoPath: req.RepoPath, ArtifactsDir: req.ArtifactsDir, PRD: revisedPRD, Arch: arch, Issues: issues,
+		Model: resolved["issue_writer_model"], PermissionMode: cfg.PermissionMode, AIProvider: provider,
+		WorkspaceManifest: manifest,
+	}); err != nil {
+		return nil, "", err
+	}
+
+	// plan_result = {**plan_result, prd, architecture, review, issues, levels,
+	// file_conflicts, rationale}.
+	revised := make(map[string]any, len(planResult)+6)
 	for k, v := range planResult {
 		revised[k] = v
 	}
+	revised["prd"] = revisedPRD
 	revised["architecture"] = arch
 	revised["review"] = review
-	revised["issues"] = mapGet(sprint, "issues", []any{})
+	revised["issues"] = issues
+	revised["levels"] = levels
+	revised["file_conflicts"] = fileConflicts
 	revised["rationale"] = mapGet(sprint, "rationale", "")
+	// The approver summary is the revised plan's own; the first plan's
+	// would describe what the person sent back.
+	delete(revised, "approver_summary")
+	if as, ok := sprint["approver_summary"].(map[string]any); ok {
+		revised["approver_summary"] = as
+	}
 	return revised, revisionErr, nil
 }
 
@@ -545,4 +644,47 @@ func writeApprovalState(path string, state map[string]any) {
 		return
 	}
 	_ = os.WriteFile(path, raw, 0o644)
+}
+
+// recheckMarker starts what the gate adds to the person's words when a
+// revision is sent back by revision_check.go. The planners read it; the
+// requirements carry only the person's own words (personWords).
+const recheckMarker = "\n\nThe last revision still contradicts this request. Fix EVERY section (requirements, design and every planned change):\n- "
+
+// readingMarker starts the gate's reading of the person's words, added before
+// the first revision (renameReading). Like the recheck notes it is for the
+// planners; the requirements carry only the person's own words.
+const readingMarker = "\n\nHow to read this request:\n- "
+
+// personWords is the person's own words, without the gate's reading or its
+// recheck notes.
+func personWords(feedback string) string {
+	for _, marker := range []string{readingMarker, recheckMarker} {
+		if i := strings.Index(feedback, marker); i >= 0 {
+			feedback = feedback[:i]
+		}
+	}
+	return feedback
+}
+
+// reviewerRequestPrefix marks the acceptance check that carries the person's
+// own words. revision_check.go skips it: the words cannot vouch for themselves.
+const reviewerRequestPrefix = "Asked for in plan review (this overrides anything above it disagrees with): "
+
+// prdWithReviewerRequest returns a copy of prd whose acceptance criteria end
+// with the plan reviewer's words.
+func prdWithReviewerRequest(prd any, feedback string) map[string]any {
+	src, _ := prd.(map[string]any)
+	out := make(map[string]any, len(src)+1)
+	for k, v := range src {
+		out[k] = v
+	}
+	feedback = strings.TrimSpace(feedback)
+	if feedback == "" {
+		return out
+	}
+	ac := append([]any(nil), coerceAnyList(out["acceptance_criteria"])...)
+	ac = append(ac, reviewerRequestPrefix+feedback)
+	out["acceptance_criteria"] = ac
+	return out
 }
