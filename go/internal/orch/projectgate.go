@@ -68,9 +68,10 @@ var runProjectCheck = projectcheck.Run
 // THE VERIFIER'S VERDICT CANNOT OUTVOTE A RED BUILD. Issue #269 passed every
 // criterion the planner wrote and opened PR #278 on code that did not compile
 // (see package projectcheck), so the check lives here, in code, outside the
-// plan.
-func applyProjectGate(ctx context.Context, deps *Deps, verification map[string]any, targets []projectTarget) {
-	if verification == nil {
+// plan. Gated on strict (SWE_STRICT_BUILD or build_issue) so a plain build
+// behaves as on main when the switch is unset.
+func applyProjectGate(ctx context.Context, deps *Deps, verification map[string]any, targets []projectTarget, strict bool) {
+	if !strict || verification == nil {
 		return
 	}
 	for _, t := range targets {

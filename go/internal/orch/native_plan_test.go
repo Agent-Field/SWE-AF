@@ -197,6 +197,9 @@ func TestBuildIssueInput(t *testing.T) {
 	if b["plan_review"] != true || b["review_title"] != "#7: Add a Len() method to Ledger" {
 		t.Fatalf("review = %v %v", b["plan_review"], b["review_title"])
 	}
+	if b["strict"] != true || b["no_pr_on_failed_verification"] != true {
+		t.Fatalf("strict flags = strict:%v no_pr:%v", b["strict"], b["no_pr_on_failed_verification"])
+	}
 	if b["config"].(map[string]any)["github_pr_base"] != "main" || b["repo_url"] == nil {
 		t.Fatalf("build input = %v", b)
 	}

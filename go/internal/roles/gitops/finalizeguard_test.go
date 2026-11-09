@@ -12,6 +12,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
@@ -54,6 +55,7 @@ const factoryYAML = "start: agent-ready\nmax_size: M\nnever:\n  - auth/**\n"
 // while the cleanup's legitimate work — removing a build output the run
 // committed, extending .gitignore — stands.
 func TestFinalizeRestoresTheRepositorysOwnConfig(t *testing.T) {
+	t.Setenv(config.EnvStrictBuild, "1")
 	repo := t.TempDir()
 	gitT(t, repo, "init", "-q", "-b", "main")
 	writeFiles(t, repo, map[string]string{
@@ -158,6 +160,7 @@ func TestFinalizeRestoresTheRepositorysOwnConfig(t *testing.T) {
 // Without a base the guard protects every tracked file: nothing says which
 // are the run's, so the cleanup may remove only untracked debris.
 func TestFinalizeWithoutABaseProtectsEveryTrackedFile(t *testing.T) {
+	t.Setenv(config.EnvStrictBuild, "1")
 	repo := t.TempDir()
 	gitT(t, repo, "init", "-q", "-b", "main")
 	writeFiles(t, repo, map[string]string{".codeaf/factory.yaml": factoryYAML, "out.bin": "x"})
@@ -186,6 +189,7 @@ func TestFinalizeWithoutABaseProtectsEveryTrackedFile(t *testing.T) {
 
 // A cleanup that only does its job is left alone: no restore, no commit.
 func TestFinalizeLeavesALegitimateCleanupAlone(t *testing.T) {
+	t.Setenv(config.EnvStrictBuild, "1")
 	repo := t.TempDir()
 	gitT(t, repo, "init", "-q", "-b", "main")
 	writeFiles(t, repo, map[string]string{".codeaf/factory.yaml": factoryYAML})
@@ -213,4 +217,113 @@ func TestFinalizeLeavesALegitimateCleanupAlone(t *testing.T) {
 	if after := gitT(t, repo, "rev-list", "--count", "HEAD"); after != "3" || before != "2" {
 		t.Fatalf("commits before=%s after=%s, want 2 then 3 (the cleanup's own only)", before, after)
 	}
+}
+
+// N3: With SWE_STRICT_BUILD unset, finalize behaves as main's finalize did —
+// pre-existing tracked files removed or edited by the cleanup agent are neither
+// refused nor restored. With SWE_STRICT_BUILD set (or strict:true threaded from
+// build_issue), the guard restores them.
+func TestFinalizeGuardGatedByStrictSwitch(t *testing.T) {
+	runCase := func(t *testing.T, strictEnv, strictInput bool) (
+		repo string, res schemas.RepoFinalizeResult, app *mockApp,
+	) {
+		t.Helper()
+		t.Setenv(config.EnvStrictBuild, "1")
+		if !strictEnv {
+			if err := os.Unsetenv(config.EnvStrictBuild); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		repo = t.TempDir()
+		gitT(t, repo, "init", "-q", "-b", "main")
+		writeFiles(t, repo, map[string]string{
+			".codeaf/factory.yaml": factoryYAML,
+			"ledger.go":            "package ledger\n",
+		})
+		commitAll(t, repo, "base")
+		base := gitT(t, repo, "rev-parse", "HEAD")
+
+		agent := func(_ context.Context, _ string, _ map[string]any, dest any, _ harness.Options) (*harness.Result, error) {
+			if err := os.RemoveAll(filepath.Join(repo, ".codeaf")); err != nil {
+				t.Fatal(err)
+			}
+			writeFiles(t, repo, map[string]string{
+				"ledger.go": "package ledger // edited by finalize\n",
+			})
+			commitAll(t, repo, "chore: finalize repo for handoff")
+			body := `{"success":true,"files_removed":[".codeaf/factory.yaml"],"gitignore_updated":false,"summary":"Cleaned up."}`
+			return &harness.Result{Parsed: dest}, json.Unmarshal([]byte(body), dest)
+		}
+		deps, app := newDeps(agent)
+		in := map[string]any{"repo_path": repo, "base_ref": base}
+		if strictInput {
+			in["strict"] = true
+		}
+		out, err := RunRepoFinalize(context.Background(), deps, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repo, out.(schemas.RepoFinalizeResult), app
+	}
+
+	t.Run("switch unset lets finalize remove and edit pre-existing files as on main", func(t *testing.T) {
+		repo, res, app := runCase(t, false, false)
+		if _, err := os.Stat(filepath.Join(repo, ".codeaf/factory.yaml")); !os.IsNotExist(err) {
+			t.Fatalf(".codeaf/factory.yaml still exists (err=%v), want removed as on main", err)
+		}
+		gotLedger, err := os.ReadFile(filepath.Join(repo, "ledger.go"))
+		if err != nil || string(gotLedger) != "package ledger // edited by finalize\n" {
+			t.Fatalf("ledger.go = %q (%v), want finalize edit preserved", string(gotLedger), err)
+		}
+		if commits := gitT(t, repo, "rev-list", "--count", "HEAD"); commits != "2" {
+			t.Fatalf("commit count = %s, want 2 (base + finalize only, no restore commit)", commits)
+		}
+		if len(res.FilesRestored) != 0 {
+			t.Fatalf("files_restored = %v, want empty", res.FilesRestored)
+		}
+		if !reflect.DeepEqual(res.FilesRemoved, []string{".codeaf/factory.yaml"}) {
+			t.Fatalf("files_removed = %v, want [.codeaf/factory.yaml]", res.FilesRemoved)
+		}
+		if res.Summary != "Cleaned up." {
+			t.Fatalf("summary = %q, want %q", res.Summary, "Cleaned up.")
+		}
+		if hasNoteWithTags(app, "repo_finalize", "restored") {
+			t.Fatalf("unexpected restored note when switch unset: %v", app.notes)
+		}
+	})
+
+	t.Run("switch set restores pre-existing files", func(t *testing.T) {
+		repo, res, app := runCase(t, true, false)
+		gotFactory, err := os.ReadFile(filepath.Join(repo, ".codeaf/factory.yaml"))
+		if err != nil || string(gotFactory) != factoryYAML {
+			t.Fatalf(".codeaf/factory.yaml = %q (%v), want restored", string(gotFactory), err)
+		}
+		gotLedger, err := os.ReadFile(filepath.Join(repo, "ledger.go"))
+		if err != nil || string(gotLedger) != "package ledger\n" {
+			t.Fatalf("ledger.go = %q (%v), want restored", string(gotLedger), err)
+		}
+		wantRestored := []string{".codeaf/factory.yaml", "ledger.go"}
+		if !reflect.DeepEqual(res.FilesRestored, wantRestored) {
+			t.Fatalf("files_restored = %v, want %v", res.FilesRestored, wantRestored)
+		}
+		if len(res.FilesRemoved) != 0 {
+			t.Fatalf("files_removed = %v, want empty", res.FilesRemoved)
+		}
+		if !hasNoteWithTags(app, "repo_finalize", "restored") {
+			t.Fatalf("missing restored note: %v", app.notes)
+		}
+	})
+
+	t.Run("strict input flag without switch restores pre-existing files", func(t *testing.T) {
+		repo, res, _ := runCase(t, false, true)
+		gotFactory, err := os.ReadFile(filepath.Join(repo, ".codeaf/factory.yaml"))
+		if err != nil || string(gotFactory) != factoryYAML {
+			t.Fatalf(".codeaf/factory.yaml = %q (%v), want restored", string(gotFactory), err)
+		}
+		wantRestored := []string{".codeaf/factory.yaml", "ledger.go"}
+		if !reflect.DeepEqual(res.FilesRestored, wantRestored) {
+			t.Fatalf("files_restored = %v, want %v", res.FilesRestored, wantRestored)
+		}
+	})
 }

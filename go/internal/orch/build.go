@@ -56,6 +56,11 @@ type buildInput struct {
 	// verification fails, even if some issues completed. build_issue sets it;
 	// a plain build still publishes partial completed work with its debt.
 	NoPROnFailedVerification bool `json:"no_pr_on_failed_verification"`
+	// Strict turns on the three strict build gates (no PR on zero changes,
+	// the project's own build/test gate, and the repo-finalize guard) even
+	// when SWE_STRICT_BUILD is unset. build_issue sets it; a plain build
+	// leaves it false and behaves as on main unless SWE_STRICT_BUILD is on.
+	Strict bool `json:"strict"`
 }
 
 // Build is the end-to-end orchestrator: clone → plan (+ git init) → approval →
@@ -65,6 +70,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	if raw, err := json.Marshal(input); err == nil {
 		_ = json.Unmarshal(raw, &in)
 	}
+	strict := in.Strict || config.StrictBuildEnabled()
 
 	// cfg = BuildConfig(**config) if config else BuildConfig()
 	cfg, err := config.LoadBuildConfig(in.Config)
@@ -410,7 +416,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		}
 		targets := projectTargets(manifest, repoPath, buildBaseSHA)
 		applyCriterionAudit(ctx, deps, verification, targets)
-		applyProjectGate(ctx, deps, verification, targets)
+		applyProjectGate(ctx, deps, verification, targets, strict)
 
 		if asBool(verification["passed"]) || cycle >= cfg.MaxVerifyFixCycles {
 			break
@@ -503,7 +509,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	prdMarkdown, architectureMarkdown := readPlanDocs(planResult)
 
 	// 3b. FINALIZE.
-	finalizeRepos(ctx, deps, cfg, resolved, manifest, repoPath, planArtifactsDir, buildBaseSHA)
+	finalizeRepos(ctx, deps, cfg, resolved, manifest, repoPath, planArtifactsDir, buildBaseSHA, strict)
 
 	// 4. PUSH & PR (+ CI gate).
 	prResults := []schemas.RepoPRResult{}
@@ -521,11 +527,11 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			buildSummary+")", "build", "github_pr", "skipped")
 	case manifest != nil && len(manifest.Repos) > 1:
 		prResults, ciGateResults = multiRepoPRs(ctx, deps, cfg, resolved, manifest,
-			dagResult, planArtifactsDir, in.Goal, buildSummary)
+			dagResult, planArtifactsDir, in.Goal, buildSummary, strict)
 	default:
 		prResults, ciGateResults, noChangesToPublish = singleRepoPROutcome(ctx, deps, cfg, resolved, gitConfig,
 			dagResult, repoPath, planArtifactsDir, in.Goal, buildSummary,
-			prdMarkdown, architectureMarkdown, buildBaseSHA)
+			prdMarkdown, architectureMarkdown, buildBaseSHA, strict)
 	}
 
 	// 5. WORKSPACE CLEANUP (non-blocking).
@@ -628,23 +634,28 @@ func prepareSingleRepo(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 // finalizeRepos ports the FINALIZE phase (app.py:1117-1175) for multi- and
 // single-repo builds. A finalize failure is non-blocking (noted, not raised).
 func finalizeRepos(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
-	resolved map[string]string, manifest *schemas.WorkspaceManifest, repoPath, artifactsDir, buildBaseSHA string) {
+	resolved map[string]string, manifest *schemas.WorkspaceManifest, repoPath, artifactsDir, buildBaseSHA string, strict bool) {
 
-	// base_ref is each repo's starting commit: the cleanup may remove only
-	// tracked files the run created since it (roles/gitops/finalizeguard.go).
+	// base_ref is each repo's starting commit: when strict is enabled, the
+	// cleanup may remove only tracked files the run created since it
+	// (roles/gitops/finalizeguard.go).
 	callFinalize := func(path, repoName, baseRef string) {
 		label := "run_repo_finalize"
 		if repoName != "" {
 			label = fmt.Sprintf("run_repo_finalize (%s)", repoName)
 		}
-		res, ferr := deps.Call(ctx, "run_repo_finalize", map[string]any{
+		kwargs := map[string]any{
 			"repo_path":       path,
 			"artifacts_dir":   artifactsDir,
 			"model":           resolved["git_model"],
 			"permission_mode": cfg.PermissionMode,
 			"ai_provider":     cfg.AIProvider(),
 			"base_ref":        baseRef,
-		}, label)
+		}
+		if strict {
+			kwargs["strict"] = true
+		}
+		res, ferr := deps.Call(ctx, "run_repo_finalize", kwargs, label)
 		if ferr != nil {
 			suffix := ""
 			if repoName != "" {
@@ -751,13 +762,15 @@ func singleRepoPR(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	repoPath, artifactsDir, goal, buildSummary, prdMarkdown, architectureMarkdown, buildBaseSHA string,
 ) ([]schemas.RepoPRResult, []map[string]any) {
 	prs, gates, _ := singleRepoPROutcome(ctx, deps, cfg, resolved, gitConfig,
-		dagResult, repoPath, artifactsDir, goal, buildSummary, prdMarkdown, architectureMarkdown, buildBaseSHA)
+		dagResult, repoPath, artifactsDir, goal, buildSummary, prdMarkdown, architectureMarkdown,
+		buildBaseSHA, config.StrictBuildEnabled())
 	return prs, gates
 }
 
 func singleRepoPROutcome(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	resolved map[string]string, gitConfig, dagResult map[string]any,
 	repoPath, artifactsDir, goal, buildSummary, prdMarkdown, architectureMarkdown, buildBaseSHA string,
+	strict bool,
 ) ([]schemas.RepoPRResult, []map[string]any, bool) {
 
 	prResults := []schemas.RepoPRResult{}
@@ -777,19 +790,20 @@ func singleRepoPROutcome(ctx context.Context, deps *Deps, cfg *config.BuildConfi
 		remoteURL = mapStr(gitConfig, "remote_url", "")
 	}
 	if remoteURL == "" || !cfg.EnableGithubPR {
-		return prResults, ciGateResults, madeNoChanges(ctx, repoPath, branch, baseBranch, buildBaseSHA)
+		return prResults, ciGateResults, strict && madeNoChanges(ctx, repoPath, branch, baseBranch, buildBaseSHA)
 	}
 
 	deps.Note(ctx, "Phase 4: Push + PR", "build", "github_pr")
 
-	// The harness may not push (pr_push.go), so the orchestrator does.
-	if madeNoChanges(ctx, repoPath, branch, baseBranch, buildBaseSHA) {
+	// The harness may not push (pr_push.go), so the orchestrator does. Gated
+	// on strict so a plain build behaves as on main when SWE_STRICT_BUILD is unset.
+	if strict && madeNoChanges(ctx, repoPath, branch, baseBranch, buildBaseSHA) {
 		deps.Note(ctx, nochange.Note, "build", "github_pr", "skipped", "no_changes")
 		return prResults, ciGateResults, true
 	}
 	pushed := pushIntegrationBranch(ctx, deps, repoPath, branch)
 
-	prResult, perr := deps.Call(ctx, "run_github_pr", map[string]any{
+	prInput := map[string]any{
 		"repo_path":          repoPath,
 		"integration_branch": mapGet(gitConfig, "integration_branch", ""),
 		"base_branch":        baseBranch,
@@ -801,7 +815,11 @@ func singleRepoPROutcome(ctx context.Context, deps *Deps, cfg *config.BuildConfi
 		"model":              resolved["git_model"],
 		"permission_mode":    cfg.PermissionMode,
 		"ai_provider":        cfg.AIProvider(),
-	}, "run_github_pr")
+	}
+	if strict {
+		prInput["strict"] = true
+	}
+	prResult, perr := deps.Call(ctx, "run_github_pr", prInput, "run_github_pr")
 	if perr != nil {
 		deps.Note(ctx, fmt.Sprintf("PR creation failed: %v", perr), "build", "github_pr", "error")
 		return prResults, ciGateResults, false
@@ -861,7 +879,7 @@ func singleRepoPROutcome(ctx context.Context, deps *Deps, cfg *config.BuildConfi
 // multiRepoPRs ports the multi-repo push + PR + CI-gate block (app.py:1185-1263).
 func multiRepoPRs(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	resolved map[string]string, manifest *schemas.WorkspaceManifest,
-	dagResult map[string]any, artifactsDir, goal, buildSummary string,
+	dagResult map[string]any, artifactsDir, goal, buildSummary string, strict bool,
 ) ([]schemas.RepoPRResult, []map[string]any) {
 
 	prResults := []schemas.RepoPRResult{}
@@ -872,7 +890,7 @@ func multiRepoPRs(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	defer func() {
 		// Only when no repository changed does the run as a whole end with the
 		// plain outcome; a repository that changed still opens its own PR.
-		if eligible > 0 && unchanged == eligible {
+		if strict && eligible > 0 && unchanged == eligible {
 			deps.Note(ctx, nochange.Note, "build", "github_pr", "skipped", "no_changes")
 		}
 	}()
@@ -905,7 +923,7 @@ func multiRepoPRs(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 		}
 
 		eligible++
-		if madeNoChanges(ctx, wsRepo.AbsolutePath, repoIntegrationBranch, repoBaseBranch,
+		if strict && madeNoChanges(ctx, wsRepo.AbsolutePath, repoIntegrationBranch, repoBaseBranch,
 			mapStr(repoGitInit, "initial_commit_sha", "")) {
 			unchanged++
 			deps.Note(ctx, fmt.Sprintf("%s: the run made no changes there, so it opens no PR", wsRepo.RepoName),
@@ -915,7 +933,7 @@ func multiRepoPRs(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 
 		completedForRepo := filterCompletedForRepo(dagResult, wsRepo.RepoName)
 
-		prR, perr := deps.Call(ctx, "run_github_pr", map[string]any{
+		prInput := map[string]any{
 			"repo_path":          wsRepo.AbsolutePath,
 			"integration_branch": repoIntegrationBranch,
 			"base_branch":        repoBaseBranch,
@@ -927,7 +945,11 @@ func multiRepoPRs(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 			"model":              resolved["git_model"],
 			"permission_mode":    cfg.PermissionMode,
 			"ai_provider":        cfg.AIProvider(),
-		}, "run_github_pr")
+		}
+		if strict {
+			prInput["strict"] = true
+		}
+		prR, perr := deps.Call(ctx, "run_github_pr", prInput, "run_github_pr")
 		if perr != nil {
 			prResults = append(prResults, schemas.RepoPRResult{
 				RepoName:     wsRepo.RepoName,

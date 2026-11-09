@@ -2,10 +2,12 @@ package orch
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/nochange"
 )
 
@@ -167,20 +169,25 @@ func TestPlainBuildPartialFailedVerificationPushesAndOpensPR(t *testing.T) {
 	}
 }
 
-// V4: A build that changed nothing opens no pull request in both plain build
-// and build_issue.
+// V4: A build that changed nothing opens no pull request under SWE_STRICT_BUILD
+// in plain build and always under build_issue.
 func TestNoChangeBuildOpensNoPRInPlainBuildAndBuildIssue(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		viaBuildIssue bool
+		strictEnv     bool
 		passed        bool
 	}{
-		{"plain build passed", false, true},
-		{"plain build partial failed verification", false, false},
-		{"build_issue passed", true, true},
+		{"plain build passed with strict switch", false, true, true},
+		{"plain build partial failed verification with strict switch", false, true, false},
+		{"build_issue passed without strict switch", true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer withExecCtx("run-nc", "exec-nc")()
+			t.Setenv(config.EnvStrictBuild, "1")
+			if !tc.strictEnv {
+				_ = os.Unsetenv(config.EnvStrictBuild)
+			}
 			repo := issue309Repo(t, false)
 			calls, git, _, notes, _, result := buildWithRemote(t, repo, tc.viaBuildIssue, tc.passed)
 			for _, c := range calls {

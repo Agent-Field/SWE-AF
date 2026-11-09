@@ -531,24 +531,32 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		}
 	}
 	// A RED BUILD FAILS THE RUN WHATEVER THE VERIFIER SAID: the project's own
-	// build and test commands run here, in code, outside the plan.
-	if check := runProjectCheck(ctx, repoPath, baseSHA); check.Ran && !check.Passed {
-		deps.note(ctx, fmt.Sprintf("Project build check failed: `%s` exited %d",
-			check.FailedCommand, check.ExitCode), "fast_build", "verify", "project_check", "failed")
-		check.Fold(verification, "")
+	// build and test commands run here, in code, outside the plan, when
+	// SWE_STRICT_BUILD is enabled.
+	strict := config.StrictBuildEnabled()
+	if strict {
+		if check := runProjectCheck(ctx, repoPath, baseSHA); check.Ran && !check.Passed {
+			deps.note(ctx, fmt.Sprintf("Project build check failed: `%s` exited %d",
+				check.FailedCommand, check.ExitCode), "fast_build", "verify", "project_check", "failed")
+			check.Fold(verification, "")
+		}
 	}
 	success := mapBool(verification, "passed")
 
 	// ── 4. REPO FINALIZE (non-fatal) ────────────────────────────────────────
 	deps.note(ctx, "Fast build: finalize", "fast_build", "finalize")
-	if _, finErr := deps.Call(ctx, node+".run_repo_finalize", map[string]any{
+	finalizeInput := map[string]any{
 		"repo_path":       repoPath,
 		"artifacts_dir":   absArtifactsDir,
 		"model":           resolved["git_model"],
 		"permission_mode": cfg.PermissionMode,
 		"ai_provider":     aiProvider,
 		"base_ref":        baseSHA,
-	}); finErr != nil {
+	}
+	if strict {
+		finalizeInput["strict"] = true
+	}
+	if _, finErr := deps.Call(ctx, node+".run_repo_finalize", finalizeInput); finErr != nil {
 		deps.note(ctx, fmt.Sprintf("Finalize failed (non-fatal): %s", finErr),
 			"fast_build", "finalize", "error")
 	}
@@ -574,15 +582,20 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			partialOrSuccess(success), completedCount, totalCount, getString(verification, "summary", ""))
 
 		completedIssues := completedIssuesFromResults(taskResults)
-		// A NOTHING-TO-CHANGE RUN OPENS NO PULL REQUEST (issue #309): the
-		// branch is compared with the base by its tree, not its commits.
+		// A NOTHING-TO-CHANGE RUN OPENS NO PULL REQUEST (issue #309): when
+		// SWE_STRICT_BUILD is enabled, the branch is compared with the base by
+		// its tree, not its commits.
 		integrationBranch, _ := gitConfig["integration_branch"].(string)
 		var rawPR map[string]any
 		var prErr error
-		if v := nochange.Check(ctx, repoPath, integrationBranch, baseBranch, baseSHA); v.Known && v.Empty {
+		var nc nochange.Verdict
+		if strict {
+			nc = nochange.Check(ctx, repoPath, integrationBranch, baseBranch, baseSHA)
+		}
+		if strict && nc.Known && nc.Empty {
 			deps.note(ctx, nochange.Note, "fast_build", "github_pr", "skipped", "no_changes")
 		} else {
-			rawPR, prErr = deps.Call(ctx, node+".run_github_pr", map[string]any{
+			prInput := map[string]any{
 				"repo_path":          repoPath,
 				"integration_branch": gitConfig["integration_branch"],
 				"base_branch":        baseBranch,
@@ -594,7 +607,11 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 				"model":              resolved["git_model"],
 				"permission_mode":    cfg.PermissionMode,
 				"ai_provider":        aiProvider,
-			})
+			}
+			if strict {
+				prInput["strict"] = true
+			}
+			rawPR, prErr = deps.Call(ctx, node+".run_github_pr", prInput)
 		}
 		if prErr != nil {
 			deps.note(ctx, fmt.Sprintf("PR creation failed (non-fatal): %s", prErr),

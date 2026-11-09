@@ -166,6 +166,7 @@ func (in BuildIssueInput) buildInput() map[string]any {
 		"plan_review":                  review,
 		"review_title":                 in.reviewTitle(),
 		"no_pr_on_failed_verification": true,
+		"strict":                       true,
 	}
 	if in.RepoURL != "" {
 		out["repo_url"] = in.RepoURL

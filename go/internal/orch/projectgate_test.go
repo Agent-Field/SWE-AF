@@ -8,6 +8,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/config"
+	"github.com/Agent-Field/SWE-AF/go/internal/projectcheck"
 )
 
 func gitT(t *testing.T, dir string, args ...string) string {
@@ -55,6 +58,9 @@ func buildWithVerifier(t *testing.T, work string, verdict func() map[string]any)
 	}
 	t.Setenv("GOPROXY", "off")
 	t.Setenv("GOFLAGS", "-mod=readonly")
+	// build_issue always runs the project gate even with SWE_STRICT_BUILD unset.
+	t.Setenv(config.EnvStrictBuild, "1")
+	_ = os.Unsetenv(config.EnvStrictBuild)
 
 	repo := t.TempDir()
 	gitT(t, repo, "init", "-q", "-b", "main")
@@ -216,4 +222,162 @@ func TestARepairedCheckCannotLiftARedBuild(t *testing.T) {
 			t.Fatalf("a build that does not compile called the PR role: %v", calls)
 		}
 	}
+}
+
+// N2: With SWE_STRICT_BUILD unset, a plain build runs no project build or test
+// command, and a repository whose own tests fail does not fail the build on
+// that account. With SWE_STRICT_BUILD set, or via build_issue without the
+// switch, the project gate runs and fails the build.
+func TestProjectGateSkippedOnPlainBuildUnlessStrict(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	t.Setenv("GOPROXY", "off")
+	t.Setenv("GOFLAGS", "-mod=readonly")
+
+	runCase := func(t *testing.T, viaBuildIssue, strictEnv bool) (
+		gateCalls int, calls []string, finalizeInput map[string]any, result map[string]any,
+	) {
+		t.Helper()
+		defer withExecCtx("run-n2", "exec-n2")()
+		t.Setenv(config.EnvStrictBuild, "1")
+		if !strictEnv {
+			if err := os.Unsetenv(config.EnvStrictBuild); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		repo := t.TempDir()
+		gitT(t, repo, "init", "-q", "-b", "main")
+		writeCommit(t, repo, "base", map[string]string{
+			"go.mod":    "module example.com/ledger\n\ngo 1.21\n",
+			"ledger.go": "package ledger\n\nfunc Sum(a, b int) int { return a + b }\n",
+		})
+
+		prevCheck := runProjectCheck
+		t.Cleanup(func() { runProjectCheck = prevCheck })
+		runProjectCheck = func(ctx context.Context, path, base string) projectcheck.Outcome {
+			gateCalls++
+			return prevCheck(ctx, path, base)
+		}
+
+		prevGit, prevGH := runGit, runGH
+		t.Cleanup(func() { runGit, runGH = prevGit, prevGH })
+		runGit = func(context.Context, string, ...string) cmdResult { return cmdResult{} }
+		runGH = func(context.Context, string, ...string) cmdResult {
+			return cmdResult{Stdout: "https://github.com/o/r/pull/300\n"}
+		}
+
+		execFn := func(map[string]any) map[string]any {
+			writeCommit(t, repo, "issue/failing-test", map[string]string{
+				"ledger_test.go": "package ledger\n\nimport \"testing\"\n\nfunc TestSumFails(t *testing.T) { t.Fatal(\"repo test fails\") }\n",
+			})
+			return map[string]any{
+				"completed_issues": []any{map[string]any{"name": "add-test"}},
+				"merged_branches":  []any{"issue/add-test"},
+				"all_issues":       []any{map[string]any{"name": "add-test"}},
+				"failed_issues":    []any{}, "skipped_issues": []any{}, "accumulated_debt": []any{},
+			}
+		}
+		base := buildHandler(execFn, func(map[string]any) map[string]any {
+			return map[string]any{"passed": true, "summary": "OVERALL: PASS", "criteria_results": []any{}}
+		})
+		var mu sync.Mutex
+		app := &mockApp{handler: func(ctx context.Context, target string, input map[string]any) (map[string]any, error) {
+			mu.Lock()
+			calls = append(calls, target[strings.LastIndex(target, ".")+1:])
+			if strings.HasSuffix(target, ".run_repo_finalize") {
+				finalizeInput = input
+			}
+			mu.Unlock()
+			switch {
+			case strings.HasSuffix(target, ".run_git_init"):
+				return map[string]any{
+					"success": true, "integration_branch": "feature/add-test",
+					"original_branch": "main", "mode": "fresh",
+					"remote_url": "https://github.com/o/r.git", "remote_default_branch": "main",
+				}, nil
+			case strings.HasSuffix(target, ".run_github_pr"):
+				return map[string]any{"pr_url": "https://github.com/o/r/pull/300", "pr_number": 300}, nil
+			}
+			return base(ctx, target, input)
+		}}
+
+		deps := &Deps{App: app, NodeID: "swe-planner"}
+		cfg := map[string]any{"git_init_max_retries": 1, "max_verify_fix_cycles": 0}
+		var (
+			out any
+			err error
+		)
+		if viaBuildIssue {
+			out, err = BuildIssue(context.Background(), deps, map[string]any{
+				"title":       "Add Sum test",
+				"repo_path":   repo,
+				"plan_review": false,
+				"config":      cfg,
+			})
+		} else {
+			out, err = Build(context.Background(), deps, map[string]any{
+				"goal":      "Add Sum test",
+				"repo_path": repo,
+				"config":    cfg,
+			})
+		}
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		result, _ = out.(map[string]any)
+		return gateCalls, calls, finalizeInput, result
+	}
+
+	t.Run("plain build switch unset runs no project command and succeeds", func(t *testing.T) {
+		gateCalls, calls, finalizeInput, result := runCase(t, false, false)
+		if gateCalls != 0 {
+			t.Fatalf("runProjectCheck called %d times with switch unset, want 0", gateCalls)
+		}
+		if !asBool(result["success"]) {
+			t.Fatalf("plain build failed on repository's own tests when switch unset: %v", result["verification"])
+		}
+		if !strings.Contains(strings.Join(calls, " "), "run_github_pr") {
+			t.Fatalf("plain passing build did not reach run_github_pr: %v", calls)
+		}
+		if _, hasStrict := finalizeInput["strict"]; hasStrict {
+			t.Fatalf("plain build with switch unset passed strict to finalize: %v", finalizeInput)
+		}
+	})
+
+	t.Run("plain build switch set runs project gate and fails", func(t *testing.T) {
+		gateCalls, _, finalizeInput, result := runCase(t, false, true)
+		if gateCalls != 1 {
+			t.Fatalf("runProjectCheck called %d times with switch set, want 1", gateCalls)
+		}
+		if asBool(result["success"]) {
+			t.Fatalf("strict build passed despite failing repo test: %v", result["verification"])
+		}
+		verif, _ := result["verification"].(map[string]any)
+		if !strings.Contains(mapStr(verif, "summary", ""), "go test ./...") {
+			t.Fatalf("verification summary missing failing test command: %v", verif)
+		}
+		if finalizeInput["strict"] != true {
+			t.Fatalf("strict build did not pass strict=true to finalize: %v", finalizeInput)
+		}
+	})
+
+	t.Run("build_issue without switch runs project gate and fails", func(t *testing.T) {
+		gateCalls, calls, finalizeInput, result := runCase(t, true, false)
+		if gateCalls != 1 {
+			t.Fatalf("runProjectCheck called %d times for build_issue, want 1", gateCalls)
+		}
+		if asBool(result["success"]) {
+			t.Fatalf("build_issue passed despite failing repo test: %v", result["verification"])
+		}
+		for _, c := range calls {
+			if c == "run_github_pr" {
+				t.Fatalf("failed build_issue called run_github_pr: %v", calls)
+			}
+		}
+		if finalizeInput["strict"] != true {
+			t.Fatalf("build_issue did not thread strict=true to finalize: %v", finalizeInput)
+		}
+	})
 }

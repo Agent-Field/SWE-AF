@@ -10,6 +10,7 @@ import (
 
 	"github.com/Agent-Field/agentfield/sdk/go/agent"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/nochange"
 )
 
@@ -158,6 +159,7 @@ func TestDerivedWorkspaceCleanup(t *testing.T) {
 
 	t.Run("removed after no-change build", func(t *testing.T) {
 		t.Setenv("SWE_KEEP_WORKSPACES", "")
+		t.Setenv(config.EnvStrictBuild, "1")
 		derived, notes, err := runDerivedWorkspaceBuild(t, derivedRunOpts{
 			changeFiles: false,
 			passed:      true,

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/afx"
+	"github.com/Agent-Field/SWE-AF/go/internal/config"
 	"github.com/Agent-Field/SWE-AF/go/internal/nochange"
 	gitprompts "github.com/Agent-Field/SWE-AF/go/internal/prompts/gitops"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
@@ -26,6 +27,9 @@ type repoFinalizeInput struct {
 	// BaseRef is the commit the run started from. The cleanup may remove only
 	// tracked files that did not exist there (see finalizeguard.go).
 	BaseRef string `json:"base_ref"`
+	// Strict enables the finalize guard when threaded from build_issue even if
+	// SWE_STRICT_BUILD is unset.
+	Strict bool `json:"strict"`
 }
 
 // RunRepoFinalize cleans up the repository after verification — removes
@@ -39,7 +43,13 @@ func RunRepoFinalize(ctx context.Context, deps *Deps, input map[string]any) (any
 
 	deps.App.Note(ctx, "Repo finalize starting", "repo_finalize", "start")
 
-	scope, guarded := openFinalizeScope(ctx, in.RepoPath, in.BaseRef)
+	var (
+		scope   finalizeScope
+		guarded bool
+	)
+	if in.Strict || config.StrictBuildEnabled() {
+		scope, guarded = openFinalizeScope(ctx, in.RepoPath, in.BaseRef)
+	}
 	taskPrompt := gitprompts.RepoFinalizeTaskPrompt(in.RepoPath, scope.created...)
 
 	provider, err := resolveProvider(in.AIProvider)
@@ -138,6 +148,7 @@ type githubPRInput struct {
 	Model             string           `json:"model"`
 	PermissionMode    string           `json:"permission_mode"`
 	AIProvider        string           `json:"ai_provider"`
+	Strict            bool             `json:"strict"`
 }
 
 // RunGitHubPR pushes the integration branch and creates a PR (opened ready
@@ -150,12 +161,14 @@ func RunGitHubPR(ctx context.Context, deps *Deps, input map[string]any) (any, er
 	}
 
 	// A BRANCH THAT CHANGES NO FILE OPENS NO PULL REQUEST, whatever commits it
-	// carries (issue #309: two empty commits opened the 0-file PR #315). The
-	// orchestrators check this before pushing; the role checks again so no
-	// caller can open one.
-	if v := nochange.Check(ctx, in.RepoPath, in.IntegrationBranch, in.BaseBranch); v.Known && v.Empty {
-		deps.App.Note(ctx, nochange.Note, "github_pr", "skipped", "no_changes")
-		return schemas.GitHubPRResult{Success: false, ErrorMessage: nochange.Note}, nil
+	// carries (issue #309: two empty commits opened the 0-file PR #315). Gated
+	// on strict (SWE_STRICT_BUILD or build_issue) so a plain call behaves as on
+	// main when the switch is unset.
+	if in.Strict || config.StrictBuildEnabled() {
+		if v := nochange.Check(ctx, in.RepoPath, in.IntegrationBranch, in.BaseBranch); v.Known && v.Empty {
+			deps.App.Note(ctx, nochange.Note, "github_pr", "skipped", "no_changes")
+			return schemas.GitHubPRResult{Success: false, ErrorMessage: nochange.Note}, nil
+		}
 	}
 
 	deps.App.Note(ctx, fmt.Sprintf("GitHub PR: pushing %s and creating PR",
