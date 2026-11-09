@@ -52,6 +52,10 @@ type buildInput struct {
 	PlanReview bool `json:"plan_review"`
 	// ReviewTitle is the short name of the work the plan question uses.
 	ReviewTitle string `json:"review_title"`
+	// NoPROnFailedVerification withholds the push and pull request when
+	// verification fails, even if some issues completed. build_issue sets it;
+	// a plain build still publishes partial completed work with its debt.
+	NoPROnFailedVerification bool `json:"no_pr_on_failed_verification"`
 }
 
 // Build is the end-to-end orchestrator: clone → plan (+ git init) → approval →
@@ -79,17 +83,22 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	repoPath := in.RepoPath
 
 	// Auto-derive repo_path from repo_url, build-scoped.
+	cleanDerived := false
 	if cfg.RepoURL != "" && repoPath == "" {
 		repoName := deriveRepoName(cfg.RepoURL)
 		repoPath = filepath.Join(workspace.Root(), fmt.Sprintf("%s-%s", repoName, buildID))
-		// A WORKSPACE THE BUILD MADE IS REMOVED WHEN THE BUILD ENDS, however
-		// it ends. Left behind, it is a neighbour the next build's planners
-		// can read: live on 2026-11-07 a build for issue #184 found a
-		// cancelled build's plan for #83 one directory over and planned
-		// around it. SWE_KEEP_WORKSPACES=1 keeps them for debugging.
+		// Remove a workspace the build made once its work is published or it
+		// ended with nothing to change, so finished builds do not pile up as
+		// readable neighbours. Keep it on error, cancellation, or unpushed work
+		// so resume_build still finds .artifacts/execution/checkpoint.json.
+		// SWE_KEEP_WORKSPACES=1 keeps it always.
 		if os.Getenv("SWE_KEEP_WORKSPACES") != "1" {
 			derived := repoPath
-			defer func() { _ = os.RemoveAll(derived) }()
+			defer func() {
+				if cleanDerived && ctx.Err() == nil {
+					_ = os.RemoveAll(derived)
+				}
+			}()
 		}
 	}
 
@@ -328,6 +337,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 			ArtifactsDir:      in.ArtifactsDir,
 			AbsArtifactsDir:   absArtifactsDir,
 			ExecutionID:       execID,
+			PlanReview:        in.PlanReview,
 			ReviewTitle:       in.ReviewTitle,
 			AdditionalContext: in.AdditionalContext,
 		})
@@ -498,24 +508,22 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	// 4. PUSH & PR (+ CI gate).
 	prResults := []schemas.RepoPRResult{}
 	ciGateResults := []map[string]any{}
+	noChangesToPublish := false
 	buildSummary := buildSummaryText(success, completed, total, verification)
 
-	// A BUILD THAT DID NOT PASS VERIFICATION OPENS NO PULL REQUEST. Live on
-	// 2026-11-08 (issue #221) the coder could not commit inside its fence, the
-	// verifier said so ("OVERALL FAIL … its change is NOT present in the
-	// repository"), and this phase still pushed the integration branch and
-	// opened PR #227, which carried nothing but git_init's .gitignore. A
-	// failed run then read as both failed and published. The result below
-	// still carries the verification and the debt; only the publish is held.
+	// WorkAF's build_issue (NoPROnFailedVerification) and empty failed builds
+	// open no pull request when verification failed (issue #221 → PR #227). A
+	// plain build that completed or merged some issues still publishes its
+	// branch and pull request with accumulated_debt, as on main.
 	switch {
-	case !success:
+	case !success && (in.NoPROnFailedVerification || isEmptyBuild(success, everCompleted, everMerged)):
 		deps.Note(ctx, "No pull request: the build did not pass verification ("+
 			buildSummary+")", "build", "github_pr", "skipped")
 	case manifest != nil && len(manifest.Repos) > 1:
 		prResults, ciGateResults = multiRepoPRs(ctx, deps, cfg, resolved, manifest,
 			dagResult, planArtifactsDir, in.Goal, buildSummary)
 	default:
-		prResults, ciGateResults = singleRepoPR(ctx, deps, cfg, resolved, gitConfig,
+		prResults, ciGateResults, noChangesToPublish = singleRepoPROutcome(ctx, deps, cfg, resolved, gitConfig,
 			dagResult, repoPath, planArtifactsDir, in.Goal, buildSummary,
 			prdMarkdown, architectureMarkdown, buildBaseSHA)
 	}
@@ -557,6 +565,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		return buildResultMap, rf
 	}
 
+	cleanDerived = (success && allPRsPublished(prResults)) || noChangesToPublish
 	return buildResultMap, nil
 }
 
@@ -723,24 +732,37 @@ func failedCriteriaOf(verification map[string]any) []map[string]any {
 // PR phases.
 // ---------------------------------------------------------------------------
 
+// allPRsPublished reports whether at least one PR was opened and none failed.
+func allPRsPublished(prs []schemas.RepoPRResult) bool {
+	if len(prs) == 0 {
+		return false
+	}
+	for _, pr := range prs {
+		if !pr.Success || pr.PRURL == "" {
+			return false
+		}
+	}
+	return true
+}
+
 // singleRepoPR ports the single-repo push + PR + CI-gate block (app.py:1264-1367).
 func singleRepoPR(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	resolved map[string]string, gitConfig, dagResult map[string]any,
 	repoPath, artifactsDir, goal, buildSummary, prdMarkdown, architectureMarkdown, buildBaseSHA string,
 ) ([]schemas.RepoPRResult, []map[string]any) {
+	prs, gates, _ := singleRepoPROutcome(ctx, deps, cfg, resolved, gitConfig,
+		dagResult, repoPath, artifactsDir, goal, buildSummary, prdMarkdown, architectureMarkdown, buildBaseSHA)
+	return prs, gates
+}
+
+func singleRepoPROutcome(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
+	resolved map[string]string, gitConfig, dagResult map[string]any,
+	repoPath, artifactsDir, goal, buildSummary, prdMarkdown, architectureMarkdown, buildBaseSHA string,
+) ([]schemas.RepoPRResult, []map[string]any, bool) {
 
 	prResults := []schemas.RepoPRResult{}
 	ciGateResults := []map[string]any{}
 
-	remoteURL := ""
-	if gitConfig != nil {
-		remoteURL = mapStr(gitConfig, "remote_url", "")
-	}
-	if remoteURL == "" || !cfg.EnableGithubPR {
-		return prResults, ciGateResults
-	}
-
-	deps.Note(ctx, "Phase 4: Push + PR", "build", "github_pr")
 	baseBranch := cfg.GithubPRBase
 	if baseBranch == "" && gitConfig != nil {
 		baseBranch = mapStr(gitConfig, "remote_default_branch", "")
@@ -748,12 +770,22 @@ func singleRepoPR(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
+	branch := mapStr(gitConfig, "integration_branch", "")
+
+	remoteURL := ""
+	if gitConfig != nil {
+		remoteURL = mapStr(gitConfig, "remote_url", "")
+	}
+	if remoteURL == "" || !cfg.EnableGithubPR {
+		return prResults, ciGateResults, madeNoChanges(ctx, repoPath, branch, baseBranch, buildBaseSHA)
+	}
+
+	deps.Note(ctx, "Phase 4: Push + PR", "build", "github_pr")
 
 	// The harness may not push (pr_push.go), so the orchestrator does.
-	branch := mapStr(gitConfig, "integration_branch", "")
 	if madeNoChanges(ctx, repoPath, branch, baseBranch, buildBaseSHA) {
 		deps.Note(ctx, nochange.Note, "build", "github_pr", "skipped", "no_changes")
-		return prResults, ciGateResults
+		return prResults, ciGateResults, true
 	}
 	pushed := pushIntegrationBranch(ctx, deps, repoPath, branch)
 
@@ -772,7 +804,7 @@ func singleRepoPR(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 	}, "run_github_pr")
 	if perr != nil {
 		deps.Note(ctx, fmt.Sprintf("PR creation failed: %v", perr), "build", "github_pr", "error")
-		return prResults, ciGateResults
+		return prResults, ciGateResults, false
 	}
 
 	prURL := mapStr(prResult, "pr_url", "")
@@ -823,7 +855,7 @@ func singleRepoPR(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 		}
 	}
 
-	return prResults, ciGateResults
+	return prResults, ciGateResults, false
 }
 
 // multiRepoPRs ports the multi-repo push + PR + CI-gate block (app.py:1185-1263).

@@ -97,10 +97,12 @@ func buildWithVerifier(t *testing.T, work string, verdict func() map[string]any)
 		}
 		return base(ctx, target, input)
 	}}
-	out, err := Build(context.Background(), &Deps{App: app, NodeID: "swe-planner"}, map[string]any{
-		"goal":      "Resolve GitHub issue #269: Add a Digest method to Ledger using hashkit",
-		"repo_path": repo,
-		"config":    map[string]any{"git_init_max_retries": 1, "max_verify_fix_cycles": 0},
+	out, err := BuildIssue(context.Background(), &Deps{App: app, NodeID: "swe-planner"}, map[string]any{
+		"title":        "Add a Digest method to Ledger using hashkit",
+		"issue_number": 269,
+		"repo_path":    repo,
+		"plan_review":  false,
+		"config":       map[string]any{"git_init_max_retries": 1, "max_verify_fix_cycles": 0},
 	})
 	if err != nil {
 		t.Fatalf("build: %v", err)

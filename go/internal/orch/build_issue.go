@@ -160,11 +160,12 @@ func (in BuildIssueInput) buildInput() map[string]any {
 		review = *in.PlanReview
 	}
 	out := map[string]any{
-		"goal":               in.goal(),
-		"additional_context": in.additionalContext(),
-		"config":             cfg,
-		"plan_review":        review,
-		"review_title":       in.reviewTitle(),
+		"goal":                         in.goal(),
+		"additional_context":           in.additionalContext(),
+		"config":                       cfg,
+		"plan_review":                  review,
+		"review_title":                 in.reviewTitle(),
+		"no_pr_on_failed_verification": true,
 	}
 	if in.RepoURL != "" {
 		out["repo_url"] = in.RepoURL
