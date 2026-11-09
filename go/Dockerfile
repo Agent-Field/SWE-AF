@@ -4,11 +4,11 @@
 #     docker build -f go/Dockerfile .
 #
 # The Go module requires the AgentField Go SDK by version (go/go.mod:
-# github.com/Agent-Field/agentfield/sdk/go v0.1.130) and the builder resolves it
-# through the module proxy — there is no `replace` directive, so nothing here
-# depends on a sibling checkout. The builder still sparse-clones the SDK at
-# AGENTFIELD_SDK_REF: it records the exact commit behind that version in the
-# image and fails the build early if the ref ever disappears.
+# github.com/Agent-Field/agentfield/sdk/go v0.1.146-rc.25) and the builder
+# resolves it through the module proxy — there is no `replace` directive, so
+# nothing here depends on a sibling checkout. The builder still sparse-clones
+# the SDK at AGENTFIELD_SDK_REF: it records the exact release behind that
+# version in the image and fails the build early if the ref ever disappears.
 #
 # Cache-busting (per the docker cache rule): the SDK checkout is keyed on the
 # AGENTFIELD_SDK_REF build arg. Bump the ref (or pass --build-arg) to force a
@@ -64,10 +64,10 @@ FROM node:22-bookworm-slim AS node
 # control-plane Go prerequisite (Go 1.23+).
 FROM golang:1.23-bookworm AS builder
 
-# Pinned AgentField SDK ref. Default = the sdk/go/v0.1.130 tag commit, the same
-# release go/go.mod requires. Changing this string invalidates the clone layer
-# below.
-ARG AGENTFIELD_SDK_REF=aba20a9b248d9ee6c74f4e7e688ef0740c542dc9
+# Pinned AgentField SDK ref. Default = the sdk/go/v0.1.146-rc.25 release tag,
+# the same release go/go.mod requires. Changing this string invalidates the
+# clone layer below.
+ARG AGENTFIELD_SDK_REF=sdk/go/v0.1.146-rc.25
 ARG AGENTFIELD_REPO=https://github.com/Agent-Field/agentfield.git
 
 WORKDIR /src
