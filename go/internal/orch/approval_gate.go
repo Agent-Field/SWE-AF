@@ -135,6 +135,9 @@ func PlanApprovalGate(ctx context.Context, req ApprovalRequest) (ApprovalOutcome
 				UserID:           userID,
 			}, revisionIter)
 			if err != nil {
+				if !req.PlanReview && !hitl.NativeEnabled() {
+					return ApprovalOutcome{}, err
+				}
 				// Hax is an extra door, not the gate: the plan is still asked
 				// on the control plane, where every other door can answer it.
 				deps.Note(ctx, "hax is unavailable — asking for plan approval on the control plane only",

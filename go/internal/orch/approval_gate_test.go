@@ -600,3 +600,87 @@ func TestFormatPlanForApproval(t *testing.T) {
 		t.Fatalf("filesToModify default wrong: %v", i0["filesToModify"])
 	}
 }
+
+// V3: A plain build whose HAX client errors fails fast and does not pause,
+// unless PlanReview is set or SWE_HITL_NATIVE is truthy, in which case it falls
+// back to the control-plane pause.
+func TestApprovalHaxErrorFailsFastUnlessPlanReviewOrNative(t *testing.T) {
+	errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "hax down", http.StatusInternalServerError)
+	}))
+	defer errServer.Close()
+
+	runBuild := func(t *testing.T, extra map[string]any) (*fakePauser, *mockApp, bool, error) {
+		t.Helper()
+		defer withExecCtx("run-v3", "exec-v3")()
+		t.Setenv("HAX_API_KEY", "k")
+		fake := &fakePauser{decisions: []string{"approved"}}
+		defer wireHax(t, errServer, fake)()
+
+		executed := false
+		exec := func(map[string]any) map[string]any {
+			executed = true
+			return map[string]any{
+				"completed_issues": []any{map[string]any{"name": "i1"}},
+				"merged_branches":  []any{"issue/i1"},
+				"all_issues":       []any{map[string]any{"name": "i1"}},
+				"failed_issues":    []any{}, "skipped_issues": []any{}, "accumulated_debt": []any{},
+			}
+		}
+		verify := func(map[string]any) map[string]any {
+			return map[string]any{"passed": true, "criteria_results": []any{}, "summary": "ok"}
+		}
+		app := &mockApp{handler: buildHandler(exec, verify)}
+		deps := &Deps{App: app, NodeID: "swe-planner", ApprovalGate: PlanApprovalGate}
+
+		in := map[string]any{
+			"goal":      "ship feature",
+			"repo_path": t.TempDir(),
+			"config":    map[string]any{"git_init_max_retries": 1},
+		}
+		for k, v := range extra {
+			in[k] = v
+		}
+		_, err := Build(context.Background(), deps, in)
+		return fake, app, executed, err
+	}
+
+	t.Run("plain HAX-only build fails fast without pausing", func(t *testing.T) {
+		t.Setenv(hitl.EnvNativeHITL, "")
+		fake, _, executed, err := runBuild(t, nil)
+		if err == nil {
+			t.Fatal("expected HAX failure to abort plain build")
+		}
+		if fake.calls != 0 {
+			t.Fatalf("plain build paused %d times on HAX failure, want 0", fake.calls)
+		}
+		if executed {
+			t.Fatal("plain build reached execute after HAX failure")
+		}
+	})
+
+	t.Run("PlanReview falls back to control-plane pause", func(t *testing.T) {
+		t.Setenv(hitl.EnvNativeHITL, "")
+		fake, app, executed, err := runBuild(t, map[string]any{"plan_review": true})
+		if err != nil {
+			t.Fatalf("unexpected error with plan_review=true: %v", err)
+		}
+		if fake.calls != 1 || !executed {
+			t.Fatalf("pause calls = %d, executed = %v; want 1 and true", fake.calls, executed)
+		}
+		if !strings.Contains(strings.Join(app.notes, "\n"), "asking for plan approval on the control plane only") {
+			t.Fatalf("missing degraded CP-only note: %v", app.notes)
+		}
+	})
+
+	t.Run("SWE_HITL_NATIVE falls back to control-plane pause", func(t *testing.T) {
+		t.Setenv(hitl.EnvNativeHITL, "1")
+		fake, _, executed, err := runBuild(t, nil)
+		if err != nil {
+			t.Fatalf("unexpected error with SWE_HITL_NATIVE=1: %v", err)
+		}
+		if fake.calls != 1 || !executed {
+			t.Fatalf("pause calls = %d, executed = %v; want 1 and true", fake.calls, executed)
+		}
+	})
+}

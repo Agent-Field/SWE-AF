@@ -261,6 +261,10 @@ type ApprovalRequest struct {
 	ArtifactsDir    string
 	AbsArtifactsDir string
 	ExecutionID     string
+	// PlanReview reports whether the caller explicitly asked for plan review,
+	// so a failed hax request falls back to a control-plane pause rather than
+	// aborting a HAX-only build.
+	PlanReview bool
 	// ReviewTitle names the work in the one-line question a person is asked
 	// ("#12: Add a Len() method to Ledger"). Empty falls back to the goal.
 	ReviewTitle string
