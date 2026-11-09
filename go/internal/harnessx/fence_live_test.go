@@ -38,6 +38,7 @@ func TestAFencedRunIsWatchedAndSteerable(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("CODEAF_BIN", bin)
+	t.Setenv(fence.EnvFence, "1")
 	cwd := filepath.Join(root, "factory-demo-aaaa", ".worktrees", "issue-01")
 	_ = os.MkdirAll(cwd, 0o755)
 

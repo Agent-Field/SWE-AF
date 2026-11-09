@@ -45,6 +45,7 @@ func TestScopeIsTheBuildsOwnFolder(t *testing.T) {
 // boundary codeaf's file tools and its commands both live inside.
 func TestBuildACannotReadBuildB(t *testing.T) {
 	requireFence(t)
+	t.Setenv(EnvFence, "1")
 	root := t.TempDir()
 	a := filepath.Join(root, "factory-demo-aaaa")
 	b := filepath.Join(root, "factory-demo-bbbb")
@@ -98,6 +99,24 @@ func TestBuildACannotReadBuildB(t *testing.T) {
 	}
 	if out, err := run("echo ok > " + filepath.Join(a, "mine") + " && cat " + filepath.Join(a, "mine")); err != nil || !strings.Contains(out, "ok") {
 		t.Fatalf("build A cannot write in its own folder: %v\n%s", err, out)
+	}
+}
+
+// V2: SWE_FENCE is opt-in and off by default; truthy values enable the fence,
+// and unset or false values leave it off so the launcher runs the binary
+// directly without refusing when no OS fence is available.
+func TestFenceSwitchIsOptInAndOffByDefault(t *testing.T) {
+	for _, off := range []string{"", "0", "false", "FALSE", "no", "off", "OFF", "  "} {
+		t.Setenv(EnvFence, off)
+		if Enabled() {
+			t.Fatalf("SWE_FENCE=%q must leave the fence off", off)
+		}
+	}
+	for _, on := range []string{"1", "true", "TRUE", "yes", "on", "ON", " 1 "} {
+		t.Setenv(EnvFence, on)
+		if !Enabled() {
+			t.Fatalf("SWE_FENCE=%q must enable the fence", on)
+		}
 	}
 }
 
@@ -279,6 +298,7 @@ func TestTheFenceRulesForALinkedWorktree(t *testing.T) {
 // worktree's files or gitdir, or list the root.
 func TestAFencedCoderCommitsInItsLinkedWorktree(t *testing.T) {
 	requireFence(t)
+	t.Setenv(EnvFence, "1")
 	f := newGitFixture(t)
 	sh, _ := exec.LookPath("sh")
 	self, err := os.Executable()

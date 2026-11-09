@@ -82,7 +82,7 @@ start() {
   remote "cd $RN/work; env -i HOME=\$HOME USER=\$USER KITR=$R \
     PATH=$R/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
     NODE_ID=$ID AGENTFIELD_NODE_LINK_ONLY=1 AGENTFIELD_NODE_HOST=$NODE_HOST AGENTFIELD_SERVER=$CP_URL \
-    SWE_PRO_ENGINE=0 SWE_DEFAULT_RUNTIME=aforge AGENTFIELD_AFORGE_COMMAND=exec SWE_HITL_NATIVE=1 \
+    SWE_PRO_ENGINE=0 SWE_DEFAULT_RUNTIME=aforge AGENTFIELD_AFORGE_COMMAND=exec SWE_HITL_NATIVE=1 SWE_FENCE=1 \
     SWE_DEFAULT_MODEL=openrouter/$MODEL CODEAF_BIN=$R/bin/codeaf AGENTFIELD_HOME=$RN/home \
     SWE_AF_GIT_NAME=santoshkumarradha SWE_AF_GIT_EMAIL=santoshkumarradha@users.noreply.github.com \
     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.https://github.com.helper 'GIT_CONFIG_VALUE_0=!$R/bin/gh auth git-credential' \

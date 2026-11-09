@@ -13,9 +13,9 @@
 // seatbelt (sandbox-exec) on macOS, bubblewrap on Linux — that hides the
 // workspace root except the build's own folder. The fence covers codeaf's
 // in-process file tools and every command it runs alike, because both are
-// that process or its children. A FENCE THAT CANNOT BE APPLIED REFUSES THE
-// RUN; it never quietly runs unfenced. SWE_FENCE=off is the operator's
-// explicit opt-out.
+// that process or its children. SWE_FENCE is opt-in (off by default); when
+// enabled, A FENCE THAT CANNOT BE APPLIED REFUSES THE RUN rather than quietly
+// running unfenced.
 //
 // The node binary is its own fence launcher: harnessx points the codeaf
 // harness at os.Executable() with EnvExec set, and main hands control to Main
@@ -36,11 +36,11 @@ import (
 // Environment the launcher reads. They ride on the harness call's own
 // environment, so every call carries its own build's fence.
 const (
-	EnvExec = "SWE_FENCE_EXEC"   // "1": this process is the fence launcher
-	EnvReal = "SWE_FENCE_CODEAF" // the real codeaf binary
-	EnvRoot = "SWE_FENCE_ROOT"   // the shared workspace root to hide
-	EnvDir  = "SWE_FENCE_DIR"    // the build's own folder to keep visible
-	EnvOff  = "SWE_FENCE"        // "off": run without a fence (operator opt-out)
+	EnvExec  = "SWE_FENCE_EXEC"   // "1": this process is the fence launcher
+	EnvReal  = "SWE_FENCE_CODEAF" // the real codeaf binary
+	EnvRoot  = "SWE_FENCE_ROOT"   // the shared workspace root to hide
+	EnvDir   = "SWE_FENCE_DIR"    // the build's own folder to keep visible
+	EnvFence = "SWE_FENCE"        // truthy: run inside the fence (opt-in)
 
 	// A linked git worktree's own metadata, when it lives outside the
 	// build's folder (see Scope.GitDir).
@@ -48,8 +48,17 @@ const (
 	EnvGitCommon = "SWE_FENCE_GITCOMMON" // the repository's shared git dir
 )
 
-// Off reports the operator's explicit opt-out.
-func Off() bool { return strings.EqualFold(strings.TrimSpace(os.Getenv(EnvOff)), "off") }
+// Enabled reports whether EnvFence is truthy. Off by default so nodes without
+// an operating-system fence (Linux without bwrap, unprivileged containers,
+// Windows) run codeaf directly as on main; when enabled, a fence that cannot
+// be applied refuses the run.
+func Enabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvFence))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
 
 // Scope is what one call may see of the workspace root: Deny is hidden,
 // except Allow inside it.
@@ -255,7 +264,7 @@ func Main(args []string) int {
 		GitDir: os.Getenv(EnvGitDir), GitCommon: os.Getenv(EnvGitCommon)}
 	env := withoutLauncherVars(os.Environ())
 	argv := append([]string{real}, args...)
-	if !Off() && s.Deny != "" && s.Allow != "" {
+	if Enabled() && s.Deny != "" && s.Allow != "" {
 		if err := os.MkdirAll(s.Allow, 0o700); err != nil {
 			fmt.Fprintln(os.Stderr, "fence:", err)
 			return 126

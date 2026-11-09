@@ -162,12 +162,13 @@ func (r RoleOptions) ToOptions() harness.Options {
 	}
 }
 
-// fenceCodeAF starts a codeaf run inside its build's own folder (package
-// fence): the harness is pointed at this binary as the launcher, and the
-// call's environment names the real codeaf and the folder it may see. Other
-// harnesses are passed through unchanged; only codeaf is fenced today.
+// fenceCodeAF starts a codeaf run inside its build's own folder when SWE_FENCE
+// is enabled (package fence): the harness is pointed at this binary as the
+// launcher, and the call's environment names the real codeaf and the folder it
+// may see. When the fence is off, or for other harnesses, opts is returned
+// unchanged.
 func fenceCodeAF(opts harness.Options) harness.Options {
-	if fence.Off() || (opts.Provider != "aforge" && opts.Provider != "codeaf") {
+	if !fence.Enabled() || (opts.Provider != "aforge" && opts.Provider != "codeaf") {
 		return opts
 	}
 	cwd := opts.ProjectDir
