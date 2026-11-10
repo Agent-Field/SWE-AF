@@ -101,6 +101,7 @@ def clean_model_env(monkeypatch):
         "ANTHROPIC_API_KEY",
         "OPENROUTER_API_KEY",
         "INFRON_API_KEY",
+        "RUNCRATE_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("SWE_CODEX_AUTH_MODE", "api_key")
@@ -156,6 +157,13 @@ def clean_model_env(monkeypatch):
             {"INFRON_API_KEY": "test-key"},
             "opencode",
             "infron/deepseek/deepseek-v4-flash-0731",
+        ),
+        (
+            "open_code",
+            None,
+            {"RUNCRATE_API_KEY": "test-key"},
+            "opencode",
+            "runcrate/deepseek-ai/DeepSeek-V4.1-Flash",
         ),
         (
             "claude_code",

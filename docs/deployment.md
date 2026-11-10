@@ -44,6 +44,7 @@ or retain the previous runtime explicitly.
 |---|---|
 | `OPENROUTER_API_KEY` | OpenRouter key. Auto-selects `aforge` when no runtime is specified, defaulting every role to `openrouter/deepseek/deepseek-v4-flash-0731`, even alongside an Anthropic key |
 | `INFRON_API_KEY` | Infron gateway key. Alone, auto-selects `open_code` on the main path; fast mode needs an explicit `open_code` runtime. In Docker set `HARNESS_MODEL` to an `infron/...` model too |
+| `RUNCRATE_API_KEY` | Runcrate key (open-weight models). Alone, auto-selects `open_code` on the main path with `runcrate/deepseek-ai/DeepSeek-V4.1-Flash`; fast mode needs an explicit `open_code` runtime. In Docker set `HARNESS_MODEL` to a `runcrate/...` model too |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude models (`claude_code` runtime) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code subscription token (uses Pro/Max credits) |
 | `OPENAI_API_KEY` | OpenAI API key |
@@ -74,7 +75,7 @@ Unset `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` in a deployment that poi
 | `AGENTFIELD_SERVER` | Control plane URL | `http://control-plane:8080` (Docker) |
 | `NODE_ID` | Agent node identifier | `swe-planner` |
 | `PORT` | Agent listen port | `8003` |
-| `SWE_DEFAULT_RUNTIME` | Default runtime: `aforge`, `claude_code`, `open_code`, `codex`, or `command_code` (Python only, explicit opt-in) | auto — `aforge` with OpenRouter, main-path `open_code` with only Infron, else `claude_code`; request runtime wins |
+| `SWE_DEFAULT_RUNTIME` | Default runtime: `aforge`, `claude_code`, `open_code`, `codex`, or `command_code` (Python only, explicit opt-in) | auto — `aforge` with OpenRouter, main-path `open_code` with only Infron or Runcrate, else `claude_code`; request runtime wins |
 | `SWE_DEFAULT_MODEL` | Default model ID for every role | runtime-specific |
 
 The image registers `MiniMax-M3.1-Flash` first and `MiniMax-M3` second under the direct OpenAI-compatible providers `minimax-global-openai` and `minimax-cn-openai`, and under the Anthropic-compatible OpenCode provider `minimax-anthropic`. Set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above; the provider configuration appends `/v1`. Use the regional OpenAI base URLs `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`; keep the external Anthropic base URL exactly as shown without appending `/v1`.
