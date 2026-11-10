@@ -70,8 +70,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl -fsSL https://opencode.ai/install | bash && \
     # Install Codex CLI for codex runtime provider
     npm install -g @openai/codex && \
-    # Install Command Code CLI for command_code runtime provider
-    npm install -g command-code@1.82.2 && \
+    # Install Command Code CLI for command_code runtime provider. Only the
+    # top-level version is pinned; its own dependencies float, which is what
+    # broke 1.82.2 (a newer @opentelemetry/semantic-conventions), so the
+    # startup check below is what catches the next drift.
+    npm install -g command-code@1.88.5 && \
     # Credential-free startup check: fail the build on incompatible Node/CLI.
     command-code --version && \
     codex_path="$(command -v codex)" && \

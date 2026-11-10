@@ -9,7 +9,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Fixed
 
 - Keep Go git-role model defaults aligned with an explicit runtime, including when OpenRouter auto-selects AForge for the deployment.
-- Run pinned Command Code 1.82.2 on official Node 22 in the Python image, with a build-time startup check.
+- Run pinned Command Code 1.88.5 on official Node 22 in the Python image, with a build-time startup check.
+- Repair the Python image build, which had failed on every deploy since 2026-11-02: Command Code 1.82.2 no longer starts, because a newer `@opentelemetry/semantic-conventions` (pulled in through its caret dependencies) dropped the default export it imports. 1.88.5 starts on the same dependency set and accepts every flag the harness passes. CI now builds the whole Python image on every pull request, so the next upstream drift fails there instead of on a deploy.
 - Use official Node 22 in the Go image too, with a Claude Code startup check.
 - Restore the `nodejs` alias next to `node` in both images.
 - Route every fast-build stage to the selected Command Code runtime on the Python node.
