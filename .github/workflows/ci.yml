@@ -120,3 +120,19 @@ jobs:
       - name: Build the fetch stage (Go image)
         if: steps.probe.outputs.available == 'true'
         run: docker build --target aforge -f go/Dockerfile -t swe-af-go-aforge-stage .
+
+  python-image:
+    # The whole Python image, which is what Railway deploys from main. Its npm
+    # installs pin only top-level versions, so a dependency released upstream
+    # can break the build with no change here: from 2026-11-02 every deploy
+    # failed at Command Code's startup check while CI stayed green, and
+    # production silently kept the 2026-10-28 image. Building it here moves
+    # that failure onto the pull request.
+    name: Python image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the Python image
+        run: docker build -t swe-af-python .

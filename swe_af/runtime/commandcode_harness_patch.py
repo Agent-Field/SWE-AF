@@ -269,7 +269,7 @@ class CommandCodeProvider:
                 is_error=True,
                 error_message=(
                     f"Command Code CLI not found at '{self._bin}'. "
-                    "Install it with Node 22+: npm install -g command-code@1.82.2"
+                    "Install it with Node 22+: npm install -g command-code@1.88.5"
                 ),
                 failure_type=FailureType.CRASH,
             )
