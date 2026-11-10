@@ -185,7 +185,7 @@ the previous runtime; request runtime overrides take precedence.
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`           | Claude runtime (`claude_code`)                       |
 | `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`| Open runtimes (`aforge` / `open_code` / `codex`)     |
 | `GH_TOKEN`                                                | Optional: GitHub PAT (`repo` scope) — needed for private repos and PRs |
-| `SWE_DEFAULT_RUNTIME`                                     | `aforge` \| `claude_code` \| `open_code` \| `codex` (unset: auto — `aforge` with OpenRouter; main path `open_code` with only Infron; else `claude_code`) |
+| `SWE_DEFAULT_RUNTIME`                                     | `aforge` \| `claude_code` \| `open_code` \| `codex` (unset: auto — `aforge` with OpenRouter; main path `open_code` with only Infron or UberLLM; else `claude_code`) |
 | `AGENTFIELD_AFORGE_COMMAND`                               | AForge headless command — `exec` (default, baked into the image) or `do` |
 | `SWE_DEFAULT_MODEL`                                       | Default model when the request config omits `models` |
 | `SWE_CODEX_AUTH_MODE`                                     | `auto` \| `chatgpt` \| `api_key` (codex CLI auth)     |

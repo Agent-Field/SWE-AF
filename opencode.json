@@ -269,6 +269,46 @@
           "name": "GLM-5.2"
         }
       }
+    },
+    "uberllm": {
+      "name": "UberLLM",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "{env:UBERLLM_API_KEY}",
+        "baseURL": "https://api.uberllm.dev/v1"
+      },
+      "models": {
+        "moonshotai/kimi-k2.6": {
+          "name": "Kimi K2.6"
+        },
+        "moonshotai/kimi-k2.7-code": {
+          "name": "Kimi K2.7 Code"
+        },
+        "moonshotai/kimi-k3": {
+          "name": "Kimi K3"
+        },
+        "deepseek/deepseek-v4-flash": {
+          "name": "DeepSeek V4 Flash"
+        },
+        "deepseek/deepseek-v4-flash-0731": {
+          "name": "DeepSeek V4 Flash 0731"
+        },
+        "deepseek/deepseek-v4.1-flash": {
+          "name": "DeepSeek V4.1 Flash"
+        },
+        "deepseek/deepseek-v4-pro": {
+          "name": "DeepSeek V4 Pro"
+        },
+        "minimax/minimax-m3": {
+          "name": "MiniMax M3"
+        },
+        "z-ai/glm-5.2": {
+          "name": "GLM-5.2"
+        },
+        "z-ai/glm-5.3": {
+          "name": "GLM-5.3"
+        }
+      }
     }
   }
 }

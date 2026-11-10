@@ -426,6 +426,14 @@ With **only** an `INFRON_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway 
 
 > Docker and Railway deployments using Infron must set `HARNESS_MODEL=infron/deepseek/deepseek-v4-flash-0731` (or another `infron/...` id) in the environment. The image bakes an `openrouter/...` value that the `open_code` model cascade reads after the Infron auto default and would otherwise override it. `SWE_DEFAULT_MODEL` pins every role model but does not feed OpenCode's `small_model`; set `HARNESS_MODEL` for that path (setting both is fine).
 
+For UberLLM with `open_code`, set `UBERLLM_API_KEY` (keys at [uberllm.dev/signup](https://uberllm.dev/signup)) and use `uberllm/<provider>/<model>` (for example `uberllm/moonshotai/kimi-k2.6`). UberLLM is an OpenAI-compatible gateway serving the same `<provider>/<model>` ids as Infron and OpenRouter, so this is also a prefix swap. The image declares Kimi K2.6, K2.7 Code and K3, DeepSeek V4 Flash, V4 Flash 0731, V4.1 Flash and V4 Pro, MiniMax M3, and GLM-5.2 and 5.3; the full list is at `https://api.uberllm.dev/v1/models`:
+
+```bash
+SWE_DEFAULT_MODEL=uberllm/moonshotai/kimi-k2.6
+```
+
+With **only** an `UBERLLM_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway key, no `SWE_DEFAULT_RUNTIME`), the main paths auto-select `open_code` and default to `uberllm/deepseek/deepseek-v4-flash-0731`, following the same rules as Infron above (including the fast mode note and the `HARNESS_MODEL` requirement in Docker and Railway). Any gateway key already configured keeps precedence.
+
 ### MiniMax direct providers
 
 The Docker images include direct MiniMax provider entries for both supported regions and API compatibility modes. Every entry lists `MiniMax-M3.1-Flash` first, followed by `MiniMax-M3`. Set the model explicitly with the environment variables below; existing runtime and per-role overrides still apply.
@@ -906,7 +914,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
-| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python only, explicit opt-in). With OpenRouter available the default is `"aforge"`; with only Infron it is `"open_code"` on the main path; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide; request `runtime` wins over that. |
+| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python only, explicit opt-in). With OpenRouter available the default is `"aforge"`; with only Infron or UberLLM it is `"open_code"` on the main path; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide; request `runtime` wins over that. |
 | `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |

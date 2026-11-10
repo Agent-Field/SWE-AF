@@ -114,6 +114,19 @@ class TestOpenCodeProviders:
         assert "moonshotai/kimi-k2.6" in models
         assert "deepseek/deepseek-v4-flash-0731" in models
 
+    def test_uberllm_provider_is_openai_compatible(self, opencode_config: dict) -> None:
+        uberllm = opencode_config["provider"]["uberllm"]
+        assert uberllm["npm"] == "@ai-sdk/openai-compatible"
+        assert uberllm["options"]["baseURL"] == "https://api.uberllm.dev/v1"
+        assert uberllm["options"]["apiKey"] == "{env:UBERLLM_API_KEY}"
+
+    def test_uberllm_declares_default_model(self, opencode_config: dict) -> None:
+        """The auto default (uberllm/<id>) must resolve in OpenCode, so its id
+        has to be listed explicitly like every openai-compatible model."""
+        models = opencode_config["provider"]["uberllm"]["models"]
+        assert "deepseek/deepseek-v4-flash-0731" in models
+        assert "moonshotai/kimi-k2.6" in models
+
 
 def test_docker_requirements_pin_cryptography_below_sigill_version() -> None:
     """Docker image should avoid cryptography 48 SIGILL on Linux/aarch64."""

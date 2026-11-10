@@ -8,6 +8,7 @@ import (
 func TestAforgeGatewayPrecedence(t *testing.T) {
 	for _, otherKeys := range [][]string{
 		nil, {"ANTHROPIC_API_KEY"}, {"INFRON_API_KEY"}, {"ANTHROPIC_API_KEY", "INFRON_API_KEY"},
+		{"UBERLLM_API_KEY"},
 	} {
 		t.Run("OpenRouter with "+strings.Join(otherKeys, ","), func(t *testing.T) {
 			clearProviderEnv(t)
@@ -43,7 +44,7 @@ func TestAforgeRuntimeOverrides(t *testing.T) {
 	for _, runtime := range []string{"aforge", "claude_code", "open_code", "codex"} {
 		t.Run(runtime, func(t *testing.T) {
 			clearProviderEnv(t)
-			for _, key := range []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY"} {
+			for _, key := range []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "UBERLLM_API_KEY"} {
 				t.Setenv(key, "test-key")
 			}
 			t.Setenv("SWE_DEFAULT_RUNTIME", runtime)

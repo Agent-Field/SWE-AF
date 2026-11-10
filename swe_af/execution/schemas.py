@@ -622,6 +622,11 @@ _OPENROUTER_AUTO_DEFAULT_MODEL = "openrouter/deepseek/deepseek-v4-flash-0731"
 # so this is the existing gateway default with the prefix swapped.
 _INFRON_AUTO_DEFAULT_MODEL = "infron/deepseek/deepseek-v4-flash-0731"
 
+# Default model for the auto-selected UberLLM path (see _uberllm_only_env).
+# UberLLM is OpenAI-compatible and serves the same <provider>/<model> ids,
+# so this is again the existing gateway default with the prefix swapped.
+_UBERLLM_AUTO_DEFAULT_MODEL = "uberllm/deepseek/deepseek-v4-flash-0731"
+
 _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "aforge": {
         **{field: _OPENROUTER_AUTO_DEFAULT_MODEL for field in ALL_MODEL_FIELDS},
@@ -709,13 +714,35 @@ def _infron_only_env() -> bool:
     return bool(os.getenv("INFRON_API_KEY", "").strip())
 
 
+def _uberllm_only_env() -> bool:
+    """Whether the deployer implicitly chose the UberLLM runtime.
+
+    Mirrors ``_infron_only_env`` for the ``UBERLLM_API_KEY`` gateway: no
+    explicit ``SWE_DEFAULT_RUNTIME``, no Anthropic key, no other gateway key,
+    but an ``UBERLLM_API_KEY``. A gateway key that was already honored before
+    UberLLM existed keeps precedence, so adding an UberLLM key never silently
+    reroutes an existing deployment; to move traffic over, drop the other key
+    or set ``SWE_DEFAULT_MODEL=uberllm/...`` explicitly.
+    """
+    if os.getenv("SWE_DEFAULT_RUNTIME", "").strip():
+        return False
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        return False
+    if os.getenv("OPENROUTER_API_KEY", "").strip():
+        return False
+    if os.getenv("INFRON_API_KEY", "").strip():
+        return False
+    return bool(os.getenv("UBERLLM_API_KEY", "").strip())
+
+
 def _default_runtime() -> Literal["aforge", "claude_code", "open_code", "codex", "command_code"]:
     """Default runtime, honoring the ``SWE_DEFAULT_RUNTIME`` env var.
 
     Lets the deployer pick the runtime without every caller having to pass
     a config. When ``SWE_DEFAULT_RUNTIME`` is unset, auto-selects ``aforge``
-    with an OpenRouter key, ``open_code`` with only an Infron key, otherwise
-    ``claude_code`` (see ``_openrouter_only_env`` and ``_infron_only_env``).
+    with an OpenRouter key, ``open_code`` with only an Infron or UberLLM key,
+    otherwise ``claude_code`` (see ``_openrouter_only_env``,
+    ``_infron_only_env`` and ``_uberllm_only_env``).
     Logs and falls back to ``claude_code`` when the env value is invalid.
     """
     value = os.getenv("SWE_DEFAULT_RUNTIME", "").strip()
@@ -723,6 +750,8 @@ def _default_runtime() -> Literal["aforge", "claude_code", "open_code", "codex",
         if _openrouter_only_env():
             return "aforge"
         if _infron_only_env():
+            return "open_code"
+        if _uberllm_only_env():
             return "open_code"
         return "claude_code"
     if value in RUNTIME_VALUES:
@@ -950,6 +979,9 @@ def resolve_runtime_models(
     elif runtime == "open_code" and _infron_only_env():
         # Same rule for the Infron gateway (see _infron_only_env).
         base = {field: _INFRON_AUTO_DEFAULT_MODEL for field in base}
+    elif runtime == "open_code" and _uberllm_only_env():
+        # Same rule for the UberLLM gateway (see _uberllm_only_env).
+        base = {field: _UBERLLM_AUTO_DEFAULT_MODEL for field in base}
     resolved: dict[str, str] = {field: base[field] for field in field_names}
 
     env_default = _default_model_from_env(runtime)
