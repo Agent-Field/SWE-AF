@@ -23,6 +23,7 @@ from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.schemas import _workspace_root
 from swe_af.fast import fast_router
 from swe_af.fast.schemas import FastBuildConfig, FastBuildResult, fast_resolve_models
+from swe_af.runtime.async_config import SweAsyncConfig
 from swe_af.runtime.providers import runtime_to_harness_provider
 from swe_af.surface import TAG_ENTRYPOINT
 
@@ -34,6 +35,9 @@ app = Agent(
     description="Speed-optimized SWE agent — single-pass planning, sequential execution",
     agentfield_server=os.getenv("AGENTFIELD_SERVER", "http://localhost:8080"),
     api_key=os.getenv("AGENTFIELD_API_KEY"),
+    # Shares the planner's reasoner budget: a fast build is still one long
+    # ``build`` reasoner call. See swe_af/runtime/async_config.py.
+    async_config=SweAsyncConfig.from_environment(),
 )
 
 app.include_router(fast_router)
