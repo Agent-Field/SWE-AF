@@ -148,6 +148,4 @@ jobs:
           fi
 
       - name: Build and smoke-test Python image against control plane v0.1.57
-        env:
-          SMOKE_BASELINE_SHA: da78a77d49a0084bce9283acb565832d083e0945
         run: ./scripts/ci/image-smoke.sh
