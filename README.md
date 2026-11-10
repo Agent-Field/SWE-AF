@@ -426,6 +426,16 @@ With **only** an `INFRON_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway 
 
 > Docker and Railway deployments using Infron must set `HARNESS_MODEL=infron/deepseek/deepseek-v4-flash-0731` (or another `infron/...` id) in the environment. The image bakes an `openrouter/...` value that the `open_code` model cascade reads after the Infron auto default and would otherwise override it. `SWE_DEFAULT_MODEL` pins every role model but does not feed OpenCode's `small_model`; set `HARNESS_MODEL` for that path (setting both is fine).
 
+For Cheaper Inference with `open_code`, set `CHEAPERINFERENCE_API_KEY` and use `cheaperinference/<model>` (for example `cheaperinference/gpt-5.4-mini`). Cheaper Inference is an OpenAI-compatible gateway serving bare model ids, so a role ref is the provider prefix plus a bare id:
+
+```bash
+SWE_DEFAULT_MODEL=cheaperinference/gpt-5.4
+```
+
+With **only** a `CHEAPERINFERENCE_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway key, no `SWE_DEFAULT_RUNTIME`), the main build/execute/issue/planning paths auto-select the `open_code` runtime and default to `cheaperinference/gpt-5.4-mini`. A gateway key already configured keeps precedence, so adding a Cheaper Inference key never reroutes an existing deployment on its own.
+
+> Docker and Railway deployments using Cheaper Inference must set `HARNESS_MODEL=cheaperinference/gpt-5.4-mini` (or another `cheaperinference/...` id) in the environment. The image bakes an `openrouter/...` value that the `open_code` model cascade reads after the auto default and would otherwise override it. `SWE_DEFAULT_MODEL` pins every role model but does not feed OpenCode's `small_model`; set `HARNESS_MODEL` for that path (setting both is fine).
+
 ### MiniMax direct providers
 
 The Docker images include direct MiniMax provider entries for both supported regions and API compatibility modes. Every entry lists `MiniMax-M3.1-Flash` first, followed by `MiniMax-M3`. Set the model explicitly with the environment variables below; existing runtime and per-role overrides still apply.

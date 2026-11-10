@@ -141,6 +141,12 @@ const (
 	// Infron is OpenAI-compatible and serves the standard <provider>/<model>
 	// ids, so this is the existing gateway default with the prefix swapped.
 	infronAutoDefaultModel = "infron/deepseek/deepseek-v4-flash-0731"
+
+	// Default model for the auto-selected Cheaper Inference path (see
+	// cheaperInferenceOnlyEnv). Cheaper Inference is OpenAI-compatible and
+	// serves bare model ids, so the auto default is the provider prefix plus a
+	// bare id.
+	cheaperInferenceAutoDefaultModel = "cheaperinference/gpt-5.4-mini"
 )
 
 // runtimeBaseModels ports _RUNTIME_BASE_MODELS[runtime] as a fresh copy for the
@@ -211,6 +217,28 @@ func infronOnlyEnv() bool {
 	return envStripped("INFRON_API_KEY") != ""
 }
 
+// cheaperInferenceOnlyEnv ports _cheaperinference_only_env: whether the deployer
+// implicitly chose the Cheaper Inference gateway (no explicit
+// SWE_DEFAULT_RUNTIME, no Anthropic key, no other gateway key, but a Cheaper
+// Inference key present). A gateway key that was already honored before Cheaper
+// Inference existed keeps precedence, so adding a Cheaper Inference key never
+// silently reroutes an existing deployment.
+func cheaperInferenceOnlyEnv() bool {
+	if envStripped("SWE_DEFAULT_RUNTIME") != "" {
+		return false
+	}
+	if envStripped("ANTHROPIC_API_KEY") != "" {
+		return false
+	}
+	if envStripped("OPENROUTER_API_KEY") != "" {
+		return false
+	}
+	if envStripped("INFRON_API_KEY") != "" {
+		return false
+	}
+	return envStripped("CHEAPERINFERENCE_API_KEY") != ""
+}
+
 // DefaultRuntime ports _default_runtime, honoring SWE_DEFAULT_RUNTIME.
 // When unset, auto-selects aforge with an OpenRouter key, open_code with only
 // an Infron key, otherwise claude_code. An invalid env value falls back to
@@ -226,6 +254,9 @@ func DefaultRuntime() string {
 			return "aforge"
 		}
 		if infronOnlyEnv() {
+			return "open_code"
+		}
+		if cheaperInferenceOnlyEnv() {
 			return "open_code"
 		}
 		return "claude_code"
@@ -418,6 +449,10 @@ func ResolveRuntimeModels(runtime string, models map[string]string, fieldNames [
 	} else if runtime == "open_code" && infronOnlyEnv() {
 		for field := range base {
 			base[field] = infronAutoDefaultModel
+		}
+	} else if runtime == "open_code" && cheaperInferenceOnlyEnv() {
+		for field := range base {
+			base[field] = cheaperInferenceAutoDefaultModel
 		}
 	}
 
