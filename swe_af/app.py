@@ -38,6 +38,10 @@ except ImportError:  # pragma: no cover - exercised only on older agentfield SDK
             super().__init__(message)
             self.result = result
             self.error_details = error_details
+from swe_af.execution.concurrency import (
+    DEFAULT_MAX_CONCURRENT_ISSUE_WRITERS,
+    gather_bounded,
+)
 from swe_af.execution.envelope import unwrap_call_result as _unwrap
 from swe_af.execution.fatal_error import FatalHarnessError
 
@@ -771,6 +775,7 @@ async def build(
             permission_mode=cfg.permission_mode,
             ai_provider=cfg.ai_provider,
             workspace_manifest=manifest.model_dump() if manifest else None,
+            max_concurrent_issue_writers=cfg.max_concurrent_issue_writers,
         )
 
         # Git init with retry logic
@@ -1604,6 +1609,7 @@ async def plan(
     permission_mode: str = "",
     ai_provider: str | None = None,
     workspace_manifest: dict | None = None,
+    max_concurrent_issue_writers: int = DEFAULT_MAX_CONCURRENT_ISSUE_WRITERS,
 ) -> dict:
     """Run the full planning pipeline.
 
@@ -1787,7 +1793,8 @@ async def plan(
         prd_summary_str += "\n\nAcceptance Criteria:\n" + "\n".join(f"- {c}" for c in prd_ac)
 
     app.note(
-        f"Phase 4b: Writing {len(issues)} issue files in parallel",
+        f"Phase 4b: Writing {len(issues)} issue files in parallel "
+        f"(max {max_concurrent_issue_writers} at a time)",
         tags=["pipeline", "issue_writers"],
     )
     writer_tasks = []
@@ -1811,7 +1818,9 @@ async def plan(
             ai_provider=ai_provider,
             workspace_manifest=workspace_manifest,
         ))
-    writer_results = await asyncio.gather(*writer_tasks, return_exceptions=True)
+    writer_results = await gather_bounded(
+        writer_tasks, max_concurrent_issue_writers,
+    )
 
     succeeded = sum(1 for r in writer_results if isinstance(r, dict) and r.get("success"))
     failed = len(writer_results) - succeeded

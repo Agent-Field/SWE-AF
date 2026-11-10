@@ -1036,6 +1036,10 @@ class BuildConfig(BaseModel):
         False  # Cross-issue shared memory (conventions, failure patterns, bug patterns)
     )
     max_concurrent_issues: int = 3  # max parallel issues per level (0 = unlimited)
+    # Issue writers are full agent runs (one provider CLI subprocess each), so
+    # their fan-out is capped independently of the DAG's per-level concurrency.
+    # 0 = unlimited (the historical behaviour).
+    max_concurrent_issue_writers: int = 4
     level_failure_abort_threshold: float = (
         0.8  # abort DAG when >= this fraction of a level fails
     )
@@ -1143,6 +1147,7 @@ class BuildConfig(BaseModel):
             "enable_issue_advisor": self.enable_issue_advisor,
             "enable_learning": self.enable_learning,
             "max_concurrent_issues": self.max_concurrent_issues,
+            "max_concurrent_issue_writers": self.max_concurrent_issue_writers,
             "level_failure_abort_threshold": self.level_failure_abort_threshold,
             "check_ci": self.check_ci,
             "max_ci_fix_cycles": self.max_ci_fix_cycles,
@@ -1312,6 +1317,7 @@ class ExecutionConfig(BaseModel):
     enable_issue_advisor: bool = True
     enable_learning: bool = False
     max_concurrent_issues: int = 3  # max parallel issues per level (0 = unlimited)
+    max_concurrent_issue_writers: int = 4  # writer agent processes (0 = unlimited)
     level_failure_abort_threshold: float = (
         0.8  # abort DAG when >= this fraction of a level fails
     )
