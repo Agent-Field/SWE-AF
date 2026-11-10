@@ -128,11 +128,26 @@ jobs:
     # failed at Command Code's startup check while CI stayed green, and
     # production silently kept the 2026-10-28 image. Building it here moves
     # that failure onto the pull request.
-    name: Python image
+    #
+    # Once built, scripts/ci/image-smoke.sh boots the image credential-free
+    # against agentfield/control-plane:v0.1.57, the control plane production
+    # runs, and makes one real reasoner call through it. Setting
+    # SMOKE_BASELINE_SHA also compares it with that commit's image; that is a
+    # one-off proof before a deploy, not a standing gate.
+    name: Python image against control plane v0.1.57
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build the Python image
-        run: docker build -t swe-af-python .
+      - name: Check smoke script syntax
+        run: |
+          bash -n scripts/ci/image-smoke.sh
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck scripts/ci/image-smoke.sh
+          fi
+
+      - name: Build and smoke-test Python image against control plane v0.1.57
+        env:
+          SMOKE_BASELINE_SHA: da78a77d49a0084bce9283acb565832d083e0945
+        run: ./scripts/ci/image-smoke.sh
