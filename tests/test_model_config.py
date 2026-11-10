@@ -14,6 +14,7 @@ from swe_af.execution.schemas import (
     ROLE_TO_MODEL_FIELD,
     _INFRON_AUTO_DEFAULT_MODEL,
     _OPENROUTER_AUTO_DEFAULT_MODEL,
+    _UBERLLM_AUTO_DEFAULT_MODEL,
     _default_planning_model,
     _default_runtime,
     resolve_runtime_models,
@@ -25,6 +26,7 @@ _PROVIDER_ENV_KEYS = (
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
     "INFRON_API_KEY",
+    "UBERLLM_API_KEY",
     "SWE_DEFAULT_RUNTIME",
     "SWE_DEFAULT_MODEL",
     "AI_MODEL",
@@ -213,6 +215,82 @@ class TestInfronAutoSelection(unittest.TestCase):
         differ only by prefix. Guards against the constants drifting apart."""
         self.assertEqual(
             _INFRON_AUTO_DEFAULT_MODEL.split("/", 1)[1],
+            _OPENROUTER_AUTO_DEFAULT_MODEL.split("/", 1)[1],
+        )
+
+
+class TestUberLLMAutoSelection(unittest.TestCase):
+    """The UberLLM gateway follows the same auto-selection path as Infron:
+    with only an UBERLLM_API_KEY present, SWE-AF picks open_code and the
+    UberLLM default model. A gateway key already configured keeps precedence."""
+
+    def test_uberllm_only_auto_selects_open_code(self) -> None:
+        with _provider_env(UBERLLM_API_KEY="sk-ull"):
+            self.assertEqual(_default_runtime(), "open_code")
+
+    def test_anthropic_key_keeps_claude_code(self) -> None:
+        with _provider_env(ANTHROPIC_API_KEY="sk-ant", UBERLLM_API_KEY="sk-ull"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_explicit_runtime_overrides_autoselect(self) -> None:
+        with _provider_env(UBERLLM_API_KEY="sk-ull", SWE_DEFAULT_RUNTIME="claude_code"):
+            self.assertEqual(_default_runtime(), "claude_code")
+
+    def test_auto_uberllm_defaults_to_deepseek(self) -> None:
+        with _provider_env(UBERLLM_API_KEY="sk-ull"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "uberllm/deepseek/deepseek-v4-flash-0731")
+
+    def test_explicit_open_code_uses_current_base_default(self) -> None:
+        with _provider_env(UBERLLM_API_KEY="sk-ull", SWE_DEFAULT_RUNTIME="open_code"):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], _OPENROUTER_AUTO_DEFAULT_MODEL)
+
+    def test_harness_model_overrides_uberllm_auto_default(self) -> None:
+        uberllm_model = "uberllm/z-ai/glm-5.3"
+        with _provider_env(UBERLLM_API_KEY="sk-ull", HARNESS_MODEL=uberllm_model):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], uberllm_model)
+
+    def test_swe_default_model_overrides_auto(self) -> None:
+        with _provider_env(
+            UBERLLM_API_KEY="sk-ull", SWE_DEFAULT_MODEL="uberllm/moonshotai/kimi-k2.6"
+        ):
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], "uberllm/moonshotai/kimi-k2.6")
+
+    def test_planning_model_uses_uberllm_default(self) -> None:
+        with _provider_env(UBERLLM_API_KEY="sk-ull"):
+            self.assertEqual(_default_planning_model(), _UBERLLM_AUTO_DEFAULT_MODEL)
+
+    def test_build_config_auto_uberllm_end_to_end(self) -> None:
+        with _provider_env(UBERLLM_API_KEY="sk-ull"):
+            cfg = BuildConfig()
+            self.assertEqual(cfg.runtime, "open_code")
+            resolved = cfg.resolved_models()
+        self.assertEqual(resolved["coder_model"], _UBERLLM_AUTO_DEFAULT_MODEL)
+
+    def test_existing_gateway_keys_keep_precedence(self) -> None:
+        # Adding an UberLLM key alongside an existing gateway key must not
+        # reroute anything.
+        with _provider_env(OPENROUTER_API_KEY="sk-or", UBERLLM_API_KEY="sk-ull"):
+            self.assertEqual(_default_runtime(), "aforge")
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], _OPENROUTER_AUTO_DEFAULT_MODEL)
+        with _provider_env(INFRON_API_KEY="sk-inf", UBERLLM_API_KEY="sk-ull"):
+            self.assertEqual(_default_runtime(), "open_code")
+            resolved = resolve_runtime_models(runtime="open_code", models=None)
+        for field in ALL_MODEL_FIELDS:
+            self.assertEqual(resolved[field], _INFRON_AUTO_DEFAULT_MODEL)
+
+    def test_model_ids_unchanged_after_prefix_swap(self) -> None:
+        self.assertEqual(
+            _UBERLLM_AUTO_DEFAULT_MODEL.split("/", 1)[1],
             _OPENROUTER_AUTO_DEFAULT_MODEL.split("/", 1)[1],
         )
 

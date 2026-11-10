@@ -459,5 +459,6 @@ including when Anthropic credentials are also set. Select
 Claude. Request runtime overrides take precedence. Infron alone still selects
 `open_code` on the main path (fast mode needs an explicit runtime); its host
 default is `infron/deepseek/deepseek-v4-flash-0731`. In Docker override the baked
-`HARNESS_MODEL` for Infron too. Override model defaults with `SWE_DEFAULT_MODEL`
+`HARNESS_MODEL` for Infron too. UberLLM alone follows the same rule with
+`uberllm/deepseek/deepseek-v4-flash-0731`. Override model defaults with `SWE_DEFAULT_MODEL`
 or per-request `models`.

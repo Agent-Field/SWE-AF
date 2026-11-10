@@ -760,7 +760,7 @@ func keysOf(m map[string]any) []string {
 }
 
 func TestPlanConfiguredAforgeModelDefault(t *testing.T) {
-	for _, key := range []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL", "SWE_MODEL_HIGH"} {
+	for _, key := range []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "UBERLLM_API_KEY", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL", "SWE_MODEL_HIGH"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("SWE_DEFAULT_RUNTIME", "aforge")
