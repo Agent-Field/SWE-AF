@@ -500,25 +500,7 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	preFinalize := snapshotTargets(ctx, targets)
 	finalizeChanged := finalizeRepos(ctx, deps, cfg, resolved, manifest, repoPath, planArtifactsDir, buildBaseSHA, strict)
 	if asBool(verification["passed"]) && (finalizeChanged || targetsChanged(ctx, targets, preFinalize)) {
-		deps.Note(ctx, "Verification after repo finalization", "build", "verify", "finalize")
-		postVerif, verr := deps.Call(ctx, "run_verifier", map[string]any{
-			"prd":                planResult["prd"],
-			"repo_path":          repoPath,
-			"artifacts_dir":      planArtifactsDir,
-			"completed_issues":   maps0(dagResult["completed_issues"]),
-			"failed_issues":      maps0(dagResult["failed_issues"]),
-			"skipped_issues":     any0(dagResult["skipped_issues"]),
-			"model":              resolved["verifier_model"],
-			"permission_mode":    cfg.PermissionMode,
-			"ai_provider":        cfg.AIProvider(),
-			"workspace_manifest": dumpToMap(manifest),
-		}, "run_verifier")
-		if verr != nil {
-			return nil, verr
-		}
-		verification = postVerif
-		applyCriterionAudit(ctx, deps, verification, targets)
-		applyProjectGate(ctx, deps, verification, targets, strict)
+		repairPostFinalizeTargets(ctx, deps, verification, targets, preFinalize, strict)
 		applyFinalTreeScopeCheck(ctx, deps, verification, planResult, targets, strict)
 	}
 

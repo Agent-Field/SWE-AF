@@ -382,33 +382,57 @@ func TestProjectGateSkippedOnPlainBuildUnlessStrict(t *testing.T) {
 	})
 }
 
-// Issue #183: when verification passes on a two-file diff and run_repo_finalize
-// subsequently commits .gitignore, Build must re-verify the final tree and
-// build_issue must not publish a diff that violates the approved file-scope
-// criterion.
-func TestFinalizationAddingGitignoreReverifiesAndWithholdsScopeViolatingPR(t *testing.T) {
+// Issue #183 (rework R1–R4): when verification passes on a two-file diff and
+// run_repo_finalize subsequently tries to add or modify .gitignore (or commit
+// an untracked scratch file as in #162), a strict build must repair the tree
+// back to the verified commit (moving ignore rules to .git/info/exclude),
+// report the repair in the result, and still open its pull request whose diff
+// satisfies the exact file-scope criterion the verifier passed.
+func TestFinalizationPreservesVerifiedTreeAndOpensPullRequest(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not installed")
 	}
 	t.Setenv("GOPROXY", "off")
 	t.Setenv("GOFLAGS", "-mod=readonly")
 
-	runCase := func(t *testing.T, criterion string, finalizeAddsGitignore bool) (
-		calls, git []string, result map[string]any,
+	strictTwoFile := "test \"$(git diff --name-only main...HEAD | sort)\" = \"$(printf 'textutil/textutil.go\\ntextutil/textutil_test.go' | sort)\""
+
+	type caseOpts struct {
+		viaBuildIssue         bool
+		strictEnv             bool
+		hasBaseGitignore      bool
+		finalizeAddsGitignore bool
+		finalizeStagesScratch bool
+		verifierPasses        bool
+	}
+
+	runCase := func(t *testing.T, opts caseOpts) (
+		repo string, calls, git []string, result map[string]any,
 	) {
 		t.Helper()
 		defer withExecCtx("run-183", "exec-183")()
 
-		repo := t.TempDir()
+		t.Setenv(config.EnvStrictBuild, "1")
+		if !opts.strictEnv {
+			if err := os.Unsetenv(config.EnvStrictBuild); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		repo = t.TempDir()
 		if err := os.MkdirAll(filepath.Join(repo, "textutil"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		gitT(t, repo, "init", "-q", "-b", "main")
-		writeCommit(t, repo, "base", map[string]string{
+		baseFiles := map[string]string{
 			"go.mod":                    "module example.com/sandbox\n\ngo 1.21\n",
 			"textutil/textutil.go":      "package textutil\n\nfunc Reverse(s string) string { return s }\n",
 			"textutil/textutil_test.go": "package textutil\n\nimport \"testing\"\n\nfunc TestReverse(t *testing.T) {}\n",
-		})
+		}
+		if opts.hasBaseGitignore {
+			baseFiles[".gitignore"] = "*.orig\n"
+		}
+		writeCommit(t, repo, "base", baseFiles)
 
 		prevGit, prevGH := runGit, runGH
 		t.Cleanup(func() { runGit, runGH = prevGit, prevGH })
@@ -432,7 +456,7 @@ func TestFinalizationAddingGitignoreReverifiesAndWithholdsScopeViolatingPR(t *te
 			case strings.HasSuffix(target, ".plan"):
 				return map[string]any{
 					"prd": map[string]any{
-						"acceptance_criteria": []any{criterion},
+						"acceptance_criteria": []any{strictTwoFile},
 					},
 					"issues":        []any{},
 					"artifacts_dir": input["artifacts_dir"],
@@ -449,6 +473,14 @@ func TestFinalizationAddingGitignoreReverifiesAndWithholdsScopeViolatingPR(t *te
 					"textutil/textutil.go":      "package textutil\n\nimport \"unicode/utf8\"\n\nfunc Reverse(s string) string { return s }\nfunc RuneCount(s string) int { return utf8.RuneCountInString(s) }\n",
 					"textutil/textutil_test.go": "package textutil\n\nimport \"testing\"\n\nfunc TestReverse(t *testing.T) {}\nfunc TestRuneCount(t *testing.T) { if RuneCount(\"a\") != 1 { t.Fatal() } }\n",
 				})
+				if opts.finalizeStagesScratch {
+					// Leave an untracked scratch file in the working tree that
+					// the verifier excluded from `git diff main...HEAD` (#162).
+					if err := os.WriteFile(filepath.Join(repo, "textutil", "scratch_repro_test.go"),
+						[]byte("package textutil\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
 				return map[string]any{
 					"completed_issues": []any{map[string]any{"name": "runecount"}},
 					"merged_branches":  []any{"issue/runecount"},
@@ -456,25 +488,44 @@ func TestFinalizationAddingGitignoreReverifiesAndWithholdsScopeViolatingPR(t *te
 					"failed_issues":    []any{}, "skipped_issues": []any{}, "accumulated_debt": []any{},
 				}, nil
 			case strings.HasSuffix(target, ".run_verifier"):
+				if !opts.verifierPasses {
+					return map[string]any{
+						"passed":  false,
+						"summary": "OVERALL: FAIL",
+						"criteria_results": []any{
+							map[string]any{
+								"criterion": strictTwoFile,
+								"passed":    false,
+								"evidence":  "work failed verification",
+							},
+						},
+					}, nil
+				}
 				return map[string]any{
 					"passed":  true,
 					"summary": "OVERALL: PASS",
 					"criteria_results": []any{
 						map[string]any{
-							"criterion": criterion,
+							"criterion": strictTwoFile,
 							"passed":    true,
 							"evidence":  "two-file scope checked",
 						},
 					},
 				}, nil
 			case strings.HasSuffix(target, ".run_repo_finalize"):
-				if finalizeAddsGitignore {
-					writeCommit(t, repo, "chore: finalize repo for handoff", map[string]string{
-						".gitignore": "/bin/\n*.test\n.artifacts/\n.worktrees/\n",
-					})
+				if opts.finalizeAddsGitignore || opts.finalizeStagesScratch {
+					files := map[string]string{}
+					if opts.finalizeAddsGitignore {
+						prefix := ""
+						if opts.hasBaseGitignore {
+							prefix = "*.orig\n"
+						}
+						files[".gitignore"] = prefix + "/bin/\n*.test\n.artifacts/\n.worktrees/\n"
+					}
+					writeCommit(t, repo, "chore: finalize repo for handoff", files)
 					return map[string]any{
 						"success":           true,
-						"gitignore_updated": true,
+						"gitignore_updated": opts.finalizeAddsGitignore,
 						"summary":           "Extended .gitignore",
 					}, nil
 				}
@@ -486,70 +537,148 @@ func TestFinalizationAddingGitignoreReverifiesAndWithholdsScopeViolatingPR(t *te
 			}
 		}}
 
-		out, err := BuildIssue(context.Background(), &Deps{App: app, NodeID: "swe-planner"}, map[string]any{
-			"title":        "Add textutil.RuneCount",
-			"issue_number": 183,
-			"repo_path":    repo,
-			"plan_review":  false,
-			"config":       map[string]any{"git_init_max_retries": 1, "max_verify_fix_cycles": 0},
-		})
+		deps := &Deps{App: app, NodeID: "swe-planner"}
+		cfg := map[string]any{"git_init_max_retries": 1, "max_verify_fix_cycles": 0}
+		var (
+			out any
+			err error
+		)
+		if opts.viaBuildIssue {
+			out, err = BuildIssue(context.Background(), deps, map[string]any{
+				"title":        "Add textutil.RuneCount",
+				"issue_number": 183,
+				"repo_path":    repo,
+				"plan_review":  false,
+				"config":       cfg,
+			})
+		} else {
+			out, err = Build(context.Background(), deps, map[string]any{
+				"goal":      "Add textutil.RuneCount",
+				"repo_path": repo,
+				"config":    cfg,
+			})
+		}
 		if err != nil {
-			t.Fatalf("BuildIssue: %v", err)
+			t.Fatalf("build: %v", err)
 		}
 		result, _ = out.(map[string]any)
-		return calls, git, result
+		return repo, calls, git, result
 	}
 
-	strictTwoFile := "test \"$(git diff --name-only main...HEAD | sort)\" = \"$(printf 'textutil/textutil.go\\ntextutil/textutil_test.go' | sort)\""
-
-	t.Run("finalization adding gitignore fails strict two-file scope and withholds PR", func(t *testing.T) {
-		calls, git, result := runCase(t, strictTwoFile, true)
-		verifierCalls := 0
-		for _, c := range calls {
-			if c == "run_verifier" {
-				verifierCalls++
-			}
-			if c == "run_github_pr" {
-				t.Fatalf("build_issue published PR despite post-finalize scope violation: %v", calls)
-			}
+	t.Run("R1_R2_R3_repo_without_gitignore_repairs_finalize_commit_and_opens_PR", func(t *testing.T) {
+		repo, calls, _, result := runCase(t, caseOpts{
+			viaBuildIssue:         true,
+			hasBaseGitignore:      false,
+			finalizeAddsGitignore: true,
+			verifierPasses:        true,
+		})
+		if !asBool(result["success"]) {
+			t.Fatalf("strict build failed when finalize added .gitignore: %v", result["verification"])
 		}
-		if verifierCalls < 2 {
-			t.Fatalf("run_verifier called %d time(s), want >= 2 after finalization changed the tree (%v)", verifierCalls, calls)
+		if !strings.Contains(strings.Join(calls, " "), "run_github_pr") {
+			t.Fatalf("strict build withheld pull request after finalize added .gitignore: %v", calls)
 		}
-		for _, g := range git {
-			if strings.HasPrefix(g, "push") {
-				t.Fatalf("build_issue pushed branch despite post-finalize scope violation: %v", git)
-			}
+		if prs := asMapList(result["pr_results"]); len(prs) != 1 || mapStr(prs[0], "pr_url", "") != "https://github.com/o/r/pull/183" {
+			t.Fatalf("pr_results = %v, want PR #183 opened", prs)
 		}
-		if asBool(result["success"]) {
-			t.Fatalf("result[success] = true, want false when final diff violates two-file scope")
+		if diff := gitT(t, repo, "diff", "--name-only", "main...HEAD"); diff != "textutil/textutil.go\ntextutil/textutil_test.go" {
+			t.Fatalf("handed-off diff = %q, want only textutil/textutil.go and textutil/textutil_test.go", diff)
 		}
-		verif, _ := result["verification"].(map[string]any)
-		if asBool(verif["passed"]) {
-			t.Fatalf("verification[passed] = true, want false: %v", verif)
+		if _, err := os.Stat(filepath.Join(repo, ".gitignore")); !os.IsNotExist(err) {
+			t.Fatalf(".gitignore still exists on disk in repo that had none: err=%v", err)
 		}
-		if prs := asMapList(result["pr_results"]); len(prs) != 0 {
-			t.Fatalf("pr_results = %v, want empty", prs)
+		excludeBytes, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+		if err != nil || !strings.Contains(string(excludeBytes), "/bin/") {
+			t.Fatalf(".git/info/exclude = %q (%v), want finalize patterns migrated to local exclude", string(excludeBytes), err)
+		}
+		if !strings.Contains(mapStr(result, "summary", ""), ".gitignore") {
+			t.Fatalf("result summary = %q, want repair note naming .gitignore", result["summary"])
 		}
 	})
 
-	t.Run("finalization adding gitignore when criterion excludes gitignore still publishes PR", func(t *testing.T) {
-		allowsGitignore := "git diff --name-only main...HEAD | grep -v '^\\.gitignore$' | wc -l | grep -qx 2"
-		calls, _, result := runCase(t, allowsGitignore, true)
-		verifierCalls := 0
-		for _, c := range calls {
-			if c == "run_verifier" {
-				verifierCalls++
-			}
-		}
-		if verifierCalls < 2 {
-			t.Fatalf("run_verifier called %d time(s), want >= 2 after finalization changed the tree (%v)", verifierCalls, calls)
-		}
+	t.Run("R1_R2_R3_repo_with_existing_gitignore_repairs_finalize_edit_and_opens_PR", func(t *testing.T) {
+		repo, calls, _, result := runCase(t, caseOpts{
+			viaBuildIssue:         true,
+			hasBaseGitignore:      true,
+			finalizeAddsGitignore: true,
+			verifierPasses:        true,
+		})
 		if !asBool(result["success"]) {
-			t.Fatalf("result[success] = false, want true when criterion excludes .gitignore: %v", result["verification"])
+			t.Fatalf("strict build failed when finalize modified existing .gitignore: %v", result["verification"])
 		}
 		if !strings.Contains(strings.Join(calls, " "), "run_github_pr") {
-			t.Fatalf("expected run_github_pr when post-finalize scope still passes: %v", calls)
+			t.Fatalf("strict build withheld pull request after finalize modified .gitignore: %v", calls)
+		}
+		if diff := gitT(t, repo, "diff", "--name-only", "main...HEAD"); diff != "textutil/textutil.go\ntextutil/textutil_test.go" {
+			t.Fatalf("handed-off diff = %q, want only textutil/textutil.go and textutil/textutil_test.go", diff)
+		}
+		gi, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+		if err != nil || string(gi) != "*.orig\n" {
+			t.Fatalf(".gitignore = %q (%v), want restored to base *.orig", string(gi), err)
+		}
+		excludeBytes, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+		if err != nil || !strings.Contains(string(excludeBytes), "/bin/") {
+			t.Fatalf(".git/info/exclude = %q (%v), want finalize patterns migrated to local exclude", string(excludeBytes), err)
+		}
+		if !strings.Contains(mapStr(result, "summary", ""), ".gitignore") {
+			t.Fatalf("result summary = %q, want repair note naming .gitignore", result["summary"])
+		}
+	})
+
+	t.Run("R4_issue_162_finalize_committing_untracked_scratch_file_is_repaired_and_opens_PR", func(t *testing.T) {
+		repo, calls, _, result := runCase(t, caseOpts{
+			viaBuildIssue:         true,
+			hasBaseGitignore:      false,
+			finalizeAddsGitignore: true,
+			finalizeStagesScratch: true,
+			verifierPasses:        true,
+		})
+		if !asBool(result["success"]) {
+			t.Fatalf("strict build failed when finalize committed untracked scratch file: %v", result["verification"])
+		}
+		if !strings.Contains(strings.Join(calls, " "), "run_github_pr") {
+			t.Fatalf("strict build withheld pull request: %v", calls)
+		}
+		if diff := gitT(t, repo, "diff", "--name-only", "main...HEAD"); diff != "textutil/textutil.go\ntextutil/textutil_test.go" {
+			t.Fatalf("handed-off diff = %q, want scratch file and .gitignore dropped", diff)
+		}
+		if !strings.Contains(mapStr(result, "summary", ""), "scratch_repro_test.go") {
+			t.Fatalf("result summary = %q, want repair note naming scratch_repro_test.go", result["summary"])
+		}
+	})
+
+	t.Run("non_strict_plain_build_opens_PR_as_on_main", func(t *testing.T) {
+		_, calls, _, result := runCase(t, caseOpts{
+			viaBuildIssue:         false,
+			strictEnv:             false,
+			hasBaseGitignore:      false,
+			finalizeAddsGitignore: true,
+			verifierPasses:        true,
+		})
+		if !asBool(result["success"]) || !strings.Contains(strings.Join(calls, " "), "run_github_pr") {
+			t.Fatalf("non-strict build failed or skipped PR: success=%v calls=%v", result["success"], calls)
+		}
+	})
+
+	t.Run("work_failing_verification_still_withholds_PR", func(t *testing.T) {
+		_, calls, git, result := runCase(t, caseOpts{
+			viaBuildIssue:         true,
+			hasBaseGitignore:      false,
+			finalizeAddsGitignore: false,
+			verifierPasses:        false,
+		})
+		if asBool(result["success"]) {
+			t.Fatalf("result[success] = true, want false when work fails verification")
+		}
+		for _, c := range calls {
+			if c == "run_github_pr" {
+				t.Fatalf("build_issue called run_github_pr despite failed work verification: %v", calls)
+			}
+		}
+		for _, g := range git {
+			if strings.HasPrefix(g, "push") {
+				t.Fatalf("build_issue pushed branch despite failed work verification: %v", git)
+			}
 		}
 	})
 }
