@@ -113,18 +113,11 @@ const (
 )
 
 // runShell executes one command line in dir. A package variable so tests can
-// replace it; the default runs the real process under bash with pipefail (or
-// sh when bash is unavailable) so pipelines are evaluated under the same
-// pipeline-exit rules as the agent harness.
+// replace it; the default runs the real process under sh.
 var runShell = func(ctx context.Context, dir, line string) (int, string, error) {
 	cctx, cancel := context.WithTimeout(ctx, CommandTimeout)
 	defer cancel()
-	var cmd *exec.Cmd
-	if _, err := exec.LookPath("bash"); err == nil {
-		cmd = exec.CommandContext(cctx, "bash", "-o", "pipefail", "-c", line)
-	} else {
-		cmd = exec.CommandContext(cctx, "sh", "-c", line)
-	}
+	cmd := exec.CommandContext(cctx, "sh", "-c", line)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "CI=1")
 	var out bytes.Buffer
@@ -228,8 +221,8 @@ func reconcileOne(ctx context.Context, repo string, c map[string]any, crit strin
 		if i >= maxCommands {
 			break
 		}
-		_, out, err := runShell(ctx, repo, line)
-		if err != nil {
+		code, out, err := runShell(ctx, repo, line)
+		if err != nil || (code == 0 && !zeroCountGrepPipe.MatchString(line)) {
 			continue
 		}
 		problem := Malformed(out)
