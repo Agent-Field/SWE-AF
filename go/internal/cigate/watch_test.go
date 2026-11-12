@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -303,6 +305,102 @@ func TestNoChecksWhenGhReportsNoChecksReported(t *testing.T) {
 	if res.Status != "no_checks" {
 		t.Fatalf("expected no_checks for a repo with no CI, got %+v", res)
 	}
+}
+
+// Issue #186: a repository without CI workflows (or where no checks start
+// during the startup grace window) must return no_checks promptly instead of
+// polling through the full 1500-second wait_seconds cap, while still waiting
+// for checks that start within the grace period.
+func TestNoChecksReturnsPromptlyWithoutConsumingFullWaitCap(t *testing.T) {
+	t.Run("workflow-free git repo returns no_checks on first poll without sleeping", func(t *testing.T) {
+		repo := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		r := &scriptedRunner{}
+		for i := 0; i < 60; i++ {
+			r.checksQueue = append(r.checksQueue, completed(
+				"", "no checks reported on the 'feature/foo' branch", 1))
+		}
+		clock := 0.0
+		var sleeps []int
+		defer install(t, r, &clock)()
+		sleepFn = func(_ context.Context, s int) {
+			sleeps = append(sleeps, s)
+			clock += float64(s)
+		}
+
+		res := WatchPRChecks(context.Background(), repo, 7, 1500, 30, "")
+		if res.Status != "no_checks" {
+			t.Fatalf("status = %q, want no_checks (%+v)", res.Status, res)
+		}
+		if len(r.calls) != 1 || len(sleeps) != 0 || res.ElapsedSeconds != 0 {
+			t.Fatalf("workflow-free repo polled %d time(s) with %d sleep(s) (%ds elapsed), want 1 poll / 0 sleeps / 0s",
+				len(r.calls), len(sleeps), res.ElapsedSeconds)
+		}
+	})
+
+	t.Run("no checks starting within startup grace returns no_checks well before 1500s cap", func(t *testing.T) {
+		r := &scriptedRunner{}
+		for i := 0; i < 60; i++ {
+			r.checksQueue = append(r.checksQueue, completed(
+				"", "no checks reported on the 'feature/foo' branch", 1))
+		}
+		clock := 0.0
+		var sleeps []int
+		defer install(t, r, &clock)()
+		sleepFn = func(_ context.Context, s int) {
+			sleeps = append(sleeps, s)
+			clock += float64(s)
+		}
+
+		res := WatchPRChecks(context.Background(), "/tmp/repo", 7, 1500, 30, "")
+		if res.Status != "no_checks" {
+			t.Fatalf("status = %q, want no_checks (%+v)", res.Status, res)
+		}
+		if res.ElapsedSeconds > 60 || len(r.calls) > 3 {
+			t.Fatalf("no_checks took %ds across %d polls (%d sleeps), want <=60s and <=3 polls",
+				res.ElapsedSeconds, len(r.calls), len(sleeps))
+		}
+	})
+
+	t.Run("repo with workflow that starts on second poll still waits up to full wait cap", func(t *testing.T) {
+		repo := t.TempDir()
+		wfDir := filepath.Join(repo, ".github", "workflows")
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(wfDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wfDir, "test.yml"), []byte("name: test\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r := &scriptedRunner{}
+		r.checksQueue = append(r.checksQueue,
+			completed("", "no checks reported on the 'feature/foo' branch", 1),
+			completed(jsonArr(mkCheck("pending", "Tests")), "", 0),
+			completed(jsonArr(mkCheck("pending", "Tests")), "", 0),
+			completed(jsonArr(mkCheck("pass", "Tests")), "", 0),
+		)
+		clock := 0.0
+		defer install(t, r, &clock)()
+		sleepFn = func(_ context.Context, s int) {
+			if clock == 0 {
+				clock += float64(s)
+			} else {
+				clock += 200.0
+			}
+		}
+
+		res := WatchPRChecks(context.Background(), repo, 7, 1500, 30, "")
+		if res.Status != "passed" {
+			t.Fatalf("status = %q, want passed (%+v)", res.Status, res)
+		}
+		if len(r.calls) != 4 || res.ElapsedSeconds < 400 {
+			t.Fatalf("expected 4 polls and >=400s elapsed, got %d polls and %ds", len(r.calls), res.ElapsedSeconds)
+		}
+	})
 }
 
 // Contract: a GENUINE `gh pr checks` failure (non-zero exit, empty body, and a

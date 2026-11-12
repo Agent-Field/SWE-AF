@@ -16,7 +16,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,6 +26,11 @@ import (
 
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
+
+// NoCheckGraceSeconds bounds how long WatchPRChecks waits when zero checks have
+// been reported at all before concluding that no CI checks will run for the PR.
+// Once any check appears (pending/queued), the full waitSeconds cap applies.
+var NoCheckGraceSeconds = 60
 
 // pendingBuckets are `gh pr checks --json bucket` values that mean "still
 // running". Anything outside this set is conclusive (pass/fail/cancel/skip).
@@ -248,6 +255,7 @@ func WatchPRChecks(ctx context.Context, repoPath string, prNumber int, waitSecon
 	var lastChecks []map[string]any
 	sawAnyCheck := false
 	sawAnyForSHA := false // only meaningful when expectedSHA != ""
+	noCheckCap := noCheckWaitCap(waitSeconds, pollSeconds, repoPath)
 
 	// Field set for classifying checks. `gh pr checks --json` does NOT expose a
 	// per-check commit SHA (its schema is bucket,completedAt,description,event,
@@ -397,12 +405,25 @@ func WatchPRChecks(ctx context.Context, repoPath string, prNumber int, waitSecon
 			}
 		}
 
+		if !sawAnyCheck && elapsed() >= noCheckCap {
+			extra := ""
+			if expectedSHA != "" && !sawAnyForSHA {
+				extra = fmt.Sprintf(" for %s", firstN(expectedSHA, 10))
+			}
+			return schemas.CIWatchResult{
+				Status:         "no_checks",
+				PRNumber:       prNumber,
+				ElapsedSeconds: elapsed(),
+				Summary: fmt.Sprintf(
+					"No checks reported in %ds — PR has no CI configured or checks not yet started%s",
+					elapsed(), extra,
+				),
+			}
+		}
+
 		if elapsed() >= waitSeconds {
-			if !sawAnyCheck || (expectedSHA != "" && !sawAnyForSHA) {
-				extra := ""
-				if expectedSHA != "" && !sawAnyForSHA {
-					extra = fmt.Sprintf(" for %s", firstN(expectedSHA, 10))
-				}
+			if expectedSHA != "" && !sawAnyForSHA {
+				extra := fmt.Sprintf(" for %s", firstN(expectedSHA, 10))
 				return schemas.CIWatchResult{
 					Status:         "no_checks",
 					PRNumber:       prNumber,
@@ -426,6 +447,55 @@ func WatchPRChecks(ctx context.Context, repoPath string, prNumber int, waitSecon
 
 		sleepFn(ctx, pollSeconds)
 	}
+}
+
+func noCheckWaitCap(waitSeconds, pollSeconds int, repoPath string) int {
+	if isWorkflowFreeRepo(repoPath) {
+		return 0
+	}
+	cap := waitSeconds
+	if NoCheckGraceSeconds > 0 && cap > NoCheckGraceSeconds {
+		cap = NoCheckGraceSeconds
+	}
+	if pollSeconds > cap && pollSeconds <= waitSeconds {
+		cap = pollSeconds
+	}
+	return cap
+}
+
+func isWorkflowFreeRepo(repoPath string) bool {
+	p := strings.TrimSpace(repoPath)
+	if p == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(p, ".git")); err != nil {
+		return false
+	}
+	entries, err := os.ReadDir(filepath.Join(p, ".github", "workflows"))
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(e.Name()))
+			if ext == ".yml" || ext == ".yaml" {
+				return false
+			}
+		}
+	}
+	for _, rel := range []string{
+		filepath.Join(".circleci", "config.yml"),
+		".travis.yml",
+		".gitlab-ci.yml",
+		"Jenkinsfile",
+		"azure-pipelines.yml",
+		".buildkite",
+	} {
+		if _, err := os.Stat(filepath.Join(p, rel)); err == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // isNoChecksReported reports whether a `gh pr checks` stderr is the benign
