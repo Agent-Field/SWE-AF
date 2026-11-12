@@ -247,3 +247,136 @@ func TestRepairLeavesTheOneArgumentFormAlone(t *testing.T) {
 		}
 	}
 }
+
+// Issue #184: `git diff -U0 main...HEAD -- textutil/ | grep -c '^-[^-]' | grep -qx 0`
+// exits 0 under ordinary sh/bash when there are no deletions, but exits 1 under
+// `bash -o pipefail` because `grep -c` exits 1 when it counts 0 matches.
+// FixPlan must rewrite the zero-match pipeline so it gives the same verdict
+// with and without pipefail, and Reconcile must repair it when verification
+// fails on an addition-only diff while still failing when a line was deleted.
+func TestZeroMatchGrepCountPipelineUnderPipefail(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not installed")
+	}
+
+	t.Run("FixPlan rewrites zero-count grep pipeline to pass under both bash and bash -o pipefail", func(t *testing.T) {
+		orig := "12. `git diff -U0 main...HEAD -- textutil/ | grep -c '^-[^-]' | grep -qx 0` exits 0: the diff deletes no lines."
+		nonZero := "11. `git diff --name-only main...HEAD | grep -c '^textutil/textutil' | grep -qx 2` exits 0"
+		plan := map[string]any{
+			"prd": map[string]any{
+				"acceptance_criteria": []any{orig, nonZero},
+			},
+		}
+		rw := FixPlan(plan)
+		if len(rw) != 1 {
+			t.Fatalf("FixPlan rewrites = %+v, want 1", rw)
+		}
+		ac := plan["prd"].(map[string]any)["acceptance_criteria"].([]any)
+		if ac[1] != nonZero {
+			t.Fatalf("non-zero count pipeline was modified: %q", ac[1])
+		}
+		cmds := Commands(ac[0].(string))
+		if len(cmds) != 1 {
+			t.Fatalf("Commands(%q) = %v, want 1 command", ac[0], cmds)
+		}
+		repairedCmd := strings.Replace(cmds[0], "git diff -U0 main...HEAD -- textutil/", "printf 'unchanged\\n'", 1)
+		for _, argv := range [][]string{
+			{"bash", "-c", repairedCmd},
+			{"bash", "-o", "pipefail", "-c", repairedCmd},
+		} {
+			if out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput(); err != nil {
+				t.Fatalf("%v failed (%v): %s", argv, err, out)
+			}
+		}
+		deletedCmd := strings.Replace(cmds[0], "git diff -U0 main...HEAD -- textutil/", "printf -- '-deleted\\n'", 1)
+		for _, argv := range [][]string{
+			{"bash", "-c", deletedCmd},
+			{"bash", "-o", "pipefail", "-c", deletedCmd},
+		} {
+			if err := exec.Command(argv[0], argv[1:]...).Run(); err == nil {
+				t.Fatalf("%v succeeded on deleted line, want non-zero exit", argv)
+			}
+		}
+	})
+
+	t.Run("Reconcile repairs zero-deletion diff check and still fails when a deletion exists", func(t *testing.T) {
+		repo := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(repo, "textutil"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runGitT := func(args ...string) {
+			t.Helper()
+			cmd := exec.Command("git", args...)
+			cmd.Dir = repo
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		runGitT("init", "-q", "-b", "main")
+		runGitT("config", "user.email", "t@example.com")
+		runGitT("config", "user.name", "t")
+		if err := os.WriteFile(filepath.Join(repo, "textutil", "textutil.go"),
+			[]byte("package textutil\n\nfunc Reverse(s string) string { return s }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitT("add", ".")
+		runGitT("commit", "-q", "-m", "base")
+		runGitT("checkout", "-q", "-b", "feature/isblank")
+		if err := os.WriteFile(filepath.Join(repo, "textutil", "textutil.go"),
+			[]byte("package textutil\n\nfunc Reverse(s string) string { return s }\nfunc IsBlank(s string) bool { return s == \"\" }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitT("add", ".")
+		runGitT("commit", "-q", "-m", "add IsBlank without deletions")
+
+		crit := "12. `git diff -U0 main...HEAD -- textutil/ | grep -c '^-[^-]' | grep -qx 0` exits 0"
+		v := map[string]any{
+			"passed":  false,
+			"summary": "OVERALL: FAIL",
+			"criteria_results": []any{
+				map[string]any{
+					"criterion": crit,
+					"passed":    false,
+					"evidence":  "exited 1 under bash -o pipefail",
+				},
+			},
+		}
+		findings := Reconcile(context.Background(), repo, v)
+		if len(findings) != 1 || findings[0].Action != Repaired {
+			t.Fatalf("findings = %+v, want 1 Repaired", findings)
+		}
+		if v["passed"] != true {
+			t.Fatalf("verification[passed] = %v, want true", v["passed"])
+		}
+
+		// Now commit a real line deletion and confirm Reconcile keeps it failed.
+		if err := os.WriteFile(filepath.Join(repo, "textutil", "textutil.go"),
+			[]byte("package textutil\n\nfunc IsBlank(s string) bool { return s == \"\" }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitT("add", ".")
+		runGitT("commit", "-q", "-m", "delete Reverse")
+
+		vFail := map[string]any{
+			"passed":  false,
+			"summary": "OVERALL: FAIL",
+			"criteria_results": []any{
+				map[string]any{
+					"criterion": crit,
+					"passed":    false,
+					"evidence":  "exited 1",
+				},
+			},
+		}
+		findingsFail := Reconcile(context.Background(), repo, vFail)
+		if len(findingsFail) != 1 || findingsFail[0].Action != RepairedFailed {
+			t.Fatalf("findings on real deletion = %+v, want 1 RepairedFailed", findingsFail)
+		}
+		if vFail["passed"] != false {
+			t.Fatalf("verification[passed] = %v, want false when diff deletes lines", vFail["passed"])
+		}
+	})
+}

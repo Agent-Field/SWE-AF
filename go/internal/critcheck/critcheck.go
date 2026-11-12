@@ -113,11 +113,18 @@ const (
 )
 
 // runShell executes one command line in dir. A package variable so tests can
-// replace it; the default runs the real process under sh.
+// replace it; the default runs the real process under bash with pipefail (or
+// sh when bash is unavailable) so pipelines are evaluated under the same
+// pipeline-exit rules as the agent harness.
 var runShell = func(ctx context.Context, dir, line string) (int, string, error) {
 	cctx, cancel := context.WithTimeout(ctx, CommandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "sh", "-c", line)
+	var cmd *exec.Cmd
+	if _, err := exec.LookPath("bash"); err == nil {
+		cmd = exec.CommandContext(cctx, "bash", "-o", "pipefail", "-c", line)
+	} else {
+		cmd = exec.CommandContext(cctx, "sh", "-c", line)
+	}
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "CI=1")
 	var out bytes.Buffer
@@ -226,12 +233,15 @@ func reconcileOne(ctx context.Context, repo string, c map[string]any, crit strin
 			continue
 		}
 		problem := Malformed(out)
+		if problem == "" && zeroCountGrepPipe.MatchString(line) {
+			problem = zeroCountPipeProblem
+		}
 		if problem == "" {
 			continue
 		}
 		f := Finding{Criterion: crit, Command: line, Problem: problem, Action: NotCounted}
 		original, _ := c["evidence"].(string)
-		if fixed := Repair(line, out); fixed != "" {
+		if fixed := Repair(line, problem); fixed != "" {
 			rcode, rout, rerr := runShell(ctx, repo, fixed)
 			if rerr == nil && Malformed(rout) == "" {
 				f.Repair = fixed
@@ -302,6 +312,14 @@ func Malformed(out string) string {
 // leading segment is the package name when it carries two dots.
 var goDocPeriods = regexp.MustCompile(`^(.*\bgo\s+doc\s+(?:-\S+\s+)*[^-\s]\S*\s+)([A-Za-z_]\w*)\.([A-Za-z_]\w*\.[A-Za-z_]\w*)(\s.*)?$`)
 
+const zeroCountPipeProblem = "grep -c exits 1 on zero matches under pipefail"
+
+// zeroCountGrepPipe matches a pipeline stage `| grep -c <pat> | grep -qx 0`
+// (and egrep/rg variants). Because `grep -c` prints 0 and exits 1 when 0 lines
+// match, the pipeline is unsatisfiable under `bash -o pipefail` unless the
+// `grep -c` stage's no-match status is neutralized (`{ grep -c <pat> || true; }`).
+var zeroCountGrepPipe = regexp.MustCompile(`(\|\s*)((?:e?grep|rg)\s+(?:-[^\s|]*c[^\s|]*|--count)\b[^|{}]*?)(\s*\|\s*(?:e?grep|rg)\s+(?:-[^\s|]*\s+)*['"]?\^?0\$?['"]?\s*(?:$|[|;&]))`)
+
 // Repair returns line rewritten into the form its tool accepts, or "" when no
 // deterministic repair is known for the complaint in out.
 //
@@ -313,6 +331,15 @@ func Repair(line, out string) string {
 		if m := goDocPeriods.FindStringSubmatch(line); m != nil {
 			return m[1] + m[3] + m[4]
 		}
+	}
+	if strings.Contains(out, zeroCountPipeProblem) && zeroCountGrepPipe.MatchString(line) {
+		return zeroCountGrepPipe.ReplaceAllStringFunc(line, func(sub string) string {
+			m := zeroCountGrepPipe.FindStringSubmatch(sub)
+			if m == nil {
+				return sub
+			}
+			return m[1] + "{ " + strings.TrimSpace(m[2]) + " || true; }" + m[3]
+		})
 	}
 	return ""
 }
@@ -357,8 +384,14 @@ func fixList(v any) []Rewrite {
 	fix := func(crit string) string {
 		fixed := crit
 		for _, cmd := range Commands(crit) {
-			if r := Repair(cmd, "too many periods in symbol specification"); r != "" {
-				fixed = strings.Replace(fixed, cmd, r, 1)
+			for _, reason := range []string{
+				"too many periods in symbol specification",
+				zeroCountPipeProblem,
+			} {
+				if r := Repair(cmd, reason); r != "" {
+					fixed = strings.Replace(fixed, cmd, r, 1)
+					cmd = r
+				}
 			}
 		}
 		if fixed != crit {
@@ -426,6 +459,8 @@ var checkPrograms = map[string][]string{
 	"grep":   nil,
 	"egrep":  nil,
 	"rg":     nil,
+	"wc":     nil,
+	"true":   nil,
 	"test":   nil,
 	"[":      nil,
 	"pytest": nil,
@@ -447,7 +482,13 @@ func runnable(cmds []string) []string {
 		}
 		ok := true
 		for _, seg := range segmentSplit.Split(line, -1) {
-			fields := strings.Fields(strings.TrimPrefix(strings.TrimSpace(seg), "! "))
+			trimmed := strings.TrimSpace(seg)
+			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "{"))
+			trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, "}"))
+			if trimmed == "" {
+				continue
+			}
+			fields := strings.Fields(strings.TrimPrefix(trimmed, "! "))
 			if len(fields) == 0 {
 				ok = false
 				break
