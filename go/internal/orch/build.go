@@ -492,6 +492,36 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 		break
 	}
 
+	// Capture plan docs before finalize cleans up .artifacts/.
+	prdMarkdown, architectureMarkdown := readPlanDocs(planResult)
+
+	// 3b. FINALIZE.
+	targets := projectTargets(manifest, repoPath, buildBaseSHA)
+	preFinalize := snapshotTargets(ctx, targets)
+	finalizeChanged := finalizeRepos(ctx, deps, cfg, resolved, manifest, repoPath, planArtifactsDir, buildBaseSHA, strict)
+	if asBool(verification["passed"]) && (finalizeChanged || targetsChanged(ctx, targets, preFinalize)) {
+		deps.Note(ctx, "Verification after repo finalization", "build", "verify", "finalize")
+		postVerif, verr := deps.Call(ctx, "run_verifier", map[string]any{
+			"prd":                planResult["prd"],
+			"repo_path":          repoPath,
+			"artifacts_dir":      planArtifactsDir,
+			"completed_issues":   maps0(dagResult["completed_issues"]),
+			"failed_issues":      maps0(dagResult["failed_issues"]),
+			"skipped_issues":     any0(dagResult["skipped_issues"]),
+			"model":              resolved["verifier_model"],
+			"permission_mode":    cfg.PermissionMode,
+			"ai_provider":        cfg.AIProvider(),
+			"workspace_manifest": dumpToMap(manifest),
+		}, "run_verifier")
+		if verr != nil {
+			return nil, verr
+		}
+		verification = postVerif
+		applyCriterionAudit(ctx, deps, verification, targets)
+		applyProjectGate(ctx, deps, verification, targets, strict)
+		applyFinalTreeScopeCheck(ctx, deps, verification, planResult, targets, strict)
+	}
+
 	success := asBool(verification["passed"])
 	completed := len(asMapList(dagResult["completed_issues"]))
 	total := len(asMapList(dagResult["all_issues"]))
@@ -504,12 +534,6 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	}
 	deps.Note(ctx, fmt.Sprintf("Build %s: %d/%d issues, verification=%s",
 		verb, completed, total, verifWord), "build", "complete")
-
-	// Capture plan docs before finalize cleans up .artifacts/.
-	prdMarkdown, architectureMarkdown := readPlanDocs(planResult)
-
-	// 3b. FINALIZE.
-	finalizeRepos(ctx, deps, cfg, resolved, manifest, repoPath, planArtifactsDir, buildBaseSHA, strict)
 
 	// 4. PUSH & PR (+ CI gate).
 	prResults := []schemas.RepoPRResult{}
@@ -633,9 +657,11 @@ func prepareSingleRepo(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 
 // finalizeRepos ports the FINALIZE phase (app.py:1117-1175) for multi- and
 // single-repo builds. A finalize failure is non-blocking (noted, not raised).
+// It reports whether any finalize call reported updating .gitignore.
 func finalizeRepos(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
-	resolved map[string]string, manifest *schemas.WorkspaceManifest, repoPath, artifactsDir, buildBaseSHA string, strict bool) {
+	resolved map[string]string, manifest *schemas.WorkspaceManifest, repoPath, artifactsDir, buildBaseSHA string, strict bool) bool {
 
+	changed := false
 	// base_ref is each repo's starting commit: when strict is enabled, the
 	// cleanup may remove only tracked files the run created since it
 	// (roles/gitops/finalizeguard.go).
@@ -665,6 +691,9 @@ func finalizeRepos(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 				"build", "finalize", "error")
 			return
 		}
+		if asBool(res["gitignore_updated"]) {
+			changed = true
+		}
 		tag := "complete"
 		word := "finalized"
 		if !asBool(res["success"]) {
@@ -686,10 +715,11 @@ func finalizeRepos(ctx context.Context, deps *Deps, cfg *config.BuildConfig,
 			callFinalize(manifest.Repos[i].AbsolutePath, manifest.Repos[i].RepoName,
 				mapStr(manifest.Repos[i].GitInitResult, "initial_commit_sha", ""))
 		}
-		return
+		return changed
 	}
 	deps.Note(ctx, "Phase 3b: Repo finalization", "build", "finalize")
 	callFinalize(repoPath, "", buildBaseSHA)
+	return changed
 }
 
 // newBuildID returns an 8-hex-char build id (uuid.uuid4().hex[:8] parity).
