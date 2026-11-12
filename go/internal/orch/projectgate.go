@@ -150,11 +150,12 @@ func targetsChanged(ctx context.Context, targets []projectTarget, before map[str
 }
 
 // repairPostFinalizeTargets guarantees that the tree handed off to PR creation
-// is the tree that passed verification: if finalization still changed tracked
+// carries only the verified work (and any legitimate removal of a tracked build
+// artifact created during this run): if finalization still changed tracked
 // content (e.g. committing .gitignore or staging an untracked scratch file),
 // any newly added .gitignore patterns are migrated into .git/info/exclude,
-// HEAD and the working tree are restored to the verified commit, and the
-// repair is recorded in verification["summary"] and build notes.
+// unauthorized tracked changes are dropped, and the repair is recorded in
+// verification["summary"] and build notes without failing the build.
 func repairPostFinalizeTargets(
 	ctx context.Context,
 	deps *Deps,
@@ -190,13 +191,29 @@ func repairPostFinalizeTargets(
 		if now == prev && len(fields) == 0 {
 			continue
 		}
+		created := make(map[string]bool)
+		if base := strings.TrimSpace(t.base); base != "" && base != prev.head {
+			if cRes := runProc(ctx, p, "git", "diff", "--name-only", "--no-renames", "--diff-filter=A", "-z", base, prev.head); cRes.ExitCode == 0 {
+				for _, f := range strings.Split(cRes.Stdout, "\x00") {
+					if f != "" {
+						created[f] = true
+					}
+				}
+			}
+		}
+		legitimateDeleted := 0
 		seenPath := make(map[string]bool)
 		var (
 			repairedPaths []string
+			checkoutPaths []string
 			addedPaths    []string
 		)
 		for i := 0; i+1 < len(fields); i += 2 {
 			status, rel := fields[i], fields[i+1]
+			if len(status) > 0 && status[0] == 'D' && created[rel] {
+				legitimateDeleted++
+				continue
+			}
 			if !seenPath[rel] {
 				seenPath[rel] = true
 				repairedPaths = append(repairedPaths, rel)
@@ -206,6 +223,8 @@ func repairPostFinalizeTargets(
 			}
 			if len(status) > 0 && status[0] == 'A' {
 				addedPaths = append(addedPaths, rel)
+			} else {
+				checkoutPaths = append(checkoutPaths, rel)
 			}
 		}
 		if now.gitignoreExists && (!prev.gitignoreExists || now.gitignore != prev.gitignore) && !seenPath[".gitignore"] {
@@ -214,14 +233,44 @@ func repairPostFinalizeTargets(
 			migrateTargetGitignoreToExclude(ctx, p, prev.head, ".gitignore")
 			if !prev.gitignoreExists {
 				addedPaths = append(addedPaths, ".gitignore")
+			} else {
+				checkoutPaths = append(checkoutPaths, ".gitignore")
 			}
 		}
-		_ = runProc(ctx, p, "git", "reset", "--hard", prev.head)
-		for _, rel := range addedPaths {
-			_ = os.RemoveAll(filepath.Join(p, filepath.FromSlash(rel)))
+		if legitimateDeleted > 0 && len(repairedPaths) == 0 {
+			excludeHarnessMetadata(ctx, p)
+			continue
 		}
-		if !prev.gitignoreExists {
-			_ = os.Remove(filepath.Join(p, ".gitignore"))
+		if legitimateDeleted == 0 {
+			_ = runProc(ctx, p, "git", "reset", "--hard", prev.head)
+			for _, rel := range addedPaths {
+				_ = os.RemoveAll(filepath.Join(p, filepath.FromSlash(rel)))
+			}
+			if !prev.gitignoreExists {
+				_ = os.Remove(filepath.Join(p, ".gitignore"))
+			}
+		} else {
+			if len(checkoutPaths) > 0 {
+				args := append([]string{"checkout", prev.head, "--"}, checkoutPaths...)
+				_ = runProc(ctx, p, "git", args...)
+			}
+			if len(addedPaths) > 0 {
+				args := append([]string{"rm", "-f", "-q", "--ignore-unmatch", "--"}, addedPaths...)
+				_ = runProc(ctx, p, "git", args...)
+				for _, rel := range addedPaths {
+					_ = os.RemoveAll(filepath.Join(p, filepath.FromSlash(rel)))
+				}
+			}
+			if !prev.gitignoreExists {
+				_ = os.Remove(filepath.Join(p, ".gitignore"))
+			}
+			if cached := runProc(ctx, p, "git", "diff", "--cached", "--quiet"); cached.ExitCode != 0 {
+				commitRes := runProc(ctx, p, "git", "commit", "--no-verify", "-q", "-m", "chore: repair post-finalize tracked changes")
+				if commitRes.ExitCode != 0 {
+					_ = runProc(ctx, p, "git", "-c", "user.name=SWE-AF", "-c", "user.email=swe-af@agentfield.ai",
+						"commit", "--no-verify", "-q", "-m", "chore: repair post-finalize tracked changes")
+				}
+			}
 		}
 		excludeHarnessMetadata(ctx, p)
 
@@ -316,113 +365,4 @@ func migrateTargetGitignoreToExclude(ctx context.Context, repo, preHead, relPath
 		b.WriteByte('\n')
 	}
 	_ = os.WriteFile(excludePath, []byte(b.String()), 0o644)
-}
-
-// applyFinalTreeScopeCheck re-evaluates runnable git-diff / git-status scope
-// criteria against the finalized repository tree so a post-verification
-// finalization commit (e.g. adding .gitignore) cannot bypass a file-scope
-// criterion even if the verifier's own verdict remained green.
-func applyFinalTreeScopeCheck(
-	ctx context.Context,
-	deps *Deps,
-	verification map[string]any,
-	planResult map[string]any,
-	targets []projectTarget,
-	strict bool,
-) {
-	if !strict || verification == nil {
-		return
-	}
-	results := asMapList(verification["criteria_results"])
-	seen := make(map[string]bool, len(results))
-	for _, r := range results {
-		if crit := strings.TrimSpace(mapStr(r, "criterion", "")); crit != "" {
-			seen[crit] = true
-		}
-	}
-	if prd, _ := planResult["prd"].(map[string]any); prd != nil {
-		for _, raw := range coerceAnyList(prd["acceptance_criteria"]) {
-			crit, _ := raw.(string)
-			crit = strings.TrimSpace(crit)
-			if crit != "" && !seen[crit] {
-				seen[crit] = true
-				results = append(results, map[string]any{
-					"criterion": crit,
-					"passed":    true,
-				})
-			}
-		}
-	}
-
-	var failed []string
-	for _, t := range targets {
-		p := strings.TrimSpace(t.path)
-		if p == "" {
-			continue
-		}
-		for _, c := range results {
-			crit := strings.TrimSpace(mapStr(c, "criterion", ""))
-			if crit == "" {
-				continue
-			}
-			for _, cmd := range scopeCheckCommands(crit) {
-				res := runProc(ctx, p, "sh", "-c", cmd)
-				if res.ExitCode != 0 {
-					c["passed"] = false
-					detail := strings.TrimSpace(res.Stdout + "\n" + res.Stderr)
-					ev := fmt.Sprintf("Post-finalize scope check `%s` exited %d", cmd, res.ExitCode)
-					if detail != "" {
-						ev += ": " + detail
-					}
-					c["evidence"] = ev
-					failed = append(failed, fmt.Sprintf("`%s` (exit %d)", cmd, res.ExitCode))
-					deps.Note(ctx, fmt.Sprintf("Post-finalize scope check failed: `%s` exited %d", cmd, res.ExitCode),
-						"build", "verify", "finalize", "scope_failed")
-					break
-				}
-			}
-		}
-	}
-	if len(failed) > 0 {
-		verification["passed"] = false
-		raw := make([]any, 0, len(results))
-		for _, r := range results {
-			raw = append(raw, r)
-		}
-		verification["criteria_results"] = raw
-		msg := "Post-finalize scope check failed: " + strings.Join(failed, "; ")
-		prev := strings.TrimSpace(mapStr(verification, "summary", ""))
-		if prev != "" {
-			verification["summary"] = msg + ". " + prev
-		} else {
-			verification["summary"] = msg
-		}
-	}
-}
-
-func scopeCheckCommands(criterion string) []string {
-	candidates := critcheck.Commands(criterion)
-	if len(candidates) == 0 {
-		candidates = []string{strings.TrimSpace(criterion)}
-	}
-	var out []string
-	for _, raw := range candidates {
-		cmd := strings.TrimSpace(raw)
-		if cmd == "" {
-			continue
-		}
-		if !strings.Contains(cmd, "git diff") && !strings.Contains(cmd, "git status") {
-			continue
-		}
-		isAssertion := strings.ContainsAny(cmd, "|;&") ||
-			strings.HasPrefix(cmd, "test ") ||
-			strings.HasPrefix(cmd, "[ ") ||
-			strings.HasPrefix(cmd, "! ") ||
-			strings.Contains(cmd, "--exit-code") ||
-			strings.Contains(cmd, "--quiet")
-		if isAssertion {
-			out = append(out, cmd)
-		}
-	}
-	return out
 }

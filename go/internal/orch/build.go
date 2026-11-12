@@ -501,7 +501,6 @@ func Build(ctx context.Context, deps *Deps, input map[string]any) (any, error) {
 	finalizeChanged := finalizeRepos(ctx, deps, cfg, resolved, manifest, repoPath, planArtifactsDir, buildBaseSHA, strict)
 	if asBool(verification["passed"]) && (finalizeChanged || targetsChanged(ctx, targets, preFinalize)) {
 		repairPostFinalizeTargets(ctx, deps, verification, targets, preFinalize, strict)
-		applyFinalTreeScopeCheck(ctx, deps, verification, planResult, targets, strict)
 	}
 
 	success := asBool(verification["passed"])

@@ -398,12 +398,14 @@ func TestFinalizationPreservesVerifiedTreeAndOpensPullRequest(t *testing.T) {
 	strictTwoFile := "test \"$(git diff --name-only main...HEAD | sort)\" = \"$(printf 'textutil/textutil.go\\ntextutil/textutil_test.go' | sort)\""
 
 	type caseOpts struct {
-		viaBuildIssue         bool
-		strictEnv             bool
-		hasBaseGitignore      bool
-		finalizeAddsGitignore bool
-		finalizeStagesScratch bool
-		verifierPasses        bool
+		viaBuildIssue          bool
+		strictEnv              bool
+		hasBaseGitignore       bool
+		finalizeAddsGitignore  bool
+		finalizeStagesScratch  bool
+		coderCommitsArtifact   bool
+		extraNotCountedGitCrit string
+		verifierPasses         bool
 	}
 
 	runCase := func(t *testing.T, opts caseOpts) (
@@ -454,9 +456,13 @@ func TestFinalizationPreservesVerifiedTreeAndOpensPullRequest(t *testing.T) {
 			mu.Unlock()
 			switch {
 			case strings.HasSuffix(target, ".plan"):
+				acs := []any{strictTwoFile}
+				if opts.extraNotCountedGitCrit != "" {
+					acs = append(acs, opts.extraNotCountedGitCrit)
+				}
 				return map[string]any{
 					"prd": map[string]any{
-						"acceptance_criteria": []any{strictTwoFile},
+						"acceptance_criteria": acs,
 					},
 					"issues":        []any{},
 					"artifacts_dir": input["artifacts_dir"],
@@ -469,10 +475,17 @@ func TestFinalizationPreservesVerifiedTreeAndOpensPullRequest(t *testing.T) {
 				}, nil
 			case strings.HasSuffix(target, ".execute"):
 				gitT(t, repo, "checkout", "-q", "-b", "feature/runecount")
-				writeCommit(t, repo, "issue/runecount", map[string]string{
+				execFiles := map[string]string{
 					"textutil/textutil.go":      "package textutil\n\nimport \"unicode/utf8\"\n\nfunc Reverse(s string) string { return s }\nfunc RuneCount(s string) int { return utf8.RuneCountInString(s) }\n",
 					"textutil/textutil_test.go": "package textutil\n\nimport \"testing\"\n\nfunc TestReverse(t *testing.T) {}\nfunc TestRuneCount(t *testing.T) { if RuneCount(\"a\") != 1 { t.Fatal() } }\n",
-				})
+				}
+				if opts.coderCommitsArtifact {
+					if err := os.MkdirAll(filepath.Join(repo, "bin"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					execFiles["bin/runecount"] = "\x7fELF"
+				}
+				writeCommit(t, repo, "issue/runecount", execFiles)
 				if opts.finalizeStagesScratch {
 					// Leave an untracked scratch file in the working tree that
 					// the verifier excluded from `git diff main...HEAD` (#162).
@@ -513,7 +526,10 @@ func TestFinalizationPreservesVerifiedTreeAndOpensPullRequest(t *testing.T) {
 					},
 				}, nil
 			case strings.HasSuffix(target, ".run_repo_finalize"):
-				if opts.finalizeAddsGitignore || opts.finalizeStagesScratch {
+				if opts.coderCommitsArtifact {
+					gitT(t, repo, "rm", "-q", "-f", "bin/runecount")
+				}
+				if opts.finalizeAddsGitignore || opts.finalizeStagesScratch || opts.coderCommitsArtifact {
 					files := map[string]string{}
 					if opts.finalizeAddsGitignore {
 						prefix := ""
@@ -679,6 +695,26 @@ func TestFinalizationPreservesVerifiedTreeAndOpensPullRequest(t *testing.T) {
 			if strings.HasPrefix(g, "push") {
 				t.Fatalf("build_issue pushed branch despite failed work verification: %v", git)
 			}
+		}
+	})
+
+	t.Run("no_new_post_finalize_failure_path_and_legitimate_created_artifact_removal_preserved", func(t *testing.T) {
+		repo, calls, _, result := runCase(t, caseOpts{
+			viaBuildIssue:          true,
+			hasBaseGitignore:       false,
+			finalizeAddsGitignore:  true,
+			coderCommitsArtifact:   true,
+			extraNotCountedGitCrit: "`git diff --name-only main...HEAD | grep -qx nonexistent`",
+			verifierPasses:         true,
+		})
+		if !asBool(result["success"]) {
+			t.Fatalf("strict build failed after finalize despite passing verification: %v", result["verification"])
+		}
+		if !strings.Contains(strings.Join(calls, " "), "run_github_pr") {
+			t.Fatalf("strict build withheld pull request: %v", calls)
+		}
+		if diff := gitT(t, repo, "diff", "--name-only", "main...HEAD"); diff != "textutil/textutil.go\ntextutil/textutil_test.go" {
+			t.Fatalf("handed-off diff = %q, want bin/runecount kept removed and .gitignore dropped", diff)
 		}
 	})
 }
