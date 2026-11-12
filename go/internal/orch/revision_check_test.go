@@ -240,3 +240,63 @@ func TestRecheckNotesStayOutOfTheRequirements(t *testing.T) {
 		t.Fatalf("acceptance = %v", ac)
 	}
 }
+
+// Issue #185: "one additional named table subtest zero_width_space" must
+// capture zero_width_space as the required identifier and report it in
+// howThePlanChanged / PlanReviewMarkdown, without mistaking the descriptive
+// prose word "table" for a requested symbol, while preserving explicitly
+// backticked code names.
+func TestNamedTableSubtestCapturesRequestedIdentifierNotProseWord(t *testing.T) {
+	const g7Feedback = "Please revise the plan to require one additional named table subtest zero_width_space with input \"a\\u200bb\" and expected \"a\\u200bb\". State that U+200B is preserved because it is not whitespace. This tests the existing strings.Fields contract; do not special-case the implementation. Keep the rest of the scope unchanged."
+
+	reqs := readReviewRequests(g7Feedback)
+	if len(reqs) == 0 {
+		t.Fatal("readReviewRequests returned empty")
+	}
+	if got := strings.Join(reqs[0].Require, ","); got != "zero_width_space" {
+		t.Fatalf("reqs[0].Require = %q, want %q", got, "zero_width_space")
+	}
+
+	plan := map[string]any{
+		"prd": map[string]any{
+			"validated_description": "Add textutil.NormalizeSpace.",
+			"must_have": []any{
+				"Table-driven TestNormalizeSpace includes subtest zero_width_space with input \"a\\u200bb\" and want \"a\\u200bb\".",
+			},
+			"acceptance_criteria": []any{
+				"`go test ./textutil -run TestNormalizeSpace/zero_width_space -v` passes",
+			},
+		},
+		"issues": []any{map[string]any{
+			"name":                "normalize-space",
+			"title":               "Add textutil.NormalizeSpace",
+			"description":         "Add NormalizeSpace and TestNormalizeSpace including subtest zero_width_space.",
+			"files_to_modify":     []any{"textutil/textutil.go", "textutil/textutil_test.go"},
+			"acceptance_criteria": []any{"TestNormalizeSpace/zero_width_space passes"},
+		}},
+	}
+	problems := revisionProblems(plan, reqs)
+	if len(problems) != 0 {
+		t.Fatalf("revisionProblems = %v, want empty", problems)
+	}
+	lines := howThePlanChanged(reqs, problems, true)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "the plan now includes `zero_width_space`.") {
+		t.Fatalf("howThePlanChanged = %q, want `zero_width_space`", joined)
+	}
+	if strings.Contains(joined, "includes `table`") {
+		t.Fatalf("howThePlanChanged falsely reports `table` as a requested symbol: %q", joined)
+	}
+
+	// Explicitly backticked `table` is still preserved as a code name.
+	backtickedReqs := readReviewRequests("Add a helper struct named `table` in textutil.go.")
+	if len(backtickedReqs) != 1 || strings.Join(backtickedReqs[0].Require, ",") != "table" {
+		t.Fatalf("backticked `table` Require = %+v, want [table]", backtickedReqs)
+	}
+
+	// Adjective "named" with no identifier after prose nouns does not capture a stopword.
+	proseOnlyReqs := readReviewRequests("Run each named table subtest in the suite.")
+	if len(proseOnlyReqs) != 1 || len(proseOnlyReqs[0].Require) != 0 {
+		t.Fatalf("prose-only `named table subtest in` Require = %+v, want empty", proseOnlyReqs)
+	}
+}
