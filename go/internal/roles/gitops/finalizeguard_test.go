@@ -327,3 +327,75 @@ func TestFinalizeGuardGatedByStrictSwitch(t *testing.T) {
 		}
 	})
 }
+
+// Issue #183 (rework) and #162: When no tracked build artifact was removed,
+// RunRepoFinalize keeps HEAD at the verified commit, migrates any .gitignore
+// patterns the agent tried to add into .git/info/exclude, and drops any
+// untracked scratch files the agent staged and committed.
+func TestFinalizePreservesVerifiedTreeAndMigratesGitignoreToExclude(t *testing.T) {
+	t.Setenv(config.EnvStrictBuild, "1")
+	repo := t.TempDir()
+	gitT(t, repo, "init", "-q", "-b", "main")
+	writeFiles(t, repo, map[string]string{
+		"textutil/textutil.go": "package textutil\n",
+	})
+	commitAll(t, repo, "base")
+	base := gitT(t, repo, "rev-parse", "HEAD")
+
+	// Verified commit touches only textutil/textutil.go and textutil/textutil_test.go.
+	writeFiles(t, repo, map[string]string{
+		"textutil/textutil.go":      "package textutil\n\nfunc DerefString(p *string) string { return \"\" }\n",
+		"textutil/textutil_test.go": "package textutil\n",
+	})
+	commitAll(t, repo, "feat: add DerefString")
+	verifiedSHA := gitT(t, repo, "rev-parse", "HEAD")
+
+	agent := func(_ context.Context, _ string, _ map[string]any, dest any, _ harness.Options) (*harness.Result, error) {
+		// Non-compliant cleanup agent creates .gitignore AND stages an untracked scratch file (#162).
+		writeFiles(t, repo, map[string]string{
+			".gitignore":                  ".artifacts/\n.worktrees/\n*.test\n",
+			"textutil/scratch_repro_test": "scratch\n",
+		})
+		commitAll(t, repo, "chore: finalize repo for handoff")
+		body := `{"success":true,"files_removed":[],"gitignore_updated":true,"summary":"Added .gitignore."}`
+		return &harness.Result{Parsed: dest}, json.Unmarshal([]byte(body), dest)
+	}
+	deps, app := newDeps(agent)
+	out, err := RunRepoFinalize(context.Background(), deps, map[string]any{
+		"repo_path": repo,
+		"base_ref":  base,
+		"strict":    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := out.(schemas.RepoFinalizeResult)
+	if head := gitT(t, repo, "rev-parse", "HEAD"); head != verifiedSHA {
+		t.Fatalf("HEAD = %s, want verified commit %s", head, verifiedSHA)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".gitignore")); !os.IsNotExist(err) {
+		t.Fatalf(".gitignore still exists on disk: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "textutil/scratch_repro_test")); !os.IsNotExist(err) {
+		t.Fatalf("scratch_repro_test still exists on disk: %v", err)
+	}
+	excludeBytes, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatalf("read .git/info/exclude: %v", err)
+	}
+	for _, pat := range []string{".artifacts/", ".worktrees/", "*.test"} {
+		if !strings.Contains(string(excludeBytes), pat) {
+			t.Fatalf(".git/info/exclude = %q, want pattern %q migrated", string(excludeBytes), pat)
+		}
+	}
+	if res.GitignoreUpdated {
+		t.Fatalf("gitignore_updated = true, want false after repair")
+	}
+	wantRestored := []string{".gitignore", "textutil/scratch_repro_test"}
+	if !reflect.DeepEqual(res.FilesRestored, wantRestored) {
+		t.Fatalf("files_restored = %v, want %v", res.FilesRestored, wantRestored)
+	}
+	if !hasNoteWithTags(app, "repo_finalize", "restored") {
+		t.Fatalf("expected restored note, got %v", app.notes)
+	}
+}

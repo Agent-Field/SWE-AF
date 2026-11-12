@@ -37,9 +37,39 @@ var (
 	filePattern   = regexp.MustCompile("`?([A-Za-z0-9_./-]+\\.[A-Za-z0-9]{1,6})`?")
 	avoidCue      = regexp.MustCompile(`(?i)\b(alone|untouched|unchanged|don'?t (touch|change|edit|modify)|do not (touch|change|edit|modify)|no (changes|edits) to|never (touch|change|edit)|not (touch|change|edit|modify))\b`)
 	negationCue   = regexp.MustCompile(`(?i)\b(alone|untouched|unchanged|not|no|never|without|dropped|drop|leave|left|excluded|out of scope|don'?t|nor|neither)\b`)
-	namedPattern  = regexp.MustCompile("(?i)\\b(?:named|called|call it|name it)\\s+`?([A-Za-z_][A-Za-z0-9_]*)`?")
+	namedPattern  = regexp.MustCompile("(?i)\\b(?:named|called|call it|name it)\\s+(?:(?:table(?:-driven)?|subtests?|tests?|unit|cases?|rows?|entries|entry|fields?|methods?|functions?|funcs?|helpers?|constants?|consts?|variables?|vars?|options?|flags?|parameters?|params?|arguments?|args?|types?|structs?|interfaces?|packages?|benchmarks?|checks?|steps?|targets?|rules?|metrics?)\\s+)*`?([A-Za-z_][A-Za-z0-9_]*)`?")
 	tickPattern   = regexp.MustCompile("`([A-Za-z_][A-Za-z0-9_.()]*)`")
 	goTestPattern = regexp.MustCompile(`\b(Test[A-Z][A-Za-z0-9_]*|Benchmark[A-Z][A-Za-z0-9_]*)\b`)
+
+	namedProseStopWords = map[string]bool{
+		"table": true, "subtest": true, "subtests": true, "test": true, "tests": true, "unit": true,
+		"case": true, "cases": true, "row": true, "rows": true, "entry": true, "entries": true,
+		"field": true, "fields": true, "method": true, "methods": true, "function": true, "functions": true,
+		"func": true, "funcs": true, "helper": true, "helpers": true, "constant": true, "constants": true,
+		"const": true, "consts": true, "variable": true, "variables": true, "var": true, "vars": true,
+		"option": true, "options": true, "flag": true, "flags": true, "parameter": true, "parameters": true,
+		"param": true, "params": true, "argument": true, "arguments": true, "arg": true, "args": true,
+		"type": true, "types": true, "struct": true, "structs": true, "interface": true, "interfaces": true,
+		"package": true, "packages": true, "benchmark": true, "benchmarks": true, "check": true, "checks": true,
+		"step": true, "steps": true, "target": true, "targets": true, "rule": true, "rules": true,
+		"metric": true, "metrics": true,
+		"with": true, "for": true, "in": true, "to": true, "from": true, "of": true, "on": true,
+		"at": true, "by": true, "as": true, "into": true, "onto": true, "upon": true, "about": true,
+		"above": true, "below": true, "under": true, "over": true, "after": true, "before": true,
+		"between": true, "through": true, "during": true, "without": true, "within": true,
+		"that": true, "which": true, "who": true, "whom": true, "whose": true, "where": true,
+		"when": true, "why": true, "how": true, "whether": true, "if": true, "unless": true,
+		"until": true, "while": true, "because": true, "since": true, "although": true, "though": true,
+		"and": true, "or": true, "but": true, "nor": true, "yet": true, "so": true,
+		"the": true, "a": true, "an": true, "this": true, "these": true, "those": true,
+		"each": true, "every": true, "any": true, "some": true, "no": true, "none": true,
+		"all": true, "both": true, "either": true, "neither": true, "one": true, "two": true, "three": true,
+		"is": true, "are": true, "was": true, "were": true, "be": true, "been": true, "being": true,
+		"has": true, "have": true, "had": true, "do": true, "does": true, "did": true,
+		"will": true, "would": true, "shall": true, "should": true, "can": true, "could": true,
+		"may": true, "might": true, "must": true, "it": true, "its": true, "they": true, "them": true,
+		"their": true, "we": true, "us": true, "our": true, "you": true, "your": true,
+	}
 )
 
 // readReviewRequests reads the checkable requests out of the person's words,
@@ -66,6 +96,9 @@ func readReviewRequests(feedback string) []reviewRequest {
 			}
 		}
 		for _, m := range namedPattern.FindAllStringSubmatch(s, -1) {
+			if !strings.Contains(m[0], "`") && namedProseStopWords[strings.ToLower(m[1])] {
+				continue
+			}
 			add(m[1])
 		}
 		if r.Avoid == "" {

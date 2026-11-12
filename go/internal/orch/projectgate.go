@@ -3,6 +3,10 @@ package orch
 import (
 	"context"
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/critcheck"
@@ -101,4 +105,264 @@ func applyProjectGate(ctx context.Context, deps *Deps, verification map[string]a
 			o.Fold(verification, where)
 		}
 	}
+}
+
+type targetSnapshot struct {
+	head            string
+	status          string
+	gitignoreExists bool
+	gitignore       string
+}
+
+func snapshotTargets(ctx context.Context, targets []projectTarget) map[string]targetSnapshot {
+	out := make(map[string]targetSnapshot, len(targets))
+	for _, t := range targets {
+		p := strings.TrimSpace(t.path)
+		if p == "" {
+			continue
+		}
+		var snap targetSnapshot
+		snap.head = headSHA(ctx, p)
+		if st := runProc(ctx, p, "git", "status", "--porcelain"); st.ExitCode == 0 {
+			snap.status = strings.TrimSpace(st.Stdout)
+		}
+		if data, err := os.ReadFile(filepath.Join(p, ".gitignore")); err == nil {
+			snap.gitignoreExists = true
+			snap.gitignore = string(data)
+		}
+		out[p] = snap
+	}
+	return out
+}
+
+func targetsChanged(ctx context.Context, targets []projectTarget, before map[string]targetSnapshot) bool {
+	after := snapshotTargets(ctx, targets)
+	if len(after) != len(before) {
+		return true
+	}
+	for p, now := range after {
+		prev, ok := before[p]
+		if !ok || now != prev {
+			return true
+		}
+	}
+	return false
+}
+
+// repairPostFinalizeTargets guarantees that the tree handed off to PR creation
+// carries only the verified work (and any legitimate removal of a tracked build
+// artifact created during this run): if finalization still changed tracked
+// content (e.g. committing .gitignore or staging an untracked scratch file),
+// any newly added .gitignore patterns are migrated into .git/info/exclude,
+// unauthorized tracked changes are dropped, and the repair is recorded in
+// verification["summary"] and build notes without failing the build.
+func repairPostFinalizeTargets(
+	ctx context.Context,
+	deps *Deps,
+	verification map[string]any,
+	targets []projectTarget,
+	before map[string]targetSnapshot,
+	strict bool,
+) {
+	if !strict || verification == nil {
+		return
+	}
+	after := snapshotTargets(ctx, targets)
+	var notes []string
+	for _, t := range targets {
+		p := strings.TrimSpace(t.path)
+		if p == "" {
+			continue
+		}
+		prev, ok := before[p]
+		if !ok || prev.head == "" {
+			continue
+		}
+		now := after[p]
+		diffRes := runProc(ctx, p, "git", "diff", "--name-status", "--no-renames", "-z", prev.head, "--")
+		var fields []string
+		if diffRes.ExitCode == 0 {
+			for _, f := range strings.Split(diffRes.Stdout, "\x00") {
+				if f != "" {
+					fields = append(fields, f)
+				}
+			}
+		}
+		if now == prev && len(fields) == 0 {
+			continue
+		}
+		created := make(map[string]bool)
+		if base := strings.TrimSpace(t.base); base != "" && base != prev.head {
+			if cRes := runProc(ctx, p, "git", "diff", "--name-only", "--no-renames", "--diff-filter=A", "-z", base, prev.head); cRes.ExitCode == 0 {
+				for _, f := range strings.Split(cRes.Stdout, "\x00") {
+					if f != "" {
+						created[f] = true
+					}
+				}
+			}
+		}
+		legitimateDeleted := 0
+		seenPath := make(map[string]bool)
+		var (
+			repairedPaths []string
+			checkoutPaths []string
+			addedPaths    []string
+		)
+		for i := 0; i+1 < len(fields); i += 2 {
+			status, rel := fields[i], fields[i+1]
+			if len(status) > 0 && status[0] == 'D' && created[rel] {
+				legitimateDeleted++
+				continue
+			}
+			if !seenPath[rel] {
+				seenPath[rel] = true
+				repairedPaths = append(repairedPaths, rel)
+			}
+			if path.Base(rel) == ".gitignore" {
+				migrateTargetGitignoreToExclude(ctx, p, prev.head, rel)
+			}
+			if len(status) > 0 && status[0] == 'A' {
+				addedPaths = append(addedPaths, rel)
+			} else {
+				checkoutPaths = append(checkoutPaths, rel)
+			}
+		}
+		if now.gitignoreExists && (!prev.gitignoreExists || now.gitignore != prev.gitignore) && !seenPath[".gitignore"] {
+			seenPath[".gitignore"] = true
+			repairedPaths = append(repairedPaths, ".gitignore")
+			migrateTargetGitignoreToExclude(ctx, p, prev.head, ".gitignore")
+			if !prev.gitignoreExists {
+				addedPaths = append(addedPaths, ".gitignore")
+			} else {
+				checkoutPaths = append(checkoutPaths, ".gitignore")
+			}
+		}
+		if legitimateDeleted > 0 && len(repairedPaths) == 0 {
+			excludeHarnessMetadata(ctx, p)
+			continue
+		}
+		if legitimateDeleted == 0 {
+			_ = runProc(ctx, p, "git", "reset", "--hard", prev.head)
+			for _, rel := range addedPaths {
+				_ = os.RemoveAll(filepath.Join(p, filepath.FromSlash(rel)))
+			}
+			if !prev.gitignoreExists {
+				_ = os.Remove(filepath.Join(p, ".gitignore"))
+			}
+		} else {
+			if len(checkoutPaths) > 0 {
+				args := append([]string{"checkout", prev.head, "--"}, checkoutPaths...)
+				_ = runProc(ctx, p, "git", args...)
+			}
+			if len(addedPaths) > 0 {
+				args := append([]string{"rm", "-f", "-q", "--ignore-unmatch", "--"}, addedPaths...)
+				_ = runProc(ctx, p, "git", args...)
+				for _, rel := range addedPaths {
+					_ = os.RemoveAll(filepath.Join(p, filepath.FromSlash(rel)))
+				}
+			}
+			if !prev.gitignoreExists {
+				_ = os.Remove(filepath.Join(p, ".gitignore"))
+			}
+			if cached := runProc(ctx, p, "git", "diff", "--cached", "--quiet"); cached.ExitCode != 0 {
+				commitRes := runProc(ctx, p, "git", "commit", "--no-verify", "-q", "-m", "chore: repair post-finalize tracked changes")
+				if commitRes.ExitCode != 0 {
+					_ = runProc(ctx, p, "git", "-c", "user.name=SWE-AF", "-c", "user.email=swe-af@agentfield.ai",
+						"commit", "--no-verify", "-q", "-m", "chore: repair post-finalize tracked changes")
+				}
+			}
+		}
+		excludeHarnessMetadata(ctx, p)
+
+		sort.Strings(repairedPaths)
+		where := ""
+		if t.name != "" {
+			where = " (" + t.name + ")"
+		}
+		short := prev.head
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		msg := fmt.Sprintf("Repaired post-finalize commit%s: restored verified commit %s", where, short)
+		if len(repairedPaths) > 0 {
+			msg = fmt.Sprintf(
+				"Repaired post-finalize tracked changes%s: restored verified commit %s (dropped %s; local ignore patterns kept in .git/info/exclude)",
+				where, short, strings.Join(repairedPaths, ", "),
+			)
+		}
+		deps.Note(ctx, msg, "build", "finalize", "repaired")
+		notes = append(notes, msg)
+	}
+	if len(notes) > 0 {
+		repairText := strings.Join(notes, "; ")
+		prev := strings.TrimSpace(mapStr(verification, "summary", ""))
+		if prev != "" {
+			verification["summary"] = prev + " (" + repairText + ")"
+		} else {
+			verification["summary"] = repairText
+		}
+	}
+}
+
+func migrateTargetGitignoreToExclude(ctx context.Context, repo, preHead, relPath string) {
+	curBytes, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(relPath)))
+	if err != nil {
+		return
+	}
+	prevLines := make(map[string]bool)
+	if show := runProc(ctx, repo, "git", "show", preHead+":"+relPath); show.ExitCode == 0 {
+		for _, line := range strings.Split(show.Stdout, "\n") {
+			prevLines[strings.TrimSpace(line)] = true
+		}
+	}
+	var added []string
+	for _, raw := range strings.Split(string(curBytes), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || prevLines[line] {
+			continue
+		}
+		prevLines[line] = true
+		added = append(added, line)
+	}
+	if len(added) == 0 {
+		return
+	}
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	if gp := runProc(ctx, repo, "git", "rev-parse", "--git-path", "info/exclude"); gp.ExitCode == 0 {
+		if trimmed := strings.TrimSpace(gp.Stdout); trimmed != "" {
+			if filepath.IsAbs(trimmed) {
+				excludePath = trimmed
+			} else {
+				excludePath = filepath.Join(repo, trimmed)
+			}
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return
+	}
+	existing, _ := os.ReadFile(excludePath)
+	existingLines := make(map[string]bool)
+	for _, raw := range strings.Split(string(existing), "\n") {
+		existingLines[strings.TrimSpace(raw)] = true
+	}
+	var toAppend []string
+	for _, line := range added {
+		if !existingLines[line] {
+			existingLines[line] = true
+			toAppend = append(toAppend, line)
+		}
+	}
+	if len(toAppend) == 0 {
+		return
+	}
+	var b strings.Builder
+	b.Write(existing)
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		b.WriteByte('\n')
+	}
+	for _, line := range toAppend {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	_ = os.WriteFile(excludePath, []byte(b.String()), 0o644)
 }

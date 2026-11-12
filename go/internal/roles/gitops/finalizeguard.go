@@ -3,8 +3,10 @@ package gitops
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -85,7 +87,11 @@ func openFinalizeScope(ctx context.Context, repo, base string) (finalizeScope, b
 // restore puts back every path the cleanup was not allowed to touch, commits
 // the restoration, and returns the restored paths (sorted). A path the
 // cleanup deleted is allowed only if the run created it; a path it modified is
-// allowed only if it is a .gitignore. Additions are allowed.
+// allowed only if it is a .gitignore paired with a legitimate artifact removal.
+// When no tracked artifact created by the run was removed, the verified tree
+// is frozen: any .gitignore patterns are migrated to .git/info/exclude and
+// HEAD is reset back to preHead. Non-.gitignore additions (such as untracked
+// scratch files staged by finalize, #162) are never allowed.
 func (s finalizeScope) restore(ctx context.Context) []string {
 	out, ok := gitOut(ctx, s.repo, "diff", "--name-status", "--no-renames", "-z", s.preHead, "--")
 	if !ok {
@@ -96,17 +102,43 @@ func (s finalizeScope) restore(ctx context.Context) []string {
 		created[p] = true
 	}
 	fields := splitZ(out)
-	var restore []string
+	legitimateDeleted := 0
+	for i := 0; i+1 < len(fields); i += 2 {
+		status, p := fields[i], fields[i+1]
+		if status[0] == 'D' && created[p] {
+			legitimateDeleted++
+		}
+	}
+	var (
+		restore       []string
+		checkoutPaths []string
+		addedPaths    []string
+	)
 	for i := 0; i+1 < len(fields); i += 2 {
 		status, p := fields[i], fields[i+1]
 		switch status[0] {
 		case 'D':
 			if !created[p] {
 				restore = append(restore, p)
+				checkoutPaths = append(checkoutPaths, p)
 			}
 		case 'M', 'T':
 			if path.Base(p) != ".gitignore" {
 				restore = append(restore, p)
+				checkoutPaths = append(checkoutPaths, p)
+			} else if legitimateDeleted == 0 {
+				migrateGitignoreToExclude(ctx, s.repo, s.preHead, p)
+				restore = append(restore, p)
+				checkoutPaths = append(checkoutPaths, p)
+			}
+		case 'A':
+			if path.Base(p) != ".gitignore" {
+				restore = append(restore, p)
+				addedPaths = append(addedPaths, p)
+			} else if legitimateDeleted == 0 {
+				migrateGitignoreToExclude(ctx, s.repo, s.preHead, p)
+				restore = append(restore, p)
+				addedPaths = append(addedPaths, p)
 			}
 		}
 	}
@@ -114,9 +146,26 @@ func (s finalizeScope) restore(ctx context.Context) []string {
 		return nil
 	}
 	sort.Strings(restore)
-	args := append([]string{"checkout", s.preHead, "--"}, restore...)
-	if _, ok := gitOut(ctx, s.repo, args...); !ok {
-		return nil
+	if legitimateDeleted == 0 {
+		if _, ok := gitOut(ctx, s.repo, "reset", "--hard", s.preHead); !ok {
+			return nil
+		}
+		for _, p := range addedPaths {
+			_ = os.RemoveAll(filepath.Join(s.repo, filepath.FromSlash(p)))
+		}
+		return restore
+	}
+	if len(checkoutPaths) > 0 {
+		args := append([]string{"checkout", s.preHead, "--"}, checkoutPaths...)
+		if _, ok := gitOut(ctx, s.repo, args...); !ok {
+			return nil
+		}
+	}
+	if len(addedPaths) > 0 {
+		args := append([]string{"rm", "-f", "-q", "--ignore-unmatch", "--"}, addedPaths...)
+		if _, ok := gitOut(ctx, s.repo, args...); !ok {
+			return nil
+		}
 	}
 	if _, clean := gitOut(ctx, s.repo, "diff", "--cached", "--quiet"); !clean {
 		msg := "chore: restore files the cleanup removed or changed\n\n" +
@@ -129,6 +178,71 @@ func (s finalizeScope) restore(ctx context.Context) []string {
 		}
 	}
 	return restore
+}
+
+// migrateGitignoreToExclude copies any ignore patterns added to relPath since
+// preHead into .git/info/exclude so local ignore hygiene is preserved without
+// mutating tracked .gitignore content.
+func migrateGitignoreToExclude(ctx context.Context, repo, preHead, relPath string) {
+	curBytes, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(relPath)))
+	if err != nil {
+		return
+	}
+	prevOut, existed := gitOut(ctx, repo, "show", preHead+":"+relPath)
+	prevLines := make(map[string]bool)
+	if existed {
+		for _, line := range strings.Split(prevOut, "\n") {
+			prevLines[strings.TrimSpace(line)] = true
+		}
+	}
+	var added []string
+	for _, raw := range strings.Split(string(curBytes), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || prevLines[line] {
+			continue
+		}
+		prevLines[line] = true
+		added = append(added, line)
+	}
+	if len(added) == 0 {
+		return
+	}
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	if gp, ok := gitOut(ctx, repo, "rev-parse", "--git-path", "info/exclude"); ok && gp != "" {
+		if filepath.IsAbs(gp) {
+			excludePath = gp
+		} else {
+			excludePath = filepath.Join(repo, gp)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return
+	}
+	existing, _ := os.ReadFile(excludePath)
+	existingLines := make(map[string]bool)
+	for _, raw := range strings.Split(string(existing), "\n") {
+		existingLines[strings.TrimSpace(raw)] = true
+	}
+	var toAppend []string
+	for _, line := range added {
+		if !existingLines[line] {
+			existingLines[line] = true
+			toAppend = append(toAppend, line)
+		}
+	}
+	if len(toAppend) == 0 {
+		return
+	}
+	var b strings.Builder
+	b.Write(existing)
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		b.WriteByte('\n')
+	}
+	for _, line := range toAppend {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	_ = os.WriteFile(excludePath, []byte(b.String()), 0o644)
 }
 
 func splitZ(s string) []string {

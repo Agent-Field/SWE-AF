@@ -3,6 +3,7 @@ package gitops
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/afx"
@@ -106,6 +107,9 @@ func applyRestored(res *schemas.RepoFinalizeResult, restored []string) {
 	back := make(map[string]bool, len(restored))
 	for _, p := range restored {
 		back[p] = true
+		if path.Base(p) == ".gitignore" {
+			res.GitignoreUpdated = false
+		}
 	}
 	kept := res.FilesRemoved[:0:0]
 	for _, p := range res.FilesRemoved {

@@ -347,3 +347,133 @@ func TestAFencedCoderCommitsInItsLinkedWorktree(t *testing.T) {
 		}
 	}
 }
+
+func TestProtectedOperatorPathsAreHiddenWhileBuildAndToolchainStayUsable(t *testing.T) {
+	t.Run("ScopeFor_Stamp_SeatbeltProfile_and_Command_protect_configured_operator_paths", func(t *testing.T) {
+		opDir := canonical(t.TempDir())
+		parentNote := filepath.Join(opDir, "NOTES.md")
+		if err := os.WriteFile(parentNote, []byte("operator spec note\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		extDir := filepath.Join(opDir, "operator-specs")
+		if err := os.MkdirAll(extDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		root := filepath.Join(opDir, "workspaces")
+		a := filepath.Join(root, "factory-demo-aaaa")
+		if err := os.MkdirAll(a, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Setenv("SWE_FENCE_PROTECT", parentNote+string(filepath.ListSeparator)+extDir)
+		scope, ok := ScopeFor(root, filepath.Join(a, ".worktrees", "issue-01"))
+		if !ok {
+			t.Fatal("ScopeFor returned ok=false")
+		}
+		stamped := Stamp(nil, "/bin/codeaf", scope)
+		if !strings.Contains(stamped["SWE_FENCE_PROTECT"], parentNote) || !strings.Contains(stamped["SWE_FENCE_PROTECT"], extDir) {
+			t.Fatalf("Stamp SWE_FENCE_PROTECT = %q, want %q and %q", stamped["SWE_FENCE_PROTECT"], parentNote, extDir)
+		}
+
+		profile := SeatbeltProfile(scope)
+		denyNote := `(deny file-read* file-write* (subpath ` + `"` + parentNote + `"))`
+		denyExt := `(deny file-read* file-write* (subpath ` + `"` + extDir + `"))`
+		allowBuild := `(allow file-read* file-write* (subpath ` + `"` + a + `"))`
+		if !strings.Contains(profile, denyNote) || !strings.Contains(profile, denyExt) {
+			t.Fatalf("SeatbeltProfile missing protected path deny rules:\n%s", profile)
+		}
+		if strings.Index(profile, denyNote) > strings.Index(profile, allowBuild) {
+			t.Fatalf("SeatbeltProfile protected deny must precede build allow:\n%s", profile)
+		}
+
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			stubDir := t.TempDir()
+			stub := filepath.Join(stubDir, "bwrap")
+			if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", stubDir+string(filepath.ListSeparator)+os.Getenv("PATH"))
+		}
+		argv, err := Command("linux", "/bin/codeaf", nil, scope)
+		if err != nil {
+			t.Fatalf("Command(linux): %v", err)
+		}
+		joined := strings.Join(argv[1:], " ")
+		wantLinux := "--ro-bind /dev/null " + parentNote + " --tmpfs " + extDir + " --tmpfs " + root + " --bind " + a + " " + a
+		if !strings.Contains(joined, wantLinux) {
+			t.Fatalf("bwrap argv = %q, want substring %q", joined, wantLinux)
+		}
+	})
+
+	t.Run("launcher_hides_protected_parent_marker_and_sibling_build_while_keeping_allowed_build_and_toolchain_usable", func(t *testing.T) {
+		requireFence(t)
+		t.Setenv(EnvFence, "1")
+		opDir := canonical(t.TempDir())
+		parentNote := filepath.Join(opDir, "NOTES.md")
+		if err := os.WriteFile(parentNote, []byte("operator secret note\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		siblingOpDir := filepath.Join(opDir, "operator-context")
+		if err := os.MkdirAll(siblingOpDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		siblingOpSpec := filepath.Join(siblingOpDir, "SPEC.md")
+		if err := os.WriteFile(siblingOpSpec, []byte("operator sibling spec\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		root := filepath.Join(opDir, "workspaces")
+		a := filepath.Join(root, "factory-demo-aaaa")
+		b := filepath.Join(root, "factory-demo-bbbb")
+		for _, d := range []string{filepath.Join(a, ".artifacts", "plan"), filepath.Join(b, ".artifacts", "plan")} {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		own := filepath.Join(a, ".artifacts", "plan", "prd.md")
+		theirs := filepath.Join(b, ".artifacts", "plan", "prd.md")
+		_ = os.WriteFile(own, []byte("PRD for issue #187\n"), 0o644)
+		_ = os.WriteFile(theirs, []byte("PRD for issue #83\n"), 0o644)
+
+		t.Setenv("SWE_FENCE_PROTECT", parentNote+string(filepath.ListSeparator)+siblingOpDir)
+		scope, ok := ScopeFor(root, filepath.Join(a, ".worktrees", "issue-01"))
+		if !ok {
+			t.Fatal("no scope")
+		}
+		sh, err := exec.LookPath("sh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		self, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := func(script string) (string, error) {
+			cmd := exec.Command(self, "-c", script)
+			cmd.Dir = a
+			env := os.Environ()
+			for k, v := range Stamp(nil, sh, scope) {
+				env = append(env, k+"="+v)
+			}
+			cmd.Env = env
+			out, err := cmd.CombinedOutput()
+			return string(out), err
+		}
+
+		if out, err := run("cat " + own); err != nil || !strings.Contains(out, "#187") {
+			t.Fatalf("allowed build cannot read its own plan: %v\n%s", err, out)
+		}
+		if out, err := run("cat " + theirs); err == nil || strings.Contains(out, "#83") {
+			t.Fatalf("allowed build read sibling build B's plan:\n%s", out)
+		}
+		if out, err := run("cat " + parentNote); err == nil || strings.Contains(out, "operator secret note") {
+			t.Fatalf("allowed build read protected parent operator note:\n%s", out)
+		}
+		if out, err := run("cat " + siblingOpSpec); err == nil || strings.Contains(out, "operator sibling spec") {
+			t.Fatalf("allowed build read protected operator context directory:\n%s", out)
+		}
+		if hostBytes, err := os.ReadFile(parentNote); err != nil || !strings.Contains(string(hostBytes), "operator secret note") {
+			t.Fatalf("host parent note was altered: %v %q", err, string(hostBytes))
+		}
+	})
+}
