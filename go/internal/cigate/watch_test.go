@@ -307,10 +307,16 @@ func TestNoChecksWhenGhReportsNoChecksReported(t *testing.T) {
 	}
 }
 
-// Issue #186: a repository without CI workflows (or where no checks start
-// during the startup grace window) must return no_checks promptly instead of
-// polling through the full 1500-second wait_seconds cap, while still waiting
-// for checks that start within the grace period.
+// Issue #186 (reworked for SPEC-FIX-3):
+//  1. A repository on disk with NO CI workflow configuration returns no_checks on
+//     the first poll without sleeping.
+//  2. A repository WITH CI configured on disk (or an unknown/non-git path) keeps
+//     polling up to the full waitSeconds cap by default when no checks have
+//     registered yet — identical to origin/main, so late-registering checks (>60s)
+//     still pass.
+//  3. The shorter no-check grace applies on a CI-configured repository ONLY when
+//     explicitly opted in via SWE_CI_NO_CHECK_GRACE_SECONDS or
+//     WithNoCheckGraceSeconds (run_ci_watcher input no_check_grace_seconds).
 func TestNoChecksReturnsPromptlyWithoutConsumingFullWaitCap(t *testing.T) {
 	t.Run("workflow-free git repo returns no_checks on first poll without sleeping", func(t *testing.T) {
 		repo := t.TempDir()
@@ -340,7 +346,18 @@ func TestNoChecksReturnsPromptlyWithoutConsumingFullWaitCap(t *testing.T) {
 		}
 	})
 
-	t.Run("no checks starting within startup grace returns no_checks well before 1500s cap", func(t *testing.T) {
+	t.Run("CI-configured repo with no checks yet polls to full waitSeconds cap by default as on origin/main", func(t *testing.T) {
+		repo := t.TempDir()
+		wfDir := filepath.Join(repo, ".github", "workflows")
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(wfDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wfDir, "test.yml"), []byte("name: test\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		r := &scriptedRunner{}
 		for i := 0; i < 60; i++ {
 			r.checksQueue = append(r.checksQueue, completed(
@@ -354,17 +371,21 @@ func TestNoChecksReturnsPromptlyWithoutConsumingFullWaitCap(t *testing.T) {
 			clock += float64(s)
 		}
 
-		res := WatchPRChecks(context.Background(), "/tmp/repo", 7, 1500, 30, "")
+		res := WatchPRChecks(context.Background(), repo, 7, 1500, 30, "")
 		if res.Status != "no_checks" {
 			t.Fatalf("status = %q, want no_checks (%+v)", res.Status, res)
 		}
-		if res.ElapsedSeconds > 60 || len(r.calls) > 3 {
-			t.Fatalf("no_checks took %ds across %d polls (%d sleeps), want <=60s and <=3 polls",
-				res.ElapsedSeconds, len(r.calls), len(sleeps))
+		if len(r.calls) != 51 || len(sleeps) != 50 || res.ElapsedSeconds != 1500 {
+			t.Fatalf("CI-configured repo by default polled %d time(s) with %d sleep(s) (%ds elapsed), want 51 polls / 50 sleeps / 1500s as on origin/main",
+				len(r.calls), len(sleeps), res.ElapsedSeconds)
+		}
+		wantSummary := "No checks reported in 1500s — PR has no CI configured or checks not yet started"
+		if res.Summary != wantSummary {
+			t.Fatalf("summary = %q, want %q", res.Summary, wantSummary)
 		}
 	})
 
-	t.Run("repo with workflow that starts on second poll still waits up to full wait cap", func(t *testing.T) {
+	t.Run("CI-configured repo whose checks register after 90s passes by default", func(t *testing.T) {
 		repo := t.TempDir()
 		wfDir := filepath.Join(repo, ".github", "workflows")
 		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
@@ -378,27 +399,84 @@ func TestNoChecksReturnsPromptlyWithoutConsumingFullWaitCap(t *testing.T) {
 		}
 		r := &scriptedRunner{}
 		r.checksQueue = append(r.checksQueue,
-			completed("", "no checks reported on the 'feature/foo' branch", 1),
-			completed(jsonArr(mkCheck("pending", "Tests")), "", 0),
-			completed(jsonArr(mkCheck("pending", "Tests")), "", 0),
-			completed(jsonArr(mkCheck("pass", "Tests")), "", 0),
+			completed("", "no checks reported on the 'feature/foo' branch", 1), // t=0s
+			completed("", "no checks reported on the 'feature/foo' branch", 1), // t=30s
+			completed("", "no checks reported on the 'feature/foo' branch", 1), // t=60s (>60s before registration)
+			completed(jsonArr(mkCheck("pending", "Tests")), "", 0),             // t=90s
+			completed(jsonArr(mkCheck("pass", "Tests")), "", 0),                // t=120s
 		)
 		clock := 0.0
 		defer install(t, r, &clock)()
 		sleepFn = func(_ context.Context, s int) {
-			if clock == 0 {
-				clock += float64(s)
-			} else {
-				clock += 200.0
-			}
+			clock += float64(s)
 		}
 
 		res := WatchPRChecks(context.Background(), repo, 7, 1500, 30, "")
 		if res.Status != "passed" {
-			t.Fatalf("status = %q, want passed (%+v)", res.Status, res)
+			t.Fatalf("status = %q, want passed when checks register at 90s (%+v)", res.Status, res)
 		}
-		if len(r.calls) != 4 || res.ElapsedSeconds < 400 {
-			t.Fatalf("expected 4 polls and >=400s elapsed, got %d polls and %ds", len(r.calls), res.ElapsedSeconds)
+		if len(r.calls) != 5 || res.ElapsedSeconds != 120 {
+			t.Fatalf("expected 5 polls and 120s elapsed, got %d polls and %ds", len(r.calls), res.ElapsedSeconds)
+		}
+	})
+
+	t.Run("CI-configured repo takes short grace only when opted in via env or context", func(t *testing.T) {
+		repo := t.TempDir()
+		wfDir := filepath.Join(repo, ".github", "workflows")
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(wfDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wfDir, "test.yml"), []byte("name: test\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Setenv("SWE_CI_NO_CHECK_GRACE_SECONDS", "60")
+		r := &scriptedRunner{}
+		for i := 0; i < 60; i++ {
+			r.checksQueue = append(r.checksQueue, completed(
+				"", "no checks reported on the 'feature/foo' branch", 1))
+		}
+		clock := 0.0
+		var sleeps []int
+		defer install(t, r, &clock)()
+		sleepFn = func(_ context.Context, s int) {
+			sleeps = append(sleeps, s)
+			clock += float64(s)
+		}
+
+		res := WatchPRChecks(context.Background(), repo, 7, 1500, 30, "")
+		if res.Status != "no_checks" {
+			t.Fatalf("status = %q, want no_checks (%+v)", res.Status, res)
+		}
+		if res.ElapsedSeconds != 60 || len(r.calls) != 3 || len(sleeps) != 2 {
+			t.Fatalf("opt-in grace took %ds across %d polls (%d sleeps), want 60s / 3 polls / 2 sleeps",
+				res.ElapsedSeconds, len(r.calls), len(sleeps))
+		}
+
+		// Also verify per-call context opt-in (WithNoCheckGraceSeconds) with env unset.
+		if err := os.Unsetenv("SWE_CI_NO_CHECK_GRACE_SECONDS"); err != nil {
+			t.Fatal(err)
+		}
+		r2 := &scriptedRunner{}
+		for i := 0; i < 60; i++ {
+			r2.checksQueue = append(r2.checksQueue, completed(
+				"", "no checks reported on the 'feature/foo' branch", 1))
+		}
+		clock2 := 0.0
+		var sleeps2 []int
+		defer install(t, r2, &clock2)()
+		sleepFn = func(_ context.Context, s int) {
+			sleeps2 = append(sleeps2, s)
+			clock2 += float64(s)
+		}
+		ctx := WithNoCheckGraceSeconds(context.Background(), 30)
+		res2 := WatchPRChecks(ctx, repo, 7, 1500, 30, "")
+		if res2.Status != "no_checks" || res2.ElapsedSeconds != 30 || len(r2.calls) != 2 || len(sleeps2) != 1 {
+			t.Fatalf("context opt-in grace = %+v (%d calls, %d sleeps), want no_checks at 30s / 2 polls / 1 sleep",
+				res2, len(r2.calls), len(sleeps2))
 		}
 	})
 }
