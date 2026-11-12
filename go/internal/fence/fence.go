@@ -17,6 +17,13 @@
 // enabled, A FENCE THAT CANNOT BE APPLIED REFUSES THE RUN rather than quietly
 // running unfenced.
 //
+// Read-scope limitation: SWE_FENCE isolates sibling builds under the shared
+// workspace root (SWE_WORKSPACE_ROOT / SWE_WORKSPACE_DIR); it is not a general
+// host sandbox, and the rest of the host filesystem remains readable so the
+// build can use system toolchains, language runtimes, and caches. To hide
+// parent or external operator directories or files outside the workspace root,
+// set SWE_FENCE_PROTECT to a list of paths separated by filepath.ListSeparator.
+//
 // The node binary is its own fence launcher: harnessx points the codeaf
 // harness at os.Executable() with EnvExec set, and main hands control to Main
 // before anything else starts.
@@ -36,11 +43,12 @@ import (
 // Environment the launcher reads. They ride on the harness call's own
 // environment, so every call carries its own build's fence.
 const (
-	EnvExec  = "SWE_FENCE_EXEC"   // "1": this process is the fence launcher
-	EnvReal  = "SWE_FENCE_CODEAF" // the real codeaf binary
-	EnvRoot  = "SWE_FENCE_ROOT"   // the shared workspace root to hide
-	EnvDir   = "SWE_FENCE_DIR"    // the build's own folder to keep visible
-	EnvFence = "SWE_FENCE"        // truthy: run inside the fence (opt-in)
+	EnvExec    = "SWE_FENCE_EXEC"    // "1": this process is the fence launcher
+	EnvReal    = "SWE_FENCE_CODEAF"  // the real codeaf binary
+	EnvRoot    = "SWE_FENCE_ROOT"    // the shared workspace root to hide
+	EnvDir     = "SWE_FENCE_DIR"     // the build's own folder to keep visible
+	EnvFence   = "SWE_FENCE"         // truthy: run inside the fence (opt-in)
+	EnvProtect = "SWE_FENCE_PROTECT" // extra host paths (filepath.ListSeparator-separated) to hide
 
 	// A linked git worktree's own metadata, when it lives outside the
 	// build's folder (see Scope.GitDir).
@@ -61,7 +69,7 @@ func Enabled() bool {
 }
 
 // Scope is what one call may see of the workspace root: Deny is hidden,
-// except Allow inside it.
+// except Allow inside it, plus any extra host paths listed in Protect.
 //
 // GitDir and GitCommon are set only when the run's working directory is a
 // linked git worktree whose metadata lives in the hidden root OUTSIDE Allow.
@@ -70,7 +78,10 @@ func Enabled() bool {
 // in <common>. So the fence opens GitCommon, closes <common>/worktrees again,
 // and reopens only GitDir: the run gets the repository's shared history and
 // its own worktree's index and HEAD, never another worktree's.
-type Scope struct{ Deny, Allow, GitDir, GitCommon string }
+type Scope struct {
+	Deny, Allow, GitDir, GitCommon string
+	Protect                        []string
+}
 
 // ScopeFor is the fence for a run whose working directory is cwd under the
 // shared workspace root: the root hidden, the build's own folder (the first
@@ -92,7 +103,52 @@ func ScopeFor(root, cwd string) (Scope, bool) {
 		s.Allow = filepath.Join(r, first)
 	}
 	s.GitDir, s.GitCommon = linkedGitDirs(c, s)
+	s.Protect = protectedPaths(os.Getenv(EnvProtect), s)
 	return s, true
+}
+
+func protectedPaths(raw string, s Scope) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var candidates []string
+	seen := make(map[string]bool)
+	for _, part := range filepath.SplitList(raw) {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		cp := canonical(p)
+		if cp == "" || cp == string(filepath.Separator) {
+			continue
+		}
+		if s.Allow != "" && within(s.Allow, cp) {
+			continue
+		}
+		if s.Deny != "" && within(s.Deny, cp) && !within(cp, s.Allow) {
+			continue
+		}
+		if !seen[cp] {
+			seen[cp] = true
+			candidates = append(candidates, cp)
+		}
+	}
+	var out []string
+	for _, p := range candidates {
+		covered := false
+		for _, q := range candidates {
+			if q != p && within(q, p) {
+				if fi, err := os.Lstat(q); err != nil || fi.IsDir() {
+					covered = true
+					break
+				}
+			}
+		}
+		if !covered {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // linkedGitDirs finds the linked worktree that cwd sits in, walking up no
@@ -174,7 +230,7 @@ func within(parent, p string) bool {
 // Stamp returns env with the launcher's variables for one call: run through
 // the fence, start real, and see only scope.
 func Stamp(env map[string]string, real string, scope Scope) map[string]string {
-	out := make(map[string]string, len(env)+4)
+	out := make(map[string]string, len(env)+5)
 	for k, v := range env {
 		out[k] = v
 	}
@@ -184,6 +240,9 @@ func Stamp(env map[string]string, real string, scope Scope) map[string]string {
 	out[EnvDir] = scope.Allow
 	out[EnvGitDir] = scope.GitDir
 	out[EnvGitCommon] = scope.GitCommon
+	if len(scope.Protect) > 0 {
+		out[EnvProtect] = strings.Join(scope.Protect, string(filepath.ListSeparator))
+	}
 	return out
 }
 
@@ -202,6 +261,17 @@ func Stamp(env map[string]string, real string, scope Scope) map[string]string {
 func SeatbeltProfile(s Scope) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "(version 1)\n(allow default)\n")
+	for _, p := range s.Protect {
+		fmt.Fprintf(&b, "(deny file-read* file-write* (subpath %q))\n", p)
+		if within(p, s.Allow) {
+			fmt.Fprintf(&b, "(allow file-read-metadata (literal %q))\n", p)
+			for _, d := range between(p, s.Allow) {
+				if d != s.Deny {
+					fmt.Fprintf(&b, "(allow file-read-metadata (literal %q))\n", d)
+				}
+			}
+		}
+	}
 	fmt.Fprintf(&b, "(deny file-read* file-write* (subpath %q))\n", s.Deny)
 	fmt.Fprintf(&b, "(allow file-read-metadata (literal %q))\n", s.Deny)
 	fmt.Fprintf(&b, "(allow file-read* file-write* (subpath %q))\n", s.Allow)
@@ -237,11 +307,20 @@ func Command(goos, real string, args []string, s Scope) ([]string, error) {
 		if err != nil {
 			return nil, errors.New("bubblewrap (bwrap) is not installed, so the run cannot be fenced to its build's folder")
 		}
-		// The host stays as it is; an empty tmpfs covers the workspace root,
+		// The host stays as it is; any configured protected paths and an empty
+		// tmpfs over the workspace root hide operator and sibling-build data,
 		// and only the build's own folder is bound back onto it. A linked
 		// worktree's shared git dir is bound back too, its worktrees/ folder
 		// covered again, and only this worktree's own gitdir bound into that.
-		argv := []string{bwrap, "--dev-bind", "/", "/", "--tmpfs", s.Deny, "--bind", s.Allow, s.Allow}
+		argv := []string{bwrap, "--dev-bind", "/", "/"}
+		for _, p := range s.Protect {
+			if fi, err := os.Lstat(p); err == nil && !fi.IsDir() {
+				argv = append(argv, "--ro-bind", "/dev/null", p)
+			} else {
+				argv = append(argv, "--tmpfs", p)
+			}
+		}
+		argv = append(argv, "--tmpfs", s.Deny, "--bind", s.Allow, s.Allow)
 		if s.GitDir != "" && s.GitCommon != "" {
 			wt := filepath.Join(s.GitCommon, "worktrees")
 			argv = append(argv, "--bind", s.GitCommon, s.GitCommon, "--tmpfs", wt, "--bind", s.GitDir, s.GitDir)
@@ -260,8 +339,13 @@ func Main(args []string) int {
 		fmt.Fprintln(os.Stderr, "fence: no codeaf binary named ("+EnvReal+")")
 		return 126
 	}
-	s := Scope{Deny: os.Getenv(EnvRoot), Allow: os.Getenv(EnvDir),
-		GitDir: os.Getenv(EnvGitDir), GitCommon: os.Getenv(EnvGitCommon)}
+	s := Scope{
+		Deny:      os.Getenv(EnvRoot),
+		Allow:     os.Getenv(EnvDir),
+		GitDir:    os.Getenv(EnvGitDir),
+		GitCommon: os.Getenv(EnvGitCommon),
+	}
+	s.Protect = protectedPaths(os.Getenv(EnvProtect), s)
 	env := withoutLauncherVars(os.Environ())
 	argv := append([]string{real}, args...)
 	if Enabled() && s.Deny != "" && s.Allow != "" {

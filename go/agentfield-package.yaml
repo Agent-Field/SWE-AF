@@ -70,6 +70,19 @@ user_environment:
       description: Engine reasoning-effort variant (low | high) — unset keeps the engine default
     - name: SWE_PRO_MAX_COST
       description: Per-run USD ceiling for the engine — unset means no per-run cap
+    - name: SWE_FENCE
+      description: >-
+        Opt-in operating-system workspace fence (1/true/yes/on enables; off by
+        default). Hides sibling build directories under SWE_WORKSPACE_DIR while
+        keeping the current build and host toolchains visible; does not sandbox
+        host paths outside the workspace root unless listed in SWE_FENCE_PROTECT.
+      default: ""
+    - name: SWE_FENCE_PROTECT
+      description: >-
+        Optional path-list (colon-separated on Unix) of additional host files or
+        directories outside the build workspace to hide when SWE_FENCE is enabled
+        (for example, parent operator notes or specifications).
+      default: ""
     - name: SWE_FURROW_ENABLED
       description: >-
         Furrow workspace mirroring. Set 1/true/yes/on to force it on, 0 to force it
