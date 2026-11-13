@@ -270,6 +270,10 @@ var usageSignatures = []*regexp.Regexp{
 	regexp.MustCompile(`(?m)^go \w+: unknown flag`),
 	regexp.MustCompile(`(?m)^error: (?:unexpected argument|unrecognized subcommand|no such command|unexpected value)`),
 	regexp.MustCompile(`(?m)^(?:e?grep|rg): (?:invalid option|unrecognized option|Unmatched|Invalid (?:regular expression|preceding|range|back reference|character class)|Trailing backslash|regex parse error)`),
+	// BSD grep (macOS) words the same refusal via regerror(3): lowercase, and
+	// "parentheses not balanced" rather than "Unmatched". A missing file
+	// ("No such file or directory") and "out of memory" stay assertions.
+	regexp.MustCompile(`(?m)^(?:e?grep|rg): (?:parentheses not balanced|brackets \([^)\n]*\) not balanced|braces not balanced|trailing backslash|invalid regular expression|invalid character class|invalid character range|invalid backreference number|invalid repetition count(?:\(s\))?|invalid collating element|repetition-operator operand invalid|empty \(sub\)expression)`),
 	regexp.MustCompile(`syntax error near unexpected token`),
 	regexp.MustCompile(`unexpected EOF while looking for matching`),
 	regexp.MustCompile(`(?m)^sh: \d+: Syntax error`),
