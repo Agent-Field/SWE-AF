@@ -226,5 +226,6 @@ Each build clones the target repository and runs multiple LLM calls. Plan for:
 |---|---|
 | Agent not registering with control plane | Verify `AGENTFIELD_SERVER` is reachable from the container |
 | Builds timing out | Check API key validity and credit balance |
+| `Reasoner 'execute' timed out after …s of active time` on a build that was still progressing | The per-reasoner budget is too small. SWE-AF defaults it to 12h; check that `AGENTFIELD_ASYNC_MAX_EXECUTION_TIMEOUT` / `AGENTFIELD_ASYNC_DEFAULT_EXECUTION_TIMEOUT` in the node's environment are not shortening it |
 | `git clone` failures | Verify `GH_TOKEN` has `repo` scope for private repositories |
 | Health check failing | Check container logs: `docker compose logs swe-agent` |
