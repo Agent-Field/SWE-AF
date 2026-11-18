@@ -40,20 +40,22 @@ const GitInitSystemPrompt = "You are a DevOps engineer setting up a git-based fe
 	"## Worktrees Directory\n" +
 	"\n" +
 	"Create `<repo_path>/.worktrees/` — this is where parallel worktrees will be\n" +
-	"placed. Add `.worktrees/` to `.gitignore` if not already there.\n" +
+	"placed. In an existing repository, keep it out of `git status` through\n" +
+	"`.git/info/exclude`, never through `.gitignore`.\n" +
 	"\n" +
 	"## Repository Hygiene\n" +
 	"\n" +
 	"Set the project up for clean development from the start:\n" +
 	"\n" +
-	"- Create or update `.gitignore` based on the project's language and ecosystem.\n" +
-	"  Detect the language from existing files (package.json → Node.js, pyproject.toml\n" +
-	"  → Python, Cargo.toml → Rust, go.mod → Go, etc.) and include the standard\n" +
-	"  ignore patterns that every developer in that ecosystem expects.\n" +
-	"- Always include patterns for: pipeline artifacts (`.artifacts/`), worktrees\n" +
-	"  (`.worktrees/`), environment files (`.env`), and OS files (`.DS_Store`).\n" +
-	"- A well-maintained `.gitignore` prevents entire categories of problems\n" +
-	"  downstream — treat it as infrastructure, not an afterthought.\n" +
+	"- **Existing repository**: the feature branch becomes the pull request.\n" +
+	"  Do NOT create, modify, or stage `.gitignore` (or any other tracked file). Write the\n" +
+	"  run's own ignore patterns — pipeline artifacts (`.artifacts/`), worktrees\n" +
+	"  (`.worktrees/`), environment files (`.env`), and OS files (`.DS_Store`) — to\n" +
+	"  `.git/info/exclude` (local to this clone, never committed), and make NO commit\n" +
+	"  for them.\n" +
+	"- **Fresh folder**: there is no pull request yet, so a `.gitignore` for the\n" +
+	"  project's ecosystem (detected from package.json, pyproject.toml, Cargo.toml,\n" +
+	"  go.mod, etc.) may be created before the initial commit.\n" +
 	"\n" +
 	"## Remote Detection\n" +
 	"\n" +
@@ -78,7 +80,7 @@ const GitInitSystemPrompt = "You are a DevOps engineer setting up a git-based fe
 	"## Constraints\n" +
 	"\n" +
 	"- Do NOT push anything to a remote.\n" +
-	"- Do NOT modify existing code — only git operations and `.gitignore`.\n" +
+	"- Do NOT modify existing code — only git operations.\n" +
 	"- Keep the goal slug short: lowercase, hyphens, max 40 chars.\n" +
 	"- If git is not installed, report failure immediately.\n" +
 	"\n" +
@@ -107,10 +109,10 @@ func GitInitTaskPrompt(opts GitInitOptions) string {
 
 	sections = append(sections, "\n## Your Task\n"+
 		"1. Check if `.git` exists in the repository path.\n"+
-		"2. Set up `.gitignore` for the project's ecosystem (detect language from existing files).\n"+
+		"2. In an existing repository, leave `.gitignore` alone; fresh folder only: set up `.gitignore` for the project's ecosystem.\n"+
 		"3. If fresh: `git init`, stage project files (respecting `.gitignore`), create initial commit.\n"+
 		"4. If existing: record the current branch, create an integration branch.\n"+
-		"5. Create the `.worktrees/` directory and ensure it's in `.gitignore`.\n"+
+		"5. Create the `.worktrees/` directory; in an existing repository keep `.artifacts/`, `.worktrees/`, `.env` and `.DS_Store` out of `git status` via `.git/info/exclude` (no commit).\n"+
 		"6. Detect the remote origin URL and default branch (if any).\n"+
 		"7. Return a GitInitResult JSON object.")
 

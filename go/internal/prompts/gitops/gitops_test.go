@@ -134,20 +134,22 @@ const wantGitInitSystemPrompt = "You are a DevOps engineer setting up a git-base
 	"## Worktrees Directory\n" +
 	"\n" +
 	"Create `<repo_path>/.worktrees/` — this is where parallel worktrees will be\n" +
-	"placed. Add `.worktrees/` to `.gitignore` if not already there.\n" +
+	"placed. In an existing repository, keep it out of `git status` through\n" +
+	"`.git/info/exclude`, never through `.gitignore`.\n" +
 	"\n" +
 	"## Repository Hygiene\n" +
 	"\n" +
 	"Set the project up for clean development from the start:\n" +
 	"\n" +
-	"- Create or update `.gitignore` based on the project's language and ecosystem.\n" +
-	"  Detect the language from existing files (package.json → Node.js, pyproject.toml\n" +
-	"  → Python, Cargo.toml → Rust, go.mod → Go, etc.) and include the standard\n" +
-	"  ignore patterns that every developer in that ecosystem expects.\n" +
-	"- Always include patterns for: pipeline artifacts (`.artifacts/`), worktrees\n" +
-	"  (`.worktrees/`), environment files (`.env`), and OS files (`.DS_Store`).\n" +
-	"- A well-maintained `.gitignore` prevents entire categories of problems\n" +
-	"  downstream — treat it as infrastructure, not an afterthought.\n" +
+	"- **Existing repository**: the feature branch becomes the pull request.\n" +
+	"  Do NOT create, modify, or stage `.gitignore` (or any other tracked file). Write the\n" +
+	"  run's own ignore patterns — pipeline artifacts (`.artifacts/`), worktrees\n" +
+	"  (`.worktrees/`), environment files (`.env`), and OS files (`.DS_Store`) — to\n" +
+	"  `.git/info/exclude` (local to this clone, never committed), and make NO commit\n" +
+	"  for them.\n" +
+	"- **Fresh folder**: there is no pull request yet, so a `.gitignore` for the\n" +
+	"  project's ecosystem (detected from package.json, pyproject.toml, Cargo.toml,\n" +
+	"  go.mod, etc.) may be created before the initial commit.\n" +
 	"\n" +
 	"## Remote Detection\n" +
 	"\n" +
@@ -172,7 +174,7 @@ const wantGitInitSystemPrompt = "You are a DevOps engineer setting up a git-base
 	"## Constraints\n" +
 	"\n" +
 	"- Do NOT push anything to a remote.\n" +
-	"- Do NOT modify existing code — only git operations and `.gitignore`.\n" +
+	"- Do NOT modify existing code — only git operations.\n" +
 	"- Keep the goal slug short: lowercase, hyphens, max 40 chars.\n" +
 	"- If git is not installed, report failure immediately.\n" +
 	"\n" +
@@ -578,10 +580,10 @@ func TestGitInitTaskPromptFresh(t *testing.T) {
 		"\n" +
 		"## Your Task\n" +
 		"1. Check if `.git` exists in the repository path.\n" +
-		"2. Set up `.gitignore` for the project's ecosystem (detect language from existing files).\n" +
+		"2. In an existing repository, leave `.gitignore` alone; fresh folder only: set up `.gitignore` for the project's ecosystem.\n" +
 		"3. If fresh: `git init`, stage project files (respecting `.gitignore`), create initial commit.\n" +
 		"4. If existing: record the current branch, create an integration branch.\n" +
-		"5. Create the `.worktrees/` directory and ensure it's in `.gitignore`.\n" +
+		"5. Create the `.worktrees/` directory; in an existing repository keep `.artifacts/`, `.worktrees/`, `.env` and `.DS_Store` out of `git status` via `.git/info/exclude` (no commit).\n" +
 		"6. Detect the remote origin URL and default branch (if any).\n" +
 		"7. Return a GitInitResult JSON object."
 	got := GitInitTaskPrompt(GitInitOptions{RepoPath: "/ws/repo", Goal: "Build a CLI todo app", BuildID: ""})
@@ -599,10 +601,10 @@ func TestGitInitTaskPromptExisting(t *testing.T) {
 		"\n" +
 		"## Your Task\n" +
 		"1. Check if `.git` exists in the repository path.\n" +
-		"2. Set up `.gitignore` for the project's ecosystem (detect language from existing files).\n" +
+		"2. In an existing repository, leave `.gitignore` alone; fresh folder only: set up `.gitignore` for the project's ecosystem.\n" +
 		"3. If fresh: `git init`, stage project files (respecting `.gitignore`), create initial commit.\n" +
 		"4. If existing: record the current branch, create an integration branch.\n" +
-		"5. Create the `.worktrees/` directory and ensure it's in `.gitignore`.\n" +
+		"5. Create the `.worktrees/` directory; in an existing repository keep `.artifacts/`, `.worktrees/`, `.env` and `.DS_Store` out of `git status` via `.git/info/exclude` (no commit).\n" +
 		"6. Detect the remote origin URL and default branch (if any).\n" +
 		"7. Return a GitInitResult JSON object."
 	got := GitInitTaskPrompt(GitInitOptions{RepoPath: "/ws/repo", Goal: "Build a CLI todo app", BuildID: "b12ab"})
@@ -810,5 +812,31 @@ func TestGitHubPRTaskPrompt(t *testing.T) {
 	})
 	if got != want {
 		t.Errorf("mismatch:\n got=%q\nwant=%q", got, want)
+	}
+}
+
+// run_git_init runs before any coding on the feature branch. Telling it to
+// create or update .gitignore made its commit ride along into every pull
+// request. The run's own ignore patterns belong in .git/info/exclude.
+func TestGitInitPromptsKeepIgnoreRulesOutOfTrackedContent(t *testing.T) {
+	task := GitInitTaskPrompt(GitInitOptions{RepoPath: "/ws/repo", Goal: "g", BuildID: "b1"})
+	for name, got := range map[string]string{"system": GitInitSystemPrompt, "task": task} {
+		if !strings.Contains(got, ".git/info/exclude") {
+			t.Errorf("%s prompt does not point ignore rules at .git/info/exclude", name)
+		}
+		for _, bad := range []string{
+			"Create or update `.gitignore`",
+			"Set up `.gitignore`",
+			"Add `.worktrees/` to `.gitignore`",
+			"ensure it's in `.gitignore`",
+			"only git operations and `.gitignore`",
+		} {
+			if strings.Contains(got, bad) {
+				t.Errorf("%s prompt still tells the agent to edit .gitignore: %q", name, bad)
+			}
+		}
+	}
+	if !strings.Contains(GitInitSystemPrompt, "Do NOT create, modify, or stage `.gitignore`") {
+		t.Errorf("system prompt must forbid editing .gitignore on an existing repository")
 	}
 }
