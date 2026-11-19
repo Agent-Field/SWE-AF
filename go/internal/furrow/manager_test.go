@@ -266,11 +266,23 @@ func TestCommandTimesOut(t *testing.T) {
 	}
 }
 
+// lookPathFalse resolves a stand-in binary that always exits non-zero. Its
+// location differs per OS (/bin/false on Linux, only /usr/bin/false on macOS).
+func lookPathFalse(t *testing.T) string {
+	t.Helper()
+	path, err := exec.LookPath("false")
+	if err != nil {
+		t.Fatalf("no false binary on PATH: %v", err)
+	}
+	return path
+}
+
 func TestAttachRefusesWhenAggregateStoreExceedsBudget(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("uses /bin/false")
+		t.Skip("uses the false binary")
 	}
 	t.Setenv(EnvEnabled, "1")
+	falseBin := lookPathFalse(t)
 	root := t.TempDir()
 	store := filepath.Join(root, "store")
 	repo := filepath.Join(root, "repo")
@@ -284,8 +296,11 @@ func TestAttachRefusesWhenAggregateStoreExceedsBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
-	m := New(Options{Bin: "/bin/false", StoreRoot: store, RemotesRoot: filepath.Join(root, "remotes"),
+	m := New(Options{Bin: falseBin, StoreRoot: store, RemotesRoot: filepath.Join(root, "remotes"),
 		MaxBytes: 10, Logger: log.New(&logs, "", 0)})
+	if !m.enabled {
+		t.Fatalf("furrow unexpectedly disabled, the budget check would not run: %q", logs.String())
+	}
 	handle, err := m.Attach("run", "build", repo)
 	if err == nil || !strings.Contains(err.Error(), "disk budget") || handle != nil {
 		t.Fatalf("Attach() = (%v, %v), want disk budget error", handle, err)
@@ -304,9 +319,10 @@ func TestAttachRefusesWhenAggregateStoreExceedsBudget(t *testing.T) {
 // cannot answer (ok=false) must NOT refuse — "no answer" is not "no space".
 func TestAttachRefusesWhenDiskNearlyFull(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("uses /bin/false")
+		t.Skip("uses the false binary")
 	}
 	t.Setenv(EnvEnabled, "1")
+	falseBin := lookPathFalse(t)
 	for _, tc := range []struct {
 		name    string
 		probe   func(string) (int64, bool)
@@ -323,8 +339,11 @@ func TestAttachRefusesWhenDiskNearlyFull(t *testing.T) {
 				t.Fatal(err)
 			}
 			var logs bytes.Buffer
-			m := New(Options{Bin: "/bin/false", StoreRoot: filepath.Join(root, "store"),
+			m := New(Options{Bin: falseBin, StoreRoot: filepath.Join(root, "store"),
 				RemotesRoot: filepath.Join(root, "remotes"), Logger: log.New(&logs, "", 0)})
+			if !m.enabled {
+				t.Fatalf("furrow unexpectedly disabled, the floor check would not run: %q", logs.String())
+			}
 			m.freeBytes = tc.probe
 			handle, err := m.Attach("run", "build", repo)
 			if tc.refused {
@@ -337,7 +356,7 @@ func TestAttachRefusesWhenDiskNearlyFull(t *testing.T) {
 				return
 			}
 			// Past the floor the attach proceeds into the furrow invocations,
-			// where /bin/false fails the watch — proof the gate did not trip.
+			// where false fails the watch — proof the gate did not trip.
 			if err != nil || handle != nil {
 				t.Fatalf("Attach() = (%v, %v), want (nil, nil) degradation past the gate", handle, err)
 			}
