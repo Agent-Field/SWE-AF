@@ -45,20 +45,22 @@ async def gather_bounded(
     semaphore = asyncio.Semaphore(limit)
 
     async def _guarded(coro: Awaitable[T]) -> T:
-        try:
-            async with semaphore:
-                return await coro
-        finally:
-            # If this wrapper is cancelled while it is still waiting for a slot,
-            # ``coro`` was never awaited; close it so Python does not warn about
-            # a never-awaited coroutine. A no-op once ``coro`` has run.
+        async with semaphore:
+            return await coro
+
+    try:
+        return list(
+            await asyncio.gather(
+                *(_guarded(coro) for coro in coros),
+                return_exceptions=True,
+            )
+        )
+    finally:
+        # If the gather is cancelled while writers are still queued for a slot
+        # (or before their wrapper ever started), those coroutines were never
+        # awaited; close them so Python does not warn about each one. Every
+        # wrapper has finished by now, so this is a no-op for coroutines that ran.
+        for coro in coros:
             close = getattr(coro, "close", None)
             if close is not None:
                 close()
-
-    return list(
-        await asyncio.gather(
-            *(_guarded(coro) for coro in coros),
-            return_exceptions=True,
-        )
-    )

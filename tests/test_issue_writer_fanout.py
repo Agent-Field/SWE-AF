@@ -63,7 +63,8 @@ async def test_gather_bounded_preserves_order_and_exceptions():
 
 
 @pytest.mark.asyncio
-async def test_gather_bounded_cancellation_leaves_no_unawaited_coroutines():
+@pytest.mark.parametrize("delay", [0, 0.01], ids=["cancel-before-wrappers-start", "cancel-while-queued"])
+async def test_gather_bounded_cancellation_leaves_no_unawaited_coroutines(delay):
     """Cancelling while writers still queue for a slot must not leak coroutines
     that were never started (plain gather starts them all, so it never warned)."""
     import gc
@@ -77,7 +78,7 @@ async def test_gather_bounded_cancellation_leaves_no_unawaited_coroutines():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         task = asyncio.ensure_future(gather_bounded([work() for _ in range(5)], limit=4))
-        await asyncio.sleep(0.01)  # four hold slots, the fifth waits
+        await asyncio.sleep(delay)  # 0: wrappers not started yet; else four hold slots, one waits
         task.cancel()
         try:
             await task
