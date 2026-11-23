@@ -11,7 +11,7 @@ from swe_af.issue.schemas import IssueBuildConfig
 def clean_runtime_env(monkeypatch):
     for key in (
         "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "RUNCRATE_API_KEY",
-        "SWE_DEFAULT_RUNTIME", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL",
+        "CHEAPERINFERENCE_API_KEY", "SWE_DEFAULT_RUNTIME", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL",
         "SWE_MODEL_HIGH", "SWE_MODEL_MED", "SWE_MODEL_LOW",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -20,7 +20,8 @@ def clean_runtime_env(monkeypatch):
 @pytest.mark.parametrize("config_type", [BuildConfig, ExecutionConfig, IssueBuildConfig, FastBuildConfig])
 @pytest.mark.parametrize("other_keys", [(), ("ANTHROPIC_API_KEY",), ("INFRON_API_KEY",),
                                       ("ANTHROPIC_API_KEY", "INFRON_API_KEY"),
-                                      ("RUNCRATE_API_KEY",)])
+                                      ("RUNCRATE_API_KEY",),
+                                      ("CHEAPERINFERENCE_API_KEY",)])
 def test_openrouter_default_with_other_gateways(config_type, other_keys, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter")
     monkeypatch.setenv("SWE_DEFAULT_RUNTIME", " \t")
@@ -38,7 +39,8 @@ def test_openrouter_default_with_other_gateways(config_type, other_keys, monkeyp
 @pytest.mark.parametrize("config_type", [BuildConfig, ExecutionConfig, IssueBuildConfig, FastBuildConfig])
 @pytest.mark.parametrize("runtime", ["aforge", "claude_code", "open_code", "codex"])
 def test_request_and_deployment_runtime_overrides(config_type, runtime, monkeypatch):
-    for key in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "RUNCRATE_API_KEY"):
+    for key in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "RUNCRATE_API_KEY",
+                "CHEAPERINFERENCE_API_KEY"):
         monkeypatch.setenv(key, "test-key")
     monkeypatch.setenv("SWE_DEFAULT_RUNTIME", runtime)
     assert config_type().runtime == runtime

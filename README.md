@@ -924,7 +924,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
-| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python only, explicit opt-in). With OpenRouter available the default is `"aforge"`; with only Infron or Runcrate it is `"open_code"` on the main path; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide; request `runtime` wins over that. |
+| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python only, explicit opt-in). With OpenRouter available the default is `"aforge"`; with only Infron, Runcrate or Cheaper Inference it is `"open_code"` on the main path; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide; request `runtime` wins over that. |
 | `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |

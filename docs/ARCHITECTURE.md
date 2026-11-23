@@ -460,5 +460,7 @@ Claude. Request runtime overrides take precedence. Infron alone still selects
 `open_code` on the main path (fast mode needs an explicit runtime); its host
 default is `infron/deepseek/deepseek-v4-flash-0731`. In Docker override the baked
 `HARNESS_MODEL` for Infron too. Runcrate alone follows the same rule with
-`runcrate/deepseek-ai/DeepSeek-V4.1-Flash`. Override model defaults with `SWE_DEFAULT_MODEL`
-or per-request `models`.
+`runcrate/deepseek-ai/DeepSeek-V4.1-Flash`, and Cheaper Inference alone with
+`cheaperinference/gpt-5.4-mini`; when more than one gateway key is set the
+earlier one wins (OpenRouter, Infron, Runcrate, Cheaper Inference). Override model
+defaults with `SWE_DEFAULT_MODEL` or per-request `models`.
