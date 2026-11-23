@@ -141,6 +141,11 @@ const (
 	// Infron is OpenAI-compatible and serves the standard <provider>/<model>
 	// ids, so this is the existing gateway default with the prefix swapped.
 	infronAutoDefaultModel = "infron/deepseek/deepseek-v4-flash-0731"
+
+	// Default model for the auto-selected Runcrate path (see runcrateOnlyEnv).
+	// Runcrate is OpenAI-compatible and serves open-weight models under their
+	// Hugging Face <organization>/<model> ids, behind the runcrate/ prefix.
+	runcrateAutoDefaultModel = "runcrate/deepseek-ai/DeepSeek-V4.1-Flash"
 )
 
 // runtimeBaseModels ports _RUNTIME_BASE_MODELS[runtime] as a fresh copy for the
@@ -211,9 +216,30 @@ func infronOnlyEnv() bool {
 	return envStripped("INFRON_API_KEY") != ""
 }
 
+// runcrateOnlyEnv ports _runcrate_only_env: whether the deployer implicitly
+// chose the Runcrate gateway (no explicit SWE_DEFAULT_RUNTIME, no Anthropic key,
+// no other gateway key, but a Runcrate key present). A gateway key that was
+// already honored before Runcrate existed keeps precedence, so adding a
+// Runcrate key never silently reroutes an existing deployment.
+func runcrateOnlyEnv() bool {
+	if envStripped("SWE_DEFAULT_RUNTIME") != "" {
+		return false
+	}
+	if envStripped("ANTHROPIC_API_KEY") != "" {
+		return false
+	}
+	if envStripped("OPENROUTER_API_KEY") != "" {
+		return false
+	}
+	if envStripped("INFRON_API_KEY") != "" {
+		return false
+	}
+	return envStripped("RUNCRATE_API_KEY") != ""
+}
+
 // DefaultRuntime ports _default_runtime, honoring SWE_DEFAULT_RUNTIME.
 // When unset, auto-selects aforge with an OpenRouter key, open_code with only
-// an Infron key, otherwise claude_code. An invalid env value falls back to
+// an Infron or Runcrate key, otherwise claude_code. An invalid env value falls back to
 // claude_code.
 //
 // The aforge default requires an AgentField Go SDK whose harness.BuildProvider
@@ -226,6 +252,9 @@ func DefaultRuntime() string {
 			return "aforge"
 		}
 		if infronOnlyEnv() {
+			return "open_code"
+		}
+		if runcrateOnlyEnv() {
 			return "open_code"
 		}
 		return "claude_code"
@@ -418,6 +447,10 @@ func ResolveRuntimeModels(runtime string, models map[string]string, fieldNames [
 	} else if runtime == "open_code" && infronOnlyEnv() {
 		for field := range base {
 			base[field] = infronAutoDefaultModel
+		}
+	} else if runtime == "open_code" && runcrateOnlyEnv() {
+		for field := range base {
+			base[field] = runcrateAutoDefaultModel
 		}
 	}
 
