@@ -63,6 +63,35 @@ async def test_gather_bounded_preserves_order_and_exceptions():
 
 
 @pytest.mark.asyncio
+async def test_gather_bounded_cancellation_leaves_no_unawaited_coroutines():
+    """Cancelling while writers still queue for a slot must not leak coroutines
+    that were never started (plain gather starts them all, so it never warned)."""
+    import gc
+    import warnings
+
+    release = asyncio.Event()
+
+    async def work() -> None:
+        await release.wait()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        task = asyncio.ensure_future(gather_bounded([work() for _ in range(5)], limit=4))
+        await asyncio.sleep(0.01)  # four hold slots, the fifth waits
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        del task
+        await asyncio.sleep(0)
+        gc.collect()
+
+    unawaited = [w for w in caught if "was never awaited" in str(w.message)]
+    assert unawaited == []
+
+
+@pytest.mark.asyncio
 async def test_gather_bounded_unlimited_when_limit_is_zero():
     state = {"current": 0, "peak": 0}
 
