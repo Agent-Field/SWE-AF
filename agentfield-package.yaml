@@ -51,6 +51,10 @@ user_environment:
           description: Runcrate API key (OpenAI-compatible API for open-weight models)
           type: secret
           scope: global
+        - name: CHEAPERINFERENCE_API_KEY
+          description: Cheaper Inference API key (OpenAI-compatible gateway, bare model ids)
+          type: secret
+          scope: global
   optional:
     # `gh`/`git` read this token for authentication (see prompts/github_pr.py).
     # Optional so an LLM key is the only secret needed to get started: builds

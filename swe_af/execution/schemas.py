@@ -627,6 +627,11 @@ _INFRON_AUTO_DEFAULT_MODEL = "infron/deepseek/deepseek-v4-flash-0731"
 # Hugging Face <organization>/<model> ids, behind the runcrate/ prefix.
 _RUNCRATE_AUTO_DEFAULT_MODEL = "runcrate/deepseek-ai/DeepSeek-V4.1-Flash"
 
+# Default model for the auto-selected Cheaper Inference path (see
+# _cheaperinference_only_env). Cheaper Inference is OpenAI-compatible and serves
+# bare model ids, so the auto default is the provider prefix plus a bare id.
+_CHEAPERINFERENCE_AUTO_DEFAULT_MODEL = "cheaperinference/gpt-5.4-mini"
+
 _RUNTIME_BASE_MODELS: dict[str, dict[str, str]] = {
     "aforge": {
         **{field: _OPENROUTER_AUTO_DEFAULT_MODEL for field in ALL_MODEL_FIELDS},
@@ -735,14 +740,38 @@ def _runcrate_only_env() -> bool:
     return bool(os.getenv("RUNCRATE_API_KEY", "").strip())
 
 
+def _cheaperinference_only_env() -> bool:
+    """Whether the deployer implicitly chose the Cheaper Inference runtime.
+
+    Mirrors ``_infron_only_env`` for the ``CHEAPERINFERENCE_API_KEY`` gateway: no
+    explicit ``SWE_DEFAULT_RUNTIME``, no Anthropic key, no other gateway key, but
+    a ``CHEAPERINFERENCE_API_KEY``. A gateway key that was already honored before
+    Cheaper Inference existed keeps precedence, so adding a Cheaper Inference key
+    never silently reroutes an existing deployment — to move traffic over, drop
+    the other key or set ``SWE_DEFAULT_MODEL=cheaperinference/...`` explicitly.
+    """
+    if os.getenv("SWE_DEFAULT_RUNTIME", "").strip():
+        return False
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        return False
+    if os.getenv("OPENROUTER_API_KEY", "").strip():
+        return False
+    if os.getenv("INFRON_API_KEY", "").strip():
+        return False
+    if os.getenv("RUNCRATE_API_KEY", "").strip():
+        return False
+    return bool(os.getenv("CHEAPERINFERENCE_API_KEY", "").strip())
+
+
 def _default_runtime() -> Literal["aforge", "claude_code", "open_code", "codex", "command_code"]:
     """Default runtime, honoring the ``SWE_DEFAULT_RUNTIME`` env var.
 
     Lets the deployer pick the runtime without every caller having to pass
     a config. When ``SWE_DEFAULT_RUNTIME`` is unset, auto-selects ``aforge``
-    with an OpenRouter key, ``open_code`` with only an Infron or Runcrate key,
-    otherwise ``claude_code`` (see ``_openrouter_only_env``,
-    ``_infron_only_env`` and ``_runcrate_only_env``).
+    with an OpenRouter key, ``open_code`` with only an Infron, Runcrate or
+    Cheaper Inference key, otherwise ``claude_code`` (see
+    ``_openrouter_only_env``, ``_infron_only_env``, ``_runcrate_only_env`` and
+    ``_cheaperinference_only_env``).
     Logs and falls back to ``claude_code`` when the env value is invalid.
     """
     value = os.getenv("SWE_DEFAULT_RUNTIME", "").strip()
@@ -752,6 +781,8 @@ def _default_runtime() -> Literal["aforge", "claude_code", "open_code", "codex",
         if _infron_only_env():
             return "open_code"
         if _runcrate_only_env():
+            return "open_code"
+        if _cheaperinference_only_env():
             return "open_code"
         return "claude_code"
     if value in RUNTIME_VALUES:
@@ -982,6 +1013,10 @@ def resolve_runtime_models(
     elif runtime == "open_code" and _runcrate_only_env():
         # Same rule for the Runcrate gateway (see _runcrate_only_env).
         base = {field: _RUNCRATE_AUTO_DEFAULT_MODEL for field in base}
+    elif runtime == "open_code" and _cheaperinference_only_env():
+        # Same rule for the Cheaper Inference gateway (see
+        # _cheaperinference_only_env).
+        base = {field: _CHEAPERINFERENCE_AUTO_DEFAULT_MODEL for field in base}
     resolved: dict[str, str] = {field: base[field] for field in field_names}
 
     env_default = _default_model_from_env(runtime)

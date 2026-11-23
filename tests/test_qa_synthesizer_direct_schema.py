@@ -102,6 +102,7 @@ def clean_model_env(monkeypatch):
         "OPENROUTER_API_KEY",
         "INFRON_API_KEY",
         "RUNCRATE_API_KEY",
+        "CHEAPERINFERENCE_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("SWE_CODEX_AUTH_MODE", "api_key")
@@ -164,6 +165,13 @@ def clean_model_env(monkeypatch):
             {"RUNCRATE_API_KEY": "test-key"},
             "opencode",
             "runcrate/deepseek-ai/DeepSeek-V4.1-Flash",
+        ),
+        (
+            "open_code",
+            None,
+            {"CHEAPERINFERENCE_API_KEY": "test-key"},
+            "opencode",
+            "cheaperinference/gpt-5.4-mini",
         ),
         (
             "claude_code",
