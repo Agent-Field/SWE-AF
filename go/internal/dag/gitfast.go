@@ -146,6 +146,15 @@ func fastMergeBranches(
 	merged := []string{}
 	failed := []string{}
 	for _, branch := range branchNamesToMerge {
+		// A BRANCH THAT CHANGES NOTHING IS NOT MERGED WITH A COMMIT. --no-ff
+		// records a merge commit even when the tree does not move, and on
+		// issue #309 that empty merge (beside the coder's empty commit) put
+		// the integration branch ahead of main with main's tree, which opened
+		// the 0-file PR #315. Nothing to bring in is counted as merged.
+		if _, _, code := runGitCmd(repoPath, "diff", "--quiet", "HEAD..."+branch); code == 0 {
+			merged = append(merged, branch)
+			continue
+		}
 		args := append(append([]string{}, identity...),
 			"merge", "--no-ff", branch, "-m", fmt.Sprintf("merge(level-%d): %s", level, branch))
 		if _, _, code := runGitCmd(repoPath, args...); code == 0 {

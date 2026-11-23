@@ -307,9 +307,13 @@ class TestFailureModes:
         assert result["success"] is False
         assert result["outcome"] == "failed_unrecoverable"
         assert result["error_message"]
-        # The coder committed before the block: the branch is kept for triage.
+        # A blocking review is now a fix iteration ("must be fixed before merge"),
+        # so the same finding is retried until the loop is stuck — three passes —
+        # and only then does the issue fail.
+        assert result["iterations"] == 3
+        # The coder committed before the failure: the branch is kept for triage.
         assert result["branch"].startswith("issue/")
-        assert len(result["commits"]) == 1
+        assert len(result["commits"]) == 3
 
     def test_no_commits_deletes_branch(self, git_repo: str) -> None:
         recorded: list = []

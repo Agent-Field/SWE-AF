@@ -7,8 +7,11 @@
 package main
 
 import (
+	"github.com/Agent-Field/SWE-AF/go/internal/fence"
+
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"github.com/Agent-Field/SWE-AF/go/internal/node"
@@ -16,6 +19,11 @@ import (
 )
 
 func main() {
+	// THIS BINARY IS ALSO THE FENCE every codeaf harness run starts through
+	// (internal/fence). It must hand over before the node starts anything.
+	if os.Getenv(fence.EnvExec) == "1" {
+		os.Exit(fence.Main(os.Args[1:]))
+	}
 	// Defaults: NODE_ID "swe-planner", PORT 8005. This is the SWE node, so it
 	// registers under the product's name rather than a port-specific variant —
 	// callers' triggers do not change when a node moves from Python to Go. To

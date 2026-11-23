@@ -13,6 +13,7 @@ This task spans multiple repositories. Each repository is listed below with its 
 ## Issue to Implement
 - **Name**: lexer
 - **Title**: Build the lexer
+- **Description**: A lexer for the language
 - **Acceptance Criteria**:
   - [ ] tokenizes ints
   - [ ] handles whitespace
@@ -22,6 +23,7 @@ This task spans multiple repositories. Each repository is listed below with its 
 - **Files to modify**: ['src/lib.rs']
 - **Testing Strategy**: unit tests per token type
 - **Testing Guidance (from sprint planner)**: test each token
+- **New tests needed**: yes — add tests only for the behaviors this issue changes.
 
 ## Project Context
 ### Key Files

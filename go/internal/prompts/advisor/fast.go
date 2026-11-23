@@ -1,6 +1,10 @@
 package advisor
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/critcheck"
+)
 
 // FastPlannerTaskOptions mirrors the keyword arguments of the Python
 // fast_planner_task_prompt.
@@ -44,7 +48,7 @@ actionable task list where every task is self-contained and unambiguous.
   context for an agent to execute it without reading other tasks.
 - **Concrete acceptance criteria**: Every task has binary pass/fail criteria
   that map directly to commands or observable file/code states.
-- **Right-sized tasks**: Tasks are neither too broad ("implement everything")
+` + critcheck.PlannerRule + `- **Right-sized tasks**: Tasks are neither too broad ("implement everything")
   nor too narrow ("add a single import"). Each task represents a coherent
   unit of work completable in a single agent session.
 - **Respect max_tasks**: Never produce more tasks than the stated maximum.

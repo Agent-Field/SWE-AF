@@ -3,6 +3,7 @@ package planning
 import (
 	"fmt"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/critcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
@@ -58,7 +59,7 @@ Your PRD will be executed by autonomous AI coding agents, not human developers.
   command. Patterns: ` + "`" + `cargo test --test <name>` + "`" + `, ` + "`" + `stat -f%z <file> <= N` + "`" + `,
   ` + "`" + `hyperfine <cmd> --export-json | jq '.results[0].mean < 0.001'` + "`" + `.
   Never: "performance is acceptable" or "code is clean."
-- **Dependency-explicit scope**: Instead of phases/milestones, describe which
+` + critcheck.PlannerRule + `- **Dependency-explicit scope**: Instead of phases/milestones, describe which
   capabilities require which others. The sprint planner converts your scope
   into a parallel execution graph.
 - **Interface-first requirements**: When multiple components interact, specify
