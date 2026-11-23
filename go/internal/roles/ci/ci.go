@@ -102,16 +102,19 @@ var watchFn = cigate.WatchPRChecks
 // ---------------------------------------------------------------------------
 
 type ciWatcherInput struct {
-	RepoPath    string `json:"repo_path"`
-	PRNumber    int    `json:"pr_number"`
-	WaitSeconds int    `json:"wait_seconds"`
-	PollSeconds int    `json:"poll_seconds"`
-	HeadSHA     string `json:"head_sha"`
+	RepoPath            string `json:"repo_path"`
+	PRNumber            int    `json:"pr_number"`
+	WaitSeconds         int    `json:"wait_seconds"`
+	PollSeconds         int    `json:"poll_seconds"`
+	HeadSHA             string `json:"head_sha"`
+	NoCheckGraceSeconds int    `json:"no_check_grace_seconds"`
 }
 
 // UnmarshalJSON seeds the Python parameter defaults (wait_seconds=1500,
 // poll_seconds=30) so keys absent from the input map keep those defaults.
-// head_sha defaults to "" (the Go zero), matching the Python signature.
+// head_sha defaults to "" (the Go zero), matching the Python signature, and
+// no_check_grace_seconds defaults to 0 (off — poll up to wait_seconds on
+// CI-configured repos unless explicitly set).
 func (c *ciWatcherInput) UnmarshalJSON(b []byte) error {
 	*c = ciWatcherInput{WaitSeconds: 1500, PollSeconds: 30}
 	type alias ciWatcherInput
@@ -140,6 +143,9 @@ func RunCIWatcher(ctx context.Context, deps *Deps, input map[string]any) (any, e
 	}
 	deps.App.Note(ctx, startMsg, "ci_watcher", "start")
 
+	if in.NoCheckGraceSeconds > 0 {
+		ctx = cigate.WithNoCheckGraceSeconds(ctx, in.NoCheckGraceSeconds)
+	}
 	result := watchFn(ctx, in.RepoPath, in.PRNumber, in.WaitSeconds, in.PollSeconds, in.HeadSHA)
 
 	deps.App.Note(ctx,

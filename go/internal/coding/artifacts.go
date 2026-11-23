@@ -2,11 +2,13 @@ package coding
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -15,25 +17,59 @@ import (
 // JSON shapes are reproduced exactly so a build's on-disk layout is identical to
 // the Python node's (and mid-issue resume reads the same files).
 
+// iterationStateKey ports _iteration_state_key: the checkpoint key for one
+// coding-loop window. Each advisor round runs its own loop, so its iteration
+// counter must start fresh; keying per round keeps crash-resume inside a round
+// working while stopping a RETRY from resuming an exhausted window. Round 0
+// keeps the bare issue name so pre-existing checkpoints still resume.
+// Later rounds encode the name as one filename component.
+func iterationStateKey(issueName string, advisorRound int) string {
+	if advisorRound != 0 {
+		var encoded strings.Builder
+		stem := strings.ToUpper(strings.SplitN(issueName, ".", 2)[0])
+		reserved := stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" ||
+			(len(stem) == 4 && (stem[:3] == "COM" || stem[:3] == "LPT") && stem[3] >= '1' && stem[3] <= '9')
+		for i := 0; i < len(issueName); i++ {
+			c := issueName[i]
+			// Match urllib.parse.quote(..., safe=""): UTF-8 bytes, uppercase hex.
+			if !(reserved && i == 0) && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-._~", rune(c))) {
+				encoded.WriteByte(c)
+			} else {
+				fmt.Fprintf(&encoded, "%%%02X", c)
+			}
+		}
+		if encoded.Len()+len(".json") > 255 {
+			sum := sha256.Sum256([]byte(issueName))
+			return "!" + hex.EncodeToString(sum[:])
+		}
+		return encoded.String()
+	}
+	return issueName
+}
+
 // iterationStatePath ports _iteration_state_path.
 //
 // With a build_id, iteration checkpoints are scoped by build_id so parallel /
 // sequential builds against the same repo do not resume stale state from prior
-// runs: <artifacts>/execution/iterations/<build_id>/<issue>.json. Without one:
-// <artifacts>/execution/iterations/<issue>.json. Empty artifactsDir -> "".
-func iterationStatePath(artifactsDir, issueName, buildID string) string {
+// runs: <artifacts>/execution/iterations/<build_id>/<state_key>.json. Without
+// one: <artifacts>/execution/iterations/<state_key>.json. Empty artifactsDir -> "".
+// Advisor rounds use the sibling iteration-rounds[/<build_id>]/r<k> tree.
+func iterationStatePath(artifactsDir, stateKey, buildID string, advisorRounds ...int) string {
 	if artifactsDir == "" {
 		return ""
 	}
-	if buildID != "" {
-		return filepath.Join(artifactsDir, "execution", "iterations", buildID, issueName+".json")
+	if len(advisorRounds) > 0 && advisorRounds[0] != 0 {
+		return filepath.Join(artifactsDir, "execution", "iteration-rounds", buildID, fmt.Sprintf("r%d", advisorRounds[0]), stateKey+".json")
 	}
-	return filepath.Join(artifactsDir, "execution", "iterations", issueName+".json")
+	if buildID != "" {
+		return filepath.Join(artifactsDir, "execution", "iterations", buildID, stateKey+".json")
+	}
+	return filepath.Join(artifactsDir, "execution", "iterations", stateKey+".json")
 }
 
 // saveIterationState ports _save_iteration_state. Writes state as indent=2 JSON.
-func saveIterationState(artifactsDir, issueName string, state map[string]any, buildID string) {
-	path := iterationStatePath(artifactsDir, issueName, buildID)
+func saveIterationState(artifactsDir, stateKey string, state map[string]any, buildID string, advisorRounds ...int) {
+	path := iterationStatePath(artifactsDir, stateKey, buildID, advisorRounds...)
 	if path == "" {
 		return
 	}
@@ -49,8 +85,8 @@ func saveIterationState(artifactsDir, issueName string, state map[string]any, bu
 
 // loadIterationState ports _load_iteration_state. Returns nil when the file is
 // absent, when artifactsDir is empty, or on read/parse error.
-func loadIterationState(artifactsDir, issueName, buildID string) map[string]any {
-	path := iterationStatePath(artifactsDir, issueName, buildID)
+func loadIterationState(artifactsDir, stateKey, buildID string, advisorRounds ...int) map[string]any {
+	path := iterationStatePath(artifactsDir, stateKey, buildID, advisorRounds...)
 	if path == "" {
 		return nil
 	}

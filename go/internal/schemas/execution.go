@@ -127,6 +127,8 @@ type SplitIssueSpec struct {
 	FilesToCreate      StrList `json:"files_to_create"`
 	FilesToModify      StrList `json:"files_to_modify"`
 	ParentIssueName    string  `json:"parent_issue_name"`
+	// Optional; inherits the parent issue's guidance when omitted.
+	Guidance map[string]any `json:"guidance"`
 }
 
 // IssueAdvisorDecision is the structured output from the Issue Advisor agent.
@@ -420,6 +422,10 @@ type RepoFinalizeResult struct {
 	FilesRemoved     []string `json:"files_removed"`
 	GitignoreUpdated bool     `json:"gitignore_updated"`
 	Summary          string   `json:"summary"`
+	// FilesRestored are paths the cleanup removed or changed that were not
+	// its to touch, put back by the finalize guard. Set by code, never by
+	// the agent.
+	FilesRestored []string `json:"files_restored,omitempty" jsonschema:"-"`
 }
 
 // GitHubPRResult is the result of pushing and creating a PR on GitHub.

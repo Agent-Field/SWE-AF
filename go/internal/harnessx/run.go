@@ -1,6 +1,14 @@
 package harnessx
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/Agent-Field/SWE-AF/go/internal/fence"
+	"github.com/Agent-Field/SWE-AF/go/internal/workspace"
+
 	"context"
 	"encoding/json"
 
@@ -63,6 +71,7 @@ func Run[T any](ctx context.Context, app HarnessCaller, prompt string, opts harn
 	schema := schemaFor[T]()
 
 	opts.Env = hitl.InjectCredentialsIntoEnv(opts.Env, credentialScopeID(ctx))
+	opts = fenceCodeAF(opts)
 
 	var dest T
 	result, err := app.Harness(ctx, prompt, schema, &dest, opts)
@@ -151,4 +160,52 @@ func (r RoleOptions) ToOptions() harness.Options {
 		Cwd:            r.Cwd,
 		Env:            r.Env,
 	}
+}
+
+// fenceCodeAF starts a codeaf run inside its build's own folder when SWE_FENCE
+// is enabled (package fence): the harness is pointed at this binary as the
+// launcher, and the call's environment names the real codeaf and the folder it
+// may see. When the fence is off, or for other harnesses, opts is returned
+// unchanged.
+func fenceCodeAF(opts harness.Options) harness.Options {
+	if !fence.Enabled() || (opts.Provider != "aforge" && opts.Provider != "codeaf") {
+		return opts
+	}
+	cwd := opts.ProjectDir
+	if cwd == "" {
+		cwd = opts.Cwd
+	}
+	scope, ok := fence.ScopeFor(workspace.Root(), cwd)
+	if !ok {
+		return opts
+	}
+	real := opts.BinPath
+	if real == "" {
+		real = os.Getenv("CODEAF_BIN")
+	}
+	if real == "" {
+		real = "codeaf"
+	}
+	real, err := exec.LookPath(real)
+	if err != nil {
+		return opts // the harness reports codeaf missing in its own words
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return opts
+	}
+	opts.BinPath = self
+	opts.Env = fence.Stamp(opts.Env, real, scope)
+	// THE LAUNCHER FRONTS CODEAF, SO THE RUN IS NAMED CODEAF. The SDK reads
+	// provider "aforge" with a bin path of its own as a pin on the legacy
+	// aforge binary (its contract F1) and runs `exec --json -w`, which has no
+	// --events or --steer: a fenced step then had no live chat, no steer and
+	// no way to ask the person anything (job 70, 2026-11-07). Naming the
+	// provider "codeaf" keeps the launcher path and the watched
+	// `chat --once --events --steer` run together. A real binary that is
+	// itself the old aforge keeps the old name, because it has only exec.
+	if !strings.HasPrefix(filepath.Base(real), "aforge") {
+		opts.Provider = harness.ProviderCodeAF
+	}
+	return opts
 }

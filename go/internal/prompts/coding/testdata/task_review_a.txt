@@ -17,6 +17,10 @@ This task spans multiple repositories. Each repository is listed below with its 
 ## Review Focus (from sprint planner)
 edge cases
 
+## Scope and Test Expectations (from sprint planner)
+- **Estimated scope**: large — calibrate review depth to it.
+- **New tests needed**: yes — check that tests cover the behaviors this issue changes.
+
 ## QA Status: QA has NOT run. You are the sole quality gate. Also validate test adequacy.
 
 ## Coder's Self-Reported Test Results

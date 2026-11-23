@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Agent-Field/SWE-AF/go/internal/critcheck"
 	"github.com/Agent-Field/SWE-AF/go/internal/schemas"
 )
 
@@ -147,7 +148,7 @@ Each issue runs in an isolated git worktree:
   parallel issues — include exact architecture section references in each issue
 - Acceptance criteria must be locally verifiable within one worktree
   (no "integrates with module X" unless X is from a prior level)
-- Two parallel issues SHOULD NOT create the same file
+` + critcheck.PlannerRule + `- Two parallel issues SHOULD NOT create the same file
 
 ## Per-Issue Guidance
 

@@ -339,9 +339,15 @@ class TestCodingLoopIntegration(unittest.TestCase):
         self.assertTrue(result.iteration_history[0]["review_unavailable"])
         self.assertFalse(result.iteration_history[0]["review_approved"])
         self.assertTrue(any("review_unavailable" in tags for tags in self.note_tags))
+        # COMPLETED_WITH_DEBT must always record what was left unverified.
+        self.assertEqual(
+            [item["type"] for item in result.debt_items], ["review_unavailable"],
+        )
+        self.assertEqual(result.debt_items[0]["issue_name"], "ISSUE-1")
 
-    def test_reviewer_failure_without_changes_fails(self):
-        """Nothing was produced and nothing was reviewed → not completable."""
+    def test_reviewer_failure_without_changes_is_never_worse_than_before(self):
+        """An unrun reviewer used to approve a no-change result as COMPLETED;
+        it must not now fail the issue, but it must record the debt."""
         builder = _CallFnBuilder()
         builder.on_coder(1, files_changed=[])
         builder.fail_reviewer(1)
@@ -355,8 +361,9 @@ class TestCodingLoopIntegration(unittest.TestCase):
             note_fn=self._note_fn,
         ))
 
-        self.assertEqual(result.outcome, IssueOutcome.FAILED_UNRECOVERABLE)
-        self.assertIn("Review unavailable", result.error_message)
+        self.assertEqual(result.outcome, IssueOutcome.COMPLETED_WITH_DEBT)
+        self.assertEqual(result.debt_items[0]["type"], "review_unavailable")
+        self.assertIn("no file changes", result.debt_items[0]["description"])
 
     def test_flagged_reviewer_failure_never_reports_clean_approval(self):
         """Even when the synthesizer says approve, a missing reviewer means debt."""
@@ -377,12 +384,63 @@ class TestCodingLoopIntegration(unittest.TestCase):
         self.assertEqual(result.outcome, IssueOutcome.COMPLETED_WITH_DEBT)
         self.assertFalse(result.iteration_history[0]["review_approved"])
 
-    def test_flagged_qa_failure_does_not_block_an_approving_reviewer(self):
-        """QA unavailable + reviewer approved is still an approval."""
+    def test_flagged_real_qa_failure_with_reviewer_and_synth_down_keeps_fixing(self):
+        """QA reported real failing tests while the reviewer and the synthesizer
+        both failed: that is not an acceptable-with-debt state, the coder must
+        get another iteration (the pre-existing fallback)."""
+        builder = _CallFnBuilder()
+        builder.on_coder(1, files_changed=["src/app.py"])
+        builder.on_qa(1, passed=False, summary="3 tests fail")
+        builder.fail_reviewer(1)
+        builder.fail_synth(1)
+        builder.on_coder(2, files_changed=["src/app.py"])
+        builder.on_qa(2, passed=True)
+        builder.on_reviewer(2, approved=True, blocking=False, summary="LGTM")
+        builder.on_synth(2, action="approve", summary="ok")
+
+        result = _run(run_coding_loop(
+            issue=_make_issue(needs_deeper_qa=True),
+            dag_state=_make_dag_state(self.artifacts_dir),
+            call_fn=builder.build(),
+            node_id="test-node",
+            config=_make_config(),
+            note_fn=self._note_fn,
+        ))
+
+        self.assertEqual(result.iteration_history[0]["action"], "fix")
+        self.assertEqual(result.attempts, 2)
+        self.assertEqual(result.outcome, IssueOutcome.COMPLETED)
+
+    def test_flagged_qa_unavailable_with_reviewer_approving_and_synth_down_keeps_fixing(self):
+        """An unrun QA is no more a pass than an unrun reviewer is an approval."""
         builder = _CallFnBuilder()
         builder.on_coder(1, files_changed=["src/app.py"])
         builder.on_reviewer(1, approved=True, blocking=False, summary="LGTM")
         builder.fail_qa(1)
+        builder.fail_synth(1)
+        builder.on_coder(2, files_changed=["src/app.py"])
+        builder.on_qa(2, passed=True)
+        builder.on_reviewer(2, approved=True, blocking=False, summary="LGTM")
+        builder.on_synth(2, action="approve", summary="ok")
+
+        result = _run(run_coding_loop(
+            issue=_make_issue(needs_deeper_qa=True),
+            dag_state=_make_dag_state(self.artifacts_dir),
+            call_fn=builder.build(),
+            node_id="test-node",
+            config=_make_config(),
+            note_fn=self._note_fn,
+        ))
+
+        self.assertEqual(result.iteration_history[0]["action"], "fix")
+        self.assertTrue(result.iteration_history[0]["qa_unavailable"])
+        self.assertEqual(result.attempts, 2)
+
+    def test_flagged_passing_qa_with_reviewer_and_synth_down_accepts_with_debt(self):
+        builder = _CallFnBuilder()
+        builder.on_coder(1, files_changed=["src/app.py"])
+        builder.on_qa(1, passed=True)
+        builder.fail_reviewer(1)
         builder.fail_synth(1)
 
         result = _run(run_coding_loop(
@@ -394,8 +452,9 @@ class TestCodingLoopIntegration(unittest.TestCase):
             note_fn=self._note_fn,
         ))
 
-        self.assertEqual(result.outcome, IssueOutcome.COMPLETED)
-        self.assertTrue(result.iteration_history[0]["qa_unavailable"])
+        self.assertEqual(result.outcome, IssueOutcome.COMPLETED_WITH_DEBT)
+        self.assertEqual(result.attempts, 1)
+        self.assertEqual(result.debt_items[0]["type"], "review_unavailable")
 
     # -- Scenario 2: Approved after a fix cycle --
 
@@ -454,14 +513,20 @@ class TestCodingLoopIntegration(unittest.TestCase):
         stuck_notes = [n for n in self.notes if "STUCK" in n]
         self.assertTrue(len(stuck_notes) > 0, f"Expected stuck note, got: {self.notes}")
 
-    # -- Scenario 4: Blocking review → immediate FAILED_UNRECOVERABLE --
+    # -- Scenario 4: Blocking review → fix iteration, then approval --
 
-    def test_blocking_review_fails_immediately(self):
-        """Reviewer marks blocking=True → FAILED_UNRECOVERABLE on first iteration."""
+    def test_blocking_review_gets_fix_iteration(self):
+        """Reviewer marks blocking=True → next iteration is a fix pass, not a stop.
+
+        "blocking" means "must be fixed before merge", so the default path must
+        give the coder a chance to fix it (as the flagged path does).
+        """
         builder = _CallFnBuilder()
         builder.on_coder(1, files_changed=["src/app.py"])
         builder.on_reviewer(1, approved=False, blocking=True,
                             summary="Security vulnerability: SQL injection")
+        builder.on_coder(2, files_changed=["src/app.py"])
+        builder.on_reviewer(2, approved=True, blocking=False, summary="Fixed")
 
         result = _run(run_coding_loop(
             issue=_make_issue(),
@@ -472,9 +537,11 @@ class TestCodingLoopIntegration(unittest.TestCase):
             note_fn=self._note_fn,
         ))
 
-        self.assertEqual(result.outcome, IssueOutcome.FAILED_UNRECOVERABLE)
-        self.assertEqual(result.attempts, 1)
-        self.assertEqual(result.iteration_history[0]["action"], "block")
+        self.assertEqual(result.outcome, IssueOutcome.COMPLETED)
+        self.assertEqual(result.attempts, 2)
+        self.assertEqual(result.iteration_history[0]["action"], "fix")
+        self.assertTrue(result.iteration_history[0]["review_blocking"])
+        self.assertEqual(result.iteration_history[1]["action"], "approve")
 
     # -- Scenario 5: Stagnation (no files changed) → FAILED_UNRECOVERABLE --
 
@@ -535,35 +602,18 @@ class TestCodingLoopIntegration(unittest.TestCase):
     # -- Scenario 7: Loop exhaustion (blocking) → FAILED_UNRECOVERABLE --
 
     def test_exhaustion_blocking_fails_unrecoverable(self):
-        """Loop exhausts but last review was blocking → FAILED_UNRECOVERABLE.
+        """Loop exhausts with a blocking last review → FAILED_UNRECOVERABLE.
 
-        The coder manages to avoid the block action (reviewer non-blocking initially)
-        but the final iteration gets a blocking review. Since we exhaust after a
-        non-block action=fix with history < window, the exhaustion path checks
-        last_blocking.
+        A blocking review is now a fix iteration, so a blocking finding that is
+        still unresolved when the iteration budget runs out must fail the issue
+        instead of being recorded as accepted-with-debt (the production bug that
+        merged reviewer-blocked code as "reviewer non-blocking").
         """
         config = _make_config(max_coding_iterations=2)
         builder = _CallFnBuilder()
         builder.on_coder(1, files_changed=["src/app.py"])
         builder.on_reviewer(1, approved=False, blocking=False, summary="Needs refactor")
         builder.on_coder(2, files_changed=["src/app.py"])
-        # Final iteration: blocking but action becomes "block" which returns immediately.
-        # To test exhaustion-with-blocking, we need the coder to keep going.
-        # Actually, blocking=True sets action="block" which returns immediately.
-        # So we simulate: non-blocking through iterations, but reviewer sets blocking
-        # on the last one — but blocking=True means action="block" and immediate return.
-        # The exhaustion path only triggers when action=fix on all iterations.
-        # Let's test: all fix, last reviewer has blocking=True in review_result
-        # but action was "fix" (approved=False, blocking=False review but we
-        # manually set blocking in the response — no, that contradicts).
-        #
-        # Simpler: if the loop exhausts and all reviewers were non-blocking with
-        # files_changed, it's COMPLETED_WITH_DEBT. To get FAILED_UNRECOVERABLE on
-        # exhaustion, we need either blocking=True on last review or no files changed.
-        # Since blocking=True → action=block → immediate return (not exhaustion),
-        # the only exhaustion→FAILED path is no files changed.
-        # This scenario is already covered by test_stagnation_no_files_changed.
-        # Let's test the blocking-on-last instead (immediate return path).
         builder.on_reviewer(2, approved=False, blocking=True, summary="Critical bug")
 
         result = _run(run_coding_loop(
@@ -575,10 +625,13 @@ class TestCodingLoopIntegration(unittest.TestCase):
             note_fn=self._note_fn,
         ))
 
-        # blocking=True on iter 2 → action=block → immediate FAILED_UNRECOVERABLE
+        # blocking=True on the last iteration → fix action → exhausted while
+        # still blocking → FAILED_UNRECOVERABLE (never COMPLETED_WITH_DEBT).
         self.assertEqual(result.outcome, IssueOutcome.FAILED_UNRECOVERABLE)
         self.assertEqual(result.attempts, 2)
-        self.assertEqual(result.iteration_history[-1]["action"], "block")
+        self.assertEqual(result.iteration_history[-1]["action"], "fix")
+        self.assertTrue(result.iteration_history[-1]["review_blocking"])
+        self.assertEqual(result.debt_items, [])
 
     # -- Scenario 8: Coder exception → FAILED_UNRECOVERABLE --
 

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,6 +49,10 @@ type NoteFn func(msg string, tags []string)
 // RunCodingLoop runs the coding loop for a single issue and returns its
 // IssueResult. It is the Go port of coding_loop.run_coding_loop.
 //
+// advisorRound is the issue advisor's round index (0 for the first attempt).
+// Each round gets a full iteration window and its own checkpoint key, so an
+// advisor RETRY runs coder iterations instead of resuming an exhausted counter.
+//
 // The returned error is non-nil ONLY for propagated failures that Python would
 // re-raise rather than turn into a failed IssueResult: a fatal, non-retryable
 // harness error (*fatal.FatalHarnessError) or context cancellation. Every other
@@ -62,6 +67,7 @@ func RunCodingLoop(
 	cfg *config.ExecutionConfig,
 	noteFn NoteFn,
 	memoryFn MemoryFn,
+	advisorRound int,
 ) (schemas.IssueResult, error) {
 	// note is a nil-safe wrapper so call sites need no guard (mirrors the
 	// pervasive `if note_fn:` checks in Python).
@@ -81,6 +87,9 @@ func RunCodingLoop(
 	maxIterations := cfg.MaxCodingIterations
 	timeout := cfg.AgentTimeoutSeconds
 	permissionMode := cfg.PermissionMode
+	// Each advisor round is a separate window: its own iteration budget and its
+	// own checkpoint key, so a RETRY actually runs coder iterations.
+	stateKey := iterationStateKey(issueName, advisorRound)
 
 	// Multi-repo context (nil for single-repo builds).
 	targetRepo := mapGetStr(issue, "target_repo", "")
@@ -125,10 +134,11 @@ func RunCodingLoop(
 	iterationHistory := []map[string]any{}
 	filesChanged := []string{}
 	startIteration := 1
+	iterationsRun := 0
 	isFirstSuccess := len(dagState.CompletedIssues) == 0
 
 	// Resume from iteration checkpoint if available.
-	if existingState := loadIterationState(dagState.ArtifactsDir, issueName, dagState.BuildID); existingState != nil {
+	if existingState := loadIterationState(dagState.ArtifactsDir, stateKey, dagState.BuildID, advisorRound); existingState != nil {
 		startIteration = toInt(existingState["iteration"]) + 1
 		feedback = mapGetStr(existingState, "feedback", "")
 		if fc := toStringSlice(existingState["files_changed"]); fc != nil {
@@ -146,8 +156,12 @@ func RunCodingLoop(
 	// reviewResult persists past the loop for the exhaustion check (Python:
 	// `review_result if 'review_result' in dir() else None`).
 	var reviewResult map[string]any
+	if len(iterationHistory) > 0 {
+		reviewResult = reviewFromHistory(iterationHistory[len(iterationHistory)-1])
+	}
 
 	for iteration := startIteration; iteration <= maxIterations; iteration++ {
+		iterationsRun++
 		// Honor cancellation between iterations.
 		select {
 		case <-ctx.Done():
@@ -236,7 +250,7 @@ func RunCodingLoop(
 			// DEFAULT PATH: reviewer only.
 			a, s, rr, perr := runDefaultPath(ctx, callFn, nodeID, worktreePath, coderResult,
 				issue, iterationID, projectContext, memoryContext, cfg, timeout, issueName, note,
-				wsManifestDict, targetRepo)
+				wsManifestDict, targetRepo, reviewResult)
 			if perr != nil {
 				return schemas.IssueResult{}, perr // fatal — propagate
 			}
@@ -254,13 +268,16 @@ func RunCodingLoop(
 			qaPassed = qaResult["passed"] // .get("passed", None)
 		}
 		iterationHistory = append(iterationHistory, map[string]any{
-			"iteration":       iteration,
-			"action":          action,
-			"summary":         summary,
-			"qa_passed":       qaPassed,
-			"review_approved": isTruthy(reviewResult) && mapGetBool(reviewResult, "approved", false),
-			"review_blocking": isTruthy(reviewResult) && mapGetBool(reviewResult, "blocking", false),
-			"path":            pathName(needsDeeperQA),
+			"iteration":         iteration,
+			"action":            action,
+			"summary":           summary,
+			"qa_passed":         qaPassed,
+			"review_approved":   isTruthy(reviewResult) && mapGetBool(reviewResult, "approved", false),
+			"review_blocking":   isTruthy(reviewResult) && mapGetBool(reviewResult, "blocking", false),
+			"review_findings":   reviewFindingsKey(reviewResult),
+			"review_debt_items": toMapSlice(reviewResult["debt_items"]),
+			"repo_name":         mapGetStr(coderResult, "repo_name", ""),
+			"path":              pathName(needsDeeperQA),
 		})
 
 		note(
@@ -269,12 +286,12 @@ func RunCodingLoop(
 		)
 
 		// Save iteration-level checkpoint.
-		saveIterationState(dagState.ArtifactsDir, issueName, map[string]any{
+		saveIterationState(dagState.ArtifactsDir, stateKey, map[string]any{
 			"iteration":         iteration,
 			"feedback":          summary,
 			"files_changed":     filesChanged,
 			"iteration_history": iterationHistory,
-		}, dagState.BuildID)
+		}, dagState.BuildID, advisorRound)
 
 		// --- 3. WRITE TO MEMORY ---
 		if action == "approve" {
@@ -318,21 +335,10 @@ func RunCodingLoop(
 			}, nil
 		}
 
-		// action == "fix" — build rich feedback for the coder.
+		// action == "fix" — build rich feedback for the coder. Blocking findings
+		// come first: they are what must change before merge.
 		if action == "fix" {
-			feedbackParts := []string{summary}
-			if isTruthy(qaResult) {
-				testFailures := toMapSlice(qaResult["test_failures"])
-				if len(testFailures) > 0 {
-					feedbackParts = append(feedbackParts, "\n### Specific Test Failures")
-					for _, f := range testFailures {
-						feedbackParts = append(feedbackParts, fmt.Sprintf(
-							"- `%s` in `%s`: %s",
-							mapGetStr(f, "test_name", "?"), mapGetStr(f, "file", "?"), mapGetStr(f, "error", ""),
-						))
-					}
-				}
-			}
+			feedbackParts := []string{}
 			if isTruthy(reviewResult) {
 				var blockingDebt []map[string]any
 				for _, d := range toMapSlice(reviewResult["debt_items"]) {
@@ -341,11 +347,25 @@ func RunCodingLoop(
 					}
 				}
 				if len(blockingDebt) > 0 {
-					feedbackParts = append(feedbackParts, "\n### Blocking Review Issues")
+					feedbackParts = append(feedbackParts, "### Blocking Review Issues (fix before merge)")
 					for _, d := range blockingDebt {
 						feedbackParts = append(feedbackParts, fmt.Sprintf(
 							"- [%s] %s: %s",
 							mapGetStr(d, "severity", ""), mapGetStr(d, "title", "?"), mapGetStr(d, "description", ""),
+						))
+					}
+					feedbackParts = append(feedbackParts, "")
+				}
+			}
+			feedbackParts = append(feedbackParts, summary)
+			if isTruthy(qaResult) {
+				testFailures := toMapSlice(qaResult["test_failures"])
+				if len(testFailures) > 0 {
+					feedbackParts = append(feedbackParts, "\n### Specific Test Failures")
+					for _, f := range testFailures {
+						feedbackParts = append(feedbackParts, fmt.Sprintf(
+							"- `%s` in `%s`: %s",
+							mapGetStr(f, "test_name", "?"), mapGetStr(f, "file", "?"), mapGetStr(f, "error", ""),
 						))
 					}
 				}
@@ -362,24 +382,26 @@ func RunCodingLoop(
 		}
 
 		if stuck {
-			lastBlocking := isTruthy(reviewResult) && mapGetBool(reviewResult, "blocking", false)
+			lastBlocking := mapGetBool(iterationHistory[len(iterationHistory)-1], "review_blocking", false)
 			if !lastBlocking && len(filesChanged) > 0 {
 				// Non-blocking stuck loop with code changes -> accept with debt.
+				debtItems := debtItemsFromReview(reviewResult, issueName, iteration, "stuck_loop_non_blocking")
 				note(
 					fmt.Sprintf(
-						"Coding loop STUCK (non-blocking): %s — accepting with debt after %d iterations",
-						issueName, iteration,
+						"Coding loop STUCK (non-blocking): %s — accepting with debt after %d iterations (%d debt item(s))",
+						issueName, iteration, len(debtItems),
 					),
 					[]string{"coding_loop", "stuck", "accept_debt", issueName},
 				)
 				return schemas.IssueResult{
 					IssueName:        issueName,
 					Outcome:          schemas.IssueOutcomeCompletedWithDebt,
-					ResultSummary:    fmt.Sprintf("Accepted with debt (stuck loop, non-blocking): %s", summary),
+					ResultSummary:    fmt.Sprintf("Accepted with debt (stuck loop, non-blocking): %s [%d debt item(s)]", summary, len(debtItems)),
 					FilesChanged:     filesChanged,
 					BranchName:       branchName,
 					Attempts:         iteration,
 					IterationHistory: iterationHistory,
+					DebtItems:        debtItems,
 				}, nil
 			}
 			note(
@@ -400,16 +422,69 @@ func RunCodingLoop(
 	}
 
 	// Loop exhausted without approval — check if we can accept with debt.
-	lastReview := reviewResult // nil if the loop body never ran
-	lastBlocking := isTruthy(lastReview) && mapGetBool(lastReview, "blocking", false)
+	// Recover only recorded evidence when the checkpoint exhausted the window.
+	lastReview := reviewResult
+	var lastEntry map[string]any
+	if len(iterationHistory) > 0 {
+		lastEntry = iterationHistory[len(iterationHistory)-1]
+	}
+	lastBlocking := mapGetBool(lastEntry, "review_blocking", false)
+	lastIteration := 0
+	if lastEntry != nil {
+		lastIteration = toIntDefault(lastEntry["iteration"], 0)
+	}
+
+	if iterationsRun == 0 {
+		blocking, recorded := lastEntry["review_blocking"].(bool)
+		_, approvalRecorded := lastEntry["review_approved"].(bool)
+		if lastEntry != nil && lastIteration > 0 && recorded && !blocking {
+			if mapGetStr(lastEntry, "action", "") == "approve" && approvalRecorded {
+				// On the flagged path the synthesizer owns the approval decision.
+				return schemas.IssueResult{
+					IssueName:        issueName,
+					Outcome:          schemas.IssueOutcomeCompleted,
+					ResultSummary:    mapGetStr(lastEntry, "summary", ""),
+					FilesChanged:     filesChanged,
+					BranchName:       branchName,
+					Attempts:         lastIteration,
+					IterationHistory: iterationHistory,
+					RepoName:         mapGetStr(lastEntry, "repo_name", ""),
+				}, nil
+			}
+			if mapGetStr(lastEntry, "action", "") == "fix" && len(filesChanged) > 0 {
+				lastReview = reviewFromHistory(lastEntry)
+			} else {
+				lastBlocking = true // An unestablished decision is not approval.
+			}
+		} else {
+			lastBlocking = true
+		}
+	}
+	if iterationsRun == 0 && lastBlocking {
+		note(
+			fmt.Sprintf("Coding loop ran zero iterations: %s", issueName),
+			[]string{"coding_loop", "exhausted", "zero_iterations", issueName},
+		)
+		return schemas.IssueResult{
+			IssueName:        issueName,
+			Outcome:          schemas.IssueOutcomeFailedUnrecoverable,
+			ErrorMessage:     fmt.Sprintf("Coding loop ran zero iterations for %s: the iteration window was already exhausted when the loop started", issueName),
+			FilesChanged:     filesChanged,
+			BranchName:       branchName,
+			Attempts:         0,
+			IterationHistory: iterationHistory,
+		}, nil
+	}
 
 	if !lastBlocking && len(filesChanged) > 0 {
 		// Reviewer was never blocking and coder produced changes — accept with
-		// debt rather than failing entirely.
+		// debt rather than failing entirely. The review's blocking/should-fix
+		// findings become recorded debt.
+		debtItems := debtItemsFromReview(lastReview, issueName, lastIteration, "exhausted_non_blocking")
 		note(
 			fmt.Sprintf(
-				"Coding loop exhausted (non-blocking): %s — accepting with debt after %d iterations",
-				issueName, maxIterations,
+				"Coding loop exhausted (non-blocking): %s — accepting with debt after %d iterations (%d debt item(s))",
+				issueName, lastIteration, len(debtItems),
 			),
 			[]string{"coding_loop", "exhausted", "accept_debt", issueName},
 		)
@@ -417,19 +492,20 @@ func RunCodingLoop(
 			IssueName: issueName,
 			Outcome:   schemas.IssueOutcomeCompletedWithDebt,
 			ResultSummary: fmt.Sprintf(
-				"Accepted with debt after %d iterations (reviewer non-blocking, code changes present)",
-				maxIterations,
+				"Accepted with debt after %d iterations (reviewer non-blocking, code changes present, %d debt item(s))",
+				lastIteration, len(debtItems),
 			),
 			FilesChanged:     filesChanged,
 			BranchName:       branchName,
-			Attempts:         maxIterations,
+			Attempts:         lastIteration,
 			IterationHistory: iterationHistory,
+			DebtItems:        debtItems,
 		}, nil
 	}
 
 	// Truly unrecoverable — reviewer was blocking or no code was produced.
 	note(
-		fmt.Sprintf("Coding loop exhausted: %s after %d iterations", issueName, maxIterations),
+		fmt.Sprintf("Coding loop exhausted: %s after %d iterations", issueName, lastIteration),
 		[]string{"coding_loop", "exhausted", issueName},
 	)
 
@@ -438,10 +514,10 @@ func RunCodingLoop(
 	return schemas.IssueResult{
 		IssueName:        issueName,
 		Outcome:          schemas.IssueOutcomeFailedUnrecoverable,
-		ErrorMessage:     fmt.Sprintf("Coding loop exhausted after %d iterations without approval", maxIterations),
+		ErrorMessage:     fmt.Sprintf("Coding loop exhausted after %d iterations without approval", lastIteration),
 		FilesChanged:     filesChanged,
 		BranchName:       branchName,
-		Attempts:         maxIterations,
+		Attempts:         lastIteration,
 		IterationHistory: iterationHistory,
 	}, nil
 }
@@ -449,7 +525,7 @@ func RunCodingLoop(
 // runDefaultPath ports _run_default_path: reviewer only (2 role calls including
 // the coder). Returns (action, summary, review_result). A fatal harness error is
 // returned as err (propagated); any other reviewer failure degrades to an
-// approving fallback so the loop continues.
+// approving fallback unless a previous blocking review remains unresolved.
 func runDefaultPath(
 	ctx context.Context,
 	callFn CallFn,
@@ -463,6 +539,7 @@ func runDefaultPath(
 	note NoteFn,
 	workspaceManifest map[string]any,
 	targetRepo string,
+	previousReview map[string]any,
 ) (action, summary string, reviewResult map[string]any, err error) {
 	permissionMode := cfg.PermissionMode
 
@@ -492,7 +569,11 @@ func runDefaultPath(
 			fmt.Sprintf("Reviewer failed: %s: %v", issueName, rerr),
 			[]string{"coding_loop", "review_error", issueName},
 		)
-		reviewResult = map[string]any{"approved": true, "blocking": false, "summary": fmt.Sprintf("Review unavailable: %v", rerr)}
+		if mapGetBool(previousReview, "blocking", false) {
+			reviewResult = previousReview
+		} else {
+			reviewResult = map[string]any{"approved": true, "blocking": false, "summary": fmt.Sprintf("Review unavailable: %v", rerr)}
+		}
 	}
 
 	note(
@@ -500,15 +581,18 @@ func runDefaultPath(
 		[]string{"coding_loop", "feedback", issueName},
 	)
 
-	// Reviewer is sole gatekeeper on default path.
+	// Reviewer is sole gatekeeper on default path. "blocking" means "must be
+	// fixed before merge" (the reviewer's own severity definition), not "stop
+	// now": it becomes a fix iteration, exactly like the flagged path's
+	// synthesizer FIX. Terminal outcomes stay with loops that cannot converge
+	// (three passes on the same blocking finding, or exhausted iterations),
+	// which is where escalation to the issue advisor belongs.
 	approved := mapGetBool(reviewResult, "approved", false)
 	blocking := mapGetBool(reviewResult, "blocking", false)
 	summary = mapGetStr(reviewResult, "summary", "")
 
 	if approved && !blocking {
 		action = "approve"
-	} else if blocking {
-		action = "block"
 	} else {
 		action = "fix"
 	}
@@ -657,20 +741,136 @@ func runFlaggedPath(
 	return action, summary, reviewResult, qaResult, synthesisResult, nil
 }
 
-// DetectStuckLoop ports _detect_stuck_loop: true if the last `window` iterations
-// are all non-blocking "fix" cycles (the default-path non-convergence signal).
+// reviewFromHistory recovers recorded review feedback, including legacy fingerprints.
+func reviewFromHistory(entry map[string]any) map[string]any {
+	findings := toMapSlice(entry["review_debt_items"])
+	if len(findings) == 0 && mapGetBool(entry, "review_blocking", false) && mapGetStr(entry, "review_findings", "") != "" {
+		findings = []map[string]any{{"severity": "blocking", "title": entry["review_findings"]}}
+	}
+	return map[string]any{
+		"approved":   mapGetBool(entry, "review_approved", false),
+		"blocking":   mapGetBool(entry, "review_blocking", false),
+		"summary":    mapGetStr(entry, "summary", ""),
+		"debt_items": findings,
+	}
+}
+
+// reviewFindingsKey ports _review_findings_key: a stable fingerprint of a
+// review's blocking findings. Stuck detection uses it to tell whether
+// consecutive fix iterations are still fighting the same finding. The reviewer
+// itemises findings in debt_items; when it itemises nothing, the summary is the
+// only signal.
+func reviewFindingsKey(reviewResult map[string]any) string {
+	if !isTruthy(reviewResult) {
+		return ""
+	}
+	seen := map[string]bool{}
+	titles := []string{}
+	for _, finding := range toMapSlice(reviewResult["debt_items"]) {
+		if mapGetStr(finding, "severity", "") != "blocking" {
+			continue
+		}
+		title := strings.ToLower(strings.TrimSpace(mapGetStr(finding, "title", "")))
+		if title == "" || seen[title] {
+			continue
+		}
+		seen[title] = true
+		titles = append(titles, title)
+	}
+	sort.Strings(titles)
+	if len(titles) > 0 {
+		return strings.Join(titles, " | ")
+	}
+	return strings.Join(strings.Fields(strings.ToLower(mapGetStr(reviewResult, "summary", ""))), " ")
+}
+
+// debtItemsFromReview ports _debt_items_from_review: build debt items from the
+// last review's blocking and should-fix findings. COMPLETED_WITH_DEBT must
+// always record at least one item, otherwise the debt register silently drops
+// reviewer-confirmed findings. Itemised findings are carried as-is; when the
+// reviewer itemised nothing, the review summary becomes the item.
+func debtItemsFromReview(reviewResult map[string]any, issueName string, iteration int, reason string) []map[string]any {
+	items := []map[string]any{}
+	for _, finding := range toMapSlice(reviewResult["debt_items"]) {
+		severity := strings.ToLower(mapGetStr(finding, "severity", ""))
+		if severity != "blocking" && severity != "should_fix" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"type":        "review_finding",
+			"issue_name":  issueName,
+			"severity":    severity,
+			"title":       mapGetStr(finding, "title", ""),
+			"description": mapGetStr(finding, "description", ""),
+			"file_path":   mapGetStr(finding, "file_path", ""),
+			"iteration":   iteration,
+			"reason":      reason,
+		})
+	}
+	if len(items) > 0 {
+		return items
+	}
+
+	severity := "should_fix"
+	if mapGetBool(reviewResult, "blocking", false) {
+		severity = "blocking"
+	}
+	return []map[string]any{{
+		"type":        "unresolved_review_feedback",
+		"issue_name":  issueName,
+		"severity":    severity,
+		"title":       "Reviewer feedback not resolved",
+		"description": strings.TrimSpace(mapGetStr(reviewResult, "summary", "")),
+		"file_path":   "",
+		"iteration":   iteration,
+		"reason":      reason,
+	}}
+}
+
+// DetectStuckLoop ports _detect_stuck_loop: true if the last `window`
+// iterations made no review progress. Two failure modes count as stuck:
+//   - consecutive non-blocking "fix" cycles: the reviewer keeps asking for
+//     polish without converging (the original default-path failure mode), and
+//   - consecutive blocking "fix" cycles on the same findings: the coder has had
+//     three passes at one blocking finding and did not fix it, so another pass
+//     is not going to help and the loop should escalate.
 func DetectStuckLoop(iterationHistory []map[string]any, window int) bool {
 	if len(iterationHistory) < window {
 		return false
 	}
 	recent := iterationHistory[len(iterationHistory)-window:]
+	blocking := make([]bool, 0, len(recent))
 	for _, entry := range recent {
 		action, _ := entry["action"].(string)
-		if action != "fix" || mapGetBool(entry, "review_blocking", false) {
+		if action != "fix" {
 			return false
 		}
+		blocking = append(blocking, mapGetBool(entry, "review_blocking", false))
 	}
-	return true
+	anyBlocking := false
+	allBlocking := true
+	for _, b := range blocking {
+		if b {
+			anyBlocking = true
+		} else {
+			allBlocking = false
+		}
+	}
+	if !anyBlocking {
+		return true
+	}
+	if !allBlocking {
+		return false
+	}
+	findings := map[string]bool{}
+	for _, entry := range recent {
+		findings[mapGetStr(entry, "review_findings", "")] = true
+	}
+	if len(findings) != 1 {
+		return false
+	}
+	_, empty := findings[""]
+	return !empty
 }
 
 // callWithTimeout ports _call_with_timeout: run fn under an

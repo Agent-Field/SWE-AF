@@ -70,8 +70,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl -fsSL https://opencode.ai/install | bash && \
     # Install Codex CLI for codex runtime provider
     npm install -g @openai/codex && \
-    # Install Command Code CLI for command_code runtime provider
-    npm install -g command-code@1.82.2 && \
+    # Install Command Code CLI for command_code runtime provider. Only the
+    # top-level version is pinned; its own dependencies float, which is what
+    # broke 1.82.2 (a newer @opentelemetry/semantic-conventions), so the
+    # startup check below is what catches the next drift.
+    npm install -g command-code@1.88.5 && \
     # Credential-free startup check: fail the build on incompatible Node/CLI.
     command-code --version && \
     codex_path="$(command -v codex)" && \
@@ -109,6 +112,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PATH="/root/.opencode/bin:${PATH}"
 # AForge CLI (aforge runtime), fetched + checksum-verified in stage 1.
 COPY --from=aforge /out/aforge /usr/local/bin/aforge
+# Stay on aforge on purpose until this product's separate CodeAF migration.
+ENV AFORGE_BIN=/usr/local/bin/aforge
 
 # Tell OpenCode to read its model AND small_model from the deployer's
 # HARNESS_MODEL env var via {env:...} interpolation. Without this config,
