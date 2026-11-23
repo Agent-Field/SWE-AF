@@ -351,14 +351,20 @@ class TestCodingLoopIntegration(unittest.TestCase):
         stuck_notes = [n for n in self.notes if "STUCK" in n]
         self.assertTrue(len(stuck_notes) > 0, f"Expected stuck note, got: {self.notes}")
 
-    # -- Scenario 4: Blocking review → immediate FAILED_UNRECOVERABLE --
+    # -- Scenario 4: Blocking review → fix iteration, then approval --
 
-    def test_blocking_review_fails_immediately(self):
-        """Reviewer marks blocking=True → FAILED_UNRECOVERABLE on first iteration."""
+    def test_blocking_review_gets_fix_iteration(self):
+        """Reviewer marks blocking=True → next iteration is a fix pass, not a stop.
+
+        "blocking" means "must be fixed before merge", so the default path must
+        give the coder a chance to fix it (as the flagged path does).
+        """
         builder = _CallFnBuilder()
         builder.on_coder(1, files_changed=["src/app.py"])
         builder.on_reviewer(1, approved=False, blocking=True,
                             summary="Security vulnerability: SQL injection")
+        builder.on_coder(2, files_changed=["src/app.py"])
+        builder.on_reviewer(2, approved=True, blocking=False, summary="Fixed")
 
         result = _run(run_coding_loop(
             issue=_make_issue(),
@@ -369,9 +375,11 @@ class TestCodingLoopIntegration(unittest.TestCase):
             note_fn=self._note_fn,
         ))
 
-        self.assertEqual(result.outcome, IssueOutcome.FAILED_UNRECOVERABLE)
-        self.assertEqual(result.attempts, 1)
-        self.assertEqual(result.iteration_history[0]["action"], "block")
+        self.assertEqual(result.outcome, IssueOutcome.COMPLETED)
+        self.assertEqual(result.attempts, 2)
+        self.assertEqual(result.iteration_history[0]["action"], "fix")
+        self.assertTrue(result.iteration_history[0]["review_blocking"])
+        self.assertEqual(result.iteration_history[1]["action"], "approve")
 
     # -- Scenario 5: Stagnation (no files changed) → FAILED_UNRECOVERABLE --
 
@@ -432,35 +440,18 @@ class TestCodingLoopIntegration(unittest.TestCase):
     # -- Scenario 7: Loop exhaustion (blocking) → FAILED_UNRECOVERABLE --
 
     def test_exhaustion_blocking_fails_unrecoverable(self):
-        """Loop exhausts but last review was blocking → FAILED_UNRECOVERABLE.
+        """Loop exhausts with a blocking last review → FAILED_UNRECOVERABLE.
 
-        The coder manages to avoid the block action (reviewer non-blocking initially)
-        but the final iteration gets a blocking review. Since we exhaust after a
-        non-block action=fix with history < window, the exhaustion path checks
-        last_blocking.
+        A blocking review is now a fix iteration, so a blocking finding that is
+        still unresolved when the iteration budget runs out must fail the issue
+        instead of being recorded as accepted-with-debt (the production bug that
+        merged reviewer-blocked code as "reviewer non-blocking").
         """
         config = _make_config(max_coding_iterations=2)
         builder = _CallFnBuilder()
         builder.on_coder(1, files_changed=["src/app.py"])
         builder.on_reviewer(1, approved=False, blocking=False, summary="Needs refactor")
         builder.on_coder(2, files_changed=["src/app.py"])
-        # Final iteration: blocking but action becomes "block" which returns immediately.
-        # To test exhaustion-with-blocking, we need the coder to keep going.
-        # Actually, blocking=True sets action="block" which returns immediately.
-        # So we simulate: non-blocking through iterations, but reviewer sets blocking
-        # on the last one — but blocking=True means action="block" and immediate return.
-        # The exhaustion path only triggers when action=fix on all iterations.
-        # Let's test: all fix, last reviewer has blocking=True in review_result
-        # but action was "fix" (approved=False, blocking=False review but we
-        # manually set blocking in the response — no, that contradicts).
-        #
-        # Simpler: if the loop exhausts and all reviewers were non-blocking with
-        # files_changed, it's COMPLETED_WITH_DEBT. To get FAILED_UNRECOVERABLE on
-        # exhaustion, we need either blocking=True on last review or no files changed.
-        # Since blocking=True → action=block → immediate return (not exhaustion),
-        # the only exhaustion→FAILED path is no files changed.
-        # This scenario is already covered by test_stagnation_no_files_changed.
-        # Let's test the blocking-on-last instead (immediate return path).
         builder.on_reviewer(2, approved=False, blocking=True, summary="Critical bug")
 
         result = _run(run_coding_loop(
@@ -472,10 +463,13 @@ class TestCodingLoopIntegration(unittest.TestCase):
             note_fn=self._note_fn,
         ))
 
-        # blocking=True on iter 2 → action=block → immediate FAILED_UNRECOVERABLE
+        # blocking=True on the last iteration → fix action → exhausted while
+        # still blocking → FAILED_UNRECOVERABLE (never COMPLETED_WITH_DEBT).
         self.assertEqual(result.outcome, IssueOutcome.FAILED_UNRECOVERABLE)
         self.assertEqual(result.attempts, 2)
-        self.assertEqual(result.iteration_history[-1]["action"], "block")
+        self.assertEqual(result.iteration_history[-1]["action"], "fix")
+        self.assertTrue(result.iteration_history[-1]["review_blocking"])
+        self.assertEqual(result.debt_items, [])
 
     # -- Scenario 8: Coder exception → FAILED_UNRECOVERABLE --
 

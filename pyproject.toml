@@ -10,7 +10,7 @@ dependencies = [
     # which the aforge runtime dispatches to. >=0.1.130 is the release carrying
     # agentfield#905, so AFORGE_BIN / AGENTFIELD_AFORGE_COMMAND are honored and
     # the provider passes an explicit --timeout.
-    "agentfield>=0.1.130",
+    "agentfield>=0.1.145",
     "pydantic>=2.0",
     # Compatibility pin: newer SDK builds have surfaced
     # "Unknown message type: rate_limit_event" during streaming.

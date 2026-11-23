@@ -426,6 +426,14 @@ With **only** an `INFRON_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway 
 
 > Docker and Railway deployments using Infron must set `HARNESS_MODEL=infron/deepseek/deepseek-v4-flash-0731` (or another `infron/...` id) in the environment. The image bakes an `openrouter/...` value that the `open_code` model cascade reads after the Infron auto default and would otherwise override it. `SWE_DEFAULT_MODEL` pins every role model but does not feed OpenCode's `small_model`; set `HARNESS_MODEL` for that path (setting both is fine).
 
+For Runcrate with `open_code`, set `RUNCRATE_API_KEY` (keys at [runcrate.ai/dashboard/api-keys](https://runcrate.ai/dashboard/api-keys)) and use `runcrate/<organization>/<model>` with the Hugging Face model id (for example `runcrate/zai-org/GLM-5.3`). Runcrate is an OpenAI-compatible API for open-weight models; the image declares DeepSeek V4.1 Flash, GLM 5.3, GLM 5.3 Flash, Kimi K3, Qwen3.5 397B, Qwen3 Coder 480B and gpt-oss 120B:
+
+```bash
+SWE_DEFAULT_MODEL=runcrate/zai-org/GLM-5.3
+```
+
+With **only** a `RUNCRATE_API_KEY` set (no `ANTHROPIC_API_KEY`, no other gateway key, no `SWE_DEFAULT_RUNTIME`), the main paths auto-select `open_code` and default to `runcrate/deepseek-ai/DeepSeek-V4.1-Flash`, following the same rules as Infron above (including the fast mode note and the `HARNESS_MODEL` requirement in Docker and Railway). Any gateway key already configured keeps precedence.
+
 For Cheaper Inference with `open_code`, set `CHEAPERINFERENCE_API_KEY` and use `cheaperinference/<model>` (for example `cheaperinference/gpt-5.4-mini`). Cheaper Inference is an OpenAI-compatible gateway serving bare model ids, so a role ref is the provider prefix plus a bare id:
 
 ```bash
@@ -466,7 +474,7 @@ For the Anthropic-compatible Claude path, set `ANTHROPIC_AUTH_TOKEN`, set `ANTHR
 
 For Codex with ChatGPT subscription auth, install the Codex CLI on the host, run `codex login`, leave `OPENAI_API_KEY` unset for this process, and set `SWE_CODEX_AUTH_MODE=chatgpt` or `auto`. For OpenAI API-platform billing, set `SWE_CODEX_AUTH_MODE=api_key` and `OPENAI_API_KEY`.
 
-For Command Code on the Python node, install Node 22+ and `npm install -g command-code@1.82.2`, run `command-code login`, and set `runtime: "command_code"`. To share that login with Docker, use `docker compose -f docker-compose.yml -f docker-compose.commandcode.yml up -d` (for the host control plane, use `docker-compose.local.yml` with `docker-compose.commandcode.local.yml`). These opt-in overlays mount only `~/.commandcode/auth.json`, read-only; the file must already exist. Session history and configuration remain in the container. See [deployment notes](docs/deployment.md) for credential access and BYOK configuration.
+For Command Code on the Python node, install Node 22+ and `npm install -g command-code@1.88.5`, run `command-code login`, and set `runtime: "command_code"`. To share that login with Docker, use `docker compose -f docker-compose.yml -f docker-compose.commandcode.yml up -d` (for the host control plane, use `docker-compose.local.yml` with `docker-compose.commandcode.local.yml`). These opt-in overlays mount only `~/.commandcode/auth.json`, read-only; the file must already exist. Session history and configuration remain in the container. See [deployment notes](docs/deployment.md) for credential access and BYOK configuration.
 
 > The Docker image bakes `HARNESS_MODEL=openrouter/deepseek/deepseek-v4-flash-0731` so OpenCode's `small_model` config interpolation always has a value. `HARNESS_MODEL` only affects the `open_code` runtime — `claude_code` and `codex` deployments resolve their own runtime defaults (codex picks its model by auth mode) and can override per role via `SWE_DEFAULT_MODEL` / `models` as usual.
 
@@ -916,7 +924,7 @@ Pass `config` to `build` or `execute`. Full schema: [`swe_af/execution/schemas.p
 
 | Key                       | Default         | Description                                           |
 | ------------------------- | --------------- | ----------------------------------------------------- |
-| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python only, explicit opt-in). With OpenRouter available the default is `"aforge"`; with only Infron it is `"open_code"` on the main path; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide; request `runtime` wins over that. |
+| `runtime`                 | auto | Model runtime: `"aforge"`, `"claude_code"`, `"open_code"`, `"codex"`, or `"command_code"` (Python only, explicit opt-in). With OpenRouter available the default is `"aforge"`; with only Infron or Runcrate it is `"open_code"` on the main path; otherwise it is `"claude_code"`. `SWE_DEFAULT_RUNTIME` overrides it deployment-wide; request `runtime` wins over that. |
 | `models`                  | `null`          | Flat role-model map (`default` + role keys below). Without a caller-supplied value, the `SWE_DEFAULT_MODEL` env var is used as the default for all roles — set it on the deployment to pin a model without code changes. Caller `models.default` or per-role keys still win. |
 | `max_coding_iterations`   | `5`             | Inner-loop retry budget                               |
 | `max_advisor_invocations` | `2`             | Middle-loop advisor budget                            |
@@ -1077,6 +1085,22 @@ keeps using the classic loop, so the flag is safe to leave on.
 Tuning knobs (`SWE_PRO_VARIANT`, `SWE_PRO_MAX_COST`, `SWE_PRO_PUBLIC_URL`)
 and the full env surface are documented in
 [`go/docs/pro-engine.md`](go/docs/pro-engine.md).
+
+---
+
+## New from AgentField: CodeAF
+
+<a href="https://agentfield.ai/github/codeaf/?utm_source=github-readme&utm_campaign=swe-af-readme&utm_id=swe-af-readme-codeaf-repo">
+  <img src="https://raw.githubusercontent.com/Agent-Field/CodeAF/dev/assets/readme/benchmark-deepswe.webp" alt="First on DeepSWE: senior-dev, CodeAF's developer subharness, solved the most tasks (54.9%) at the lowest cost per solved task (1x). Every other harness solved less and paid more per solve: mini-swe-agent 1.9x, codex 2.1x, pi 2.4x, claude-code 3.4x, omp, kilo and opencode about 4.5x, muse-code 11.3x, deepseek-harness 26.6x." width="100%">
+</a>
+
+**[CodeAF](https://agentfield.ai/github/codeaf/?utm_source=github-readme&utm_campaign=swe-af-readme&utm_id=swe-af-readme-codeaf-repo)** is our new open-source coding harness,
+built for open models: frontier-grade coding at a fraction of the cost. It ranked
+**#1 on DeepSWE** out of ten coding harnesses on the same model (DeepSeek V4 Flash),
+ahead of Claude Code, Codex and OpenCode, at the lowest cost per solved issue.
+One Go binary, Apache 2.0.
+
+[Try CodeAF →](https://agentfield.ai/github/codeaf/?utm_source=github-readme&utm_campaign=swe-af-readme&utm_id=swe-af-readme-codeaf-repo) · [See the benchmark →](https://agentfield.ai/github/codeaf/?utm_source=github-readme&utm_campaign=swe-af-readme&utm_id=swe-af-readme-codeaf-benchmark#benchmarks)
 
 ---
 

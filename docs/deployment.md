@@ -44,6 +44,7 @@ or retain the previous runtime explicitly.
 |---|---|
 | `OPENROUTER_API_KEY` | OpenRouter key. Auto-selects `aforge` when no runtime is specified, defaulting every role to `openrouter/deepseek/deepseek-v4-flash-0731`, even alongside an Anthropic key |
 | `INFRON_API_KEY` | Infron gateway key. Alone, auto-selects `open_code` on the main path; fast mode needs an explicit `open_code` runtime. In Docker set `HARNESS_MODEL` to an `infron/...` model too |
+| `RUNCRATE_API_KEY` | Runcrate key (open-weight models). Alone, auto-selects `open_code` on the main path with `runcrate/deepseek-ai/DeepSeek-V4.1-Flash`; fast mode needs an explicit `open_code` runtime. In Docker set `HARNESS_MODEL` to a `runcrate/...` model too |
 | `ANTHROPIC_API_KEY` | Anthropic API key for Claude models (`claude_code` runtime) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code subscription token (uses Pro/Max credits) |
 | `OPENAI_API_KEY` | OpenAI API key |
@@ -74,7 +75,7 @@ Unset `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` in a deployment that poi
 | `AGENTFIELD_SERVER` | Control plane URL | `http://control-plane:8080` (Docker) |
 | `NODE_ID` | Agent node identifier | `swe-planner` |
 | `PORT` | Agent listen port | `8003` |
-| `SWE_DEFAULT_RUNTIME` | Default runtime: `aforge`, `claude_code`, `open_code`, `codex`, or `command_code` (Python only, explicit opt-in) | auto — `aforge` with OpenRouter, main-path `open_code` with only Infron, else `claude_code`; request runtime wins |
+| `SWE_DEFAULT_RUNTIME` | Default runtime: `aforge`, `claude_code`, `open_code`, `codex`, or `command_code` (Python only, explicit opt-in) | auto — `aforge` with OpenRouter, main-path `open_code` with only Infron or Runcrate, else `claude_code`; request runtime wins |
 | `SWE_DEFAULT_MODEL` | Default model ID for every role | runtime-specific |
 
 The image registers `MiniMax-M3.1-Flash` first and `MiniMax-M3` second under the direct OpenAI-compatible providers `minimax-global-openai` and `minimax-cn-openai`, and under the Anthropic-compatible OpenCode provider `minimax-anthropic`. Set `ANTHROPIC_BASE_URL` to either regional `/anthropic` URL shown above; the provider configuration appends `/v1`. Use the regional OpenAI base URLs `https://api.minimax.io/v1` and `https://api.minimaxi.com/v1`; keep the external Anthropic base URL exactly as shown without appending `/v1`.
@@ -111,7 +112,7 @@ To use Codex with a ChatGPT subscription, run `codex login` on the host before s
 
 Both Python and Go images use official Node 22/npm, with `node` and its `nodejs` alias in `/usr/local/bin`. npm's global configuration now lives at `/usr/local/etc/npmrc`, replacing Debian npm's `/etc/npmrc`; migrate custom config mounts/files there or set `NPM_CONFIG_GLOBALCONFIG=/etc/npmrc` to retain the old location. The global install prefix remains `/usr/local`. Scripts that hardcode `/usr/bin/node` should use `/usr/local/bin/node` or `/usr/bin/env node`.
 
-To use Command Code on the Python node, install Node 22+ and `npm install -g command-code@1.82.2` on the host, run `command-code login`, and select `runtime: "command_code"`. Start with `docker compose -f docker-compose.yml -f docker-compose.commandcode.yml up -d` to share the host login with both Python agent services. For a host control plane, use `docker compose -f docker-compose.local.yml -f docker-compose.commandcode.local.yml up -d`. The Go node does not support `command_code`.
+To use Command Code on the Python node, install Node 22+ and `npm install -g command-code@1.88.5` on the host, run `command-code login`, and select `runtime: "command_code"`. Start with `docker compose -f docker-compose.yml -f docker-compose.commandcode.yml up -d` to share the host login with both Python agent services. For a host control plane, use `docker compose -f docker-compose.local.yml -f docker-compose.commandcode.local.yml up -d`. The Go node does not support `command_code`.
 
 The overlays require an existing `~/.commandcode/auth.json` and mount only that file read-only. Normal Compose startup exposes no Command Code host files. The container can write its own configuration and sessions under `/root/.commandcode`; host settings, MCP servers, skills, file history, and transcripts are not imported. For BYOK, supply a dedicated `providers.json` at `/root/.commandcode/providers.json` using a read-only file mount or container configuration, with the provider's required environment variables. Credentials that need refreshing must be refreshed on the host; recreate containers if the host replaces the auth file.
 

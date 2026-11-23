@@ -575,9 +575,11 @@ func TestLevelFailureThresholdAborts(t *testing.T) {
 	if !contains(state.SkippedIssues, "c") {
 		t.Fatalf("expected 'c' skipped by abort threshold, got skipped=%v", state.SkippedIssues)
 	}
-	// 'c' must never have been executed.
-	if m.count("run_coder") != 2 {
-		t.Fatalf("expected exactly 2 coder calls (level 0 only), got %d", m.count("run_coder"))
+	// 'c' must never have been executed. A blocking review is now a fix
+	// iteration, so each level-0 issue spends its three-iteration stuck window
+	// (3 + 3) before failing; nothing from level 1 runs.
+	if m.count("run_coder") != 6 {
+		t.Fatalf("expected 6 coder calls (level 0 only: 3 per blocked issue), got %d", m.count("run_coder"))
 	}
 }
 

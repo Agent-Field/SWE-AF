@@ -185,7 +185,7 @@ the previous runtime; request runtime overrides take precedence.
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`           | Claude runtime (`claude_code`)                       |
 | `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY`| Open runtimes (`aforge` / `open_code` / `codex`)     |
 | `GH_TOKEN`                                                | Optional: GitHub PAT (`repo` scope) — needed for private repos and PRs |
-| `SWE_DEFAULT_RUNTIME`                                     | `aforge` \| `claude_code` \| `open_code` \| `codex` (unset: auto — `aforge` with OpenRouter; main path `open_code` with only Infron; else `claude_code`) |
+| `SWE_DEFAULT_RUNTIME`                                     | `aforge` \| `claude_code` \| `open_code` \| `codex` (unset: auto — `aforge` with OpenRouter; main path `open_code` with only Infron or Runcrate; else `claude_code`) |
 | `AGENTFIELD_AFORGE_COMMAND`                               | AForge headless command — `exec` (default, baked into the image) or `do` |
 | `SWE_DEFAULT_MODEL`                                       | Default model when the request config omits `models` |
 | `SWE_CODEX_AUTH_MODE`                                     | `auto` \| `chatgpt` \| `api_key` (codex CLI auth)     |
@@ -198,6 +198,9 @@ the previous runtime; request runtime overrides take precedence.
 | `SWE_PRO_VARIANT`                                         | Engine reasoning-effort variant (e.g. `low` for fastest turnaround, `high` for depth). Unset keeps the engine's own default |
 | `SWE_PRO_MAX_COST`                                        | Per-run cost ceiling in USD forwarded to the engine on every dispatch. Unset: no SWE-AF-side ceiling |
 | `SWE_PRO_PUBLIC_URL`                                      | Callback base URL for the engine, mirroring `AGENT_CALLBACK_URL` on the nodes. **In Docker this must be set to a container-reachable URL**, otherwise the control plane can't call the engine back |
+| `SWE_FENCE`                                               | Opt-in OS workspace fence (`1`/`true`/`yes`/`on` enables; off by default). Wraps `codeaf` in `sandbox-exec` (macOS) or `bwrap` (Linux) so a build cannot read or write sibling builds under `SWE_WORKSPACE_ROOT` / `SWE_WORKSPACE_DIR`. **Read-scope limitation:** `SWE_FENCE` isolates sibling builds under the workspace root, not the rest of the host filesystem (which stays readable so toolchains and SDK caches work). Use `SWE_FENCE_PROTECT` to hide additional operator paths outside the workspace root |
+| `SWE_FENCE_PROTECT`                                       | Optional `:`-separated (`filepath.ListSeparator`) list of host files or directories outside the build folder to hide when `SWE_FENCE` is enabled (for example, parent operator notes or specs above `SWE_WORKSPACE_DIR`) |
+| `SWE_CI_NO_CHECK_GRACE_SECONDS`                           | Optional opt-in grace cap in seconds (or `1`/`true`/`yes`/`on` for `60`s) for `run_ci_watcher` when CI workflows exist on disk (or repo path is unavailable) and zero checks have registered yet. Unset or `0` (default) polls up to the full `wait_seconds` cap (`1500`s); a local git repo with no CI workflow files returns `no_checks` on the first poll regardless. Can also be passed per call via `run_ci_watcher` input `no_check_grace_seconds` |
 
 Advanced knobs (HITL/approvals: `HAX_API_KEY`, `HAX_SDK_URL`, `HAX_SENDER_NAME`,
 `HAX_SENDER_KEY`, `AGENTFIELD_APPROVAL_USER_ID`; git identity for the resolve

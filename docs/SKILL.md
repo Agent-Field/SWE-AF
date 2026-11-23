@@ -156,7 +156,7 @@ curl -X POST http://localhost:8080/api/v1/execute/async/swe-planner.build \
 
 ## Requirements for command_code Runtime (Python node only)
 
-1. Node 22+ and `npm install -g command-code@1.82.2`; the executable is `command-code`.
+1. Node 22+ and `npm install -g command-code@1.88.5`; the executable is `command-code`.
 2. Run `command-code login`, or configure dedicated BYOK credentials.
 3. Select `runtime: "command_code"`; omit `models` to use the CLI's configured default. The Go node does not support this runtime.
 4. For Docker login sharing, use the opt-in auth-file overlays described in [deployment notes](deployment.md).
