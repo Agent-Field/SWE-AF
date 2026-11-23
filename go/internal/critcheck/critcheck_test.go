@@ -122,6 +122,51 @@ func TestAMalformedCheckWithNoRepairIsNotCounted(t *testing.T) {
 	}
 }
 
+// macOS grep is BSD grep. It refuses the same pattern GNU grep refuses, but
+// regerror(3) says "parentheses not balanced" rather than "Unmatched (".
+// That is still a check that never ran, so it is not counted.
+func TestABSDGrepRegexErrorIsNotCounted(t *testing.T) {
+	prev := runShell
+	t.Cleanup(func() { runShell = prev })
+	runShell = func(context.Context, string, string) (int, string, error) {
+		return 2, "grep: parentheses not balanced\n", nil
+	}
+	v := map[string]any{"passed": false, "criteria_results": []any{
+		map[string]any{"criterion": "`grep -E 'Checksum(' ledger.go` exits 0", "passed": false},
+	}}
+	findings := Reconcile(context.Background(), t.TempDir(), v)
+	if len(findings) != 1 || findings[0].Action != NotCounted {
+		t.Fatalf("findings = %+v", findings)
+	}
+	c := v["criteria_results"].([]any)[0].(map[string]any)
+	if c["not_counted"] != true || v["passed"] != true {
+		t.Fatalf("criterion = %v, verification = %v", c, v)
+	}
+	ev, _ := c["evidence"].(string)
+	if !strings.Contains(ev, "not counted") || !strings.Contains(ev, "parentheses not balanced") {
+		t.Fatalf("no note: %v", c["evidence"])
+	}
+}
+
+// Exit 2 is also a missing file. That is a check that ran and failed, not a
+// pattern the tool refused to compile.
+func TestAMissingGrepTargetStaysARealFailure(t *testing.T) {
+	prev := runShell
+	t.Cleanup(func() { runShell = prev })
+	runShell = func(context.Context, string, string) (int, string, error) {
+		return 2, "grep: ledger.go: No such file or directory\n", nil
+	}
+	v := map[string]any{"passed": false, "criteria_results": []any{
+		map[string]any{"criterion": "`grep -q Digest ledger.go` exits 0", "passed": false},
+	}}
+	if findings := Reconcile(context.Background(), t.TempDir(), v); len(findings) != 0 {
+		t.Fatalf("a missing file was not counted: %+v", findings)
+	}
+	if v["passed"] != false {
+		t.Fatalf("verification lifted: %v", v)
+	}
+}
+
 // A malformed check beside a real failure does not lift the verification: the
 // real failure still fails it.
 func TestAMalformedCheckBesideARealFailureKeepsTheRunFailed(t *testing.T) {
@@ -195,6 +240,21 @@ func TestMalformedTellsUsageFromAssertion(t *testing.T) {
 		"doc: too many periods in symbol specification\nUsage of [go] doc:\n": true,
 		"flag provided but not defined: -foo\nUsage of ledger.test:":          true,
 		"grep: Unmatched ( or \\(":                                            true,
+		"grep: parentheses not balanced":                                      true,
+		"grep: brackets ([ ]) not balanced":                                   true,
+		"grep: braces not balanced":                                           true,
+		"grep: trailing backslash (\\)":                                       true,
+		"grep: invalid regular expression":                                    true,
+		"grep: invalid character class":                                       true,
+		"grep: invalid character range":                                       true,
+		"grep: invalid backreference number":                                  true,
+		"grep: invalid repetition count(s)":                                   true,
+		"grep: invalid collating element":                                     true,
+		"grep: repetition-operator operand invalid":                           true,
+		"grep: empty (sub)expression":                                         true,
+		"egrep: parentheses not balanced":                                     true,
+		"grep: ledger.go: No such file or directory":                          false,
+		"grep: out of memory":                                                 false,
 		"sh: 1: Syntax error: \"(\" unexpected":                               true,
 		"doc: no method or field Ledger.Digest in package ./":                 false,
 		"--- FAIL: TestX (0.00s)\n    usage: wrong\nFAIL\texample 0.1s":       false,
