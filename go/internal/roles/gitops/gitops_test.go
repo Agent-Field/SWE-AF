@@ -532,7 +532,7 @@ func TestGitOperations_DefaultModelAndProvider(t *testing.T) {
 				{"caller model", "aforge", "claude", "caller-model", "claude-code", "caller-model", false},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					for _, key := range []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL", "SWE_MODEL_LOW", "SWE_MODEL_MED", "SWE_MODEL_HIGH"} {
+					for _, key := range []string{"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "INFRON_API_KEY", "RUNCRATE_API_KEY", "SWE_DEFAULT_MODEL", "AI_MODEL", "HARNESS_MODEL", "SWE_MODEL_LOW", "SWE_MODEL_MED", "SWE_MODEL_HIGH"} {
 						t.Setenv(key, "")
 					}
 					t.Setenv("SWE_DEFAULT_RUNTIME", tc.runtime)
