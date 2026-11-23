@@ -269,6 +269,37 @@
           "name": "GLM-5.2"
         }
       }
+    },
+    "runcrate": {
+      "name": "Runcrate",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "{env:RUNCRATE_API_KEY}",
+        "baseURL": "https://api.runcrate.ai/v1"
+      },
+      "models": {
+        "deepseek-ai/DeepSeek-V4.1-Flash": {
+          "name": "DeepSeek V4.1 Flash"
+        },
+        "zai-org/GLM-5.3": {
+          "name": "GLM 5.3"
+        },
+        "zai-org/GLM-5.3-Flash": {
+          "name": "GLM 5.3 Flash"
+        },
+        "moonshotai/Kimi-K3": {
+          "name": "Kimi K3"
+        },
+        "Qwen/Qwen3.5-397B-A17B": {
+          "name": "Qwen3.5 397B A17B"
+        },
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo": {
+          "name": "Qwen3 Coder 480B A35B"
+        },
+        "openai/gpt-oss-120b": {
+          "name": "gpt-oss 120B"
+        }
+      }
     }
   }
 }

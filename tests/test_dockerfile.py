@@ -114,6 +114,18 @@ class TestOpenCodeProviders:
         assert "moonshotai/kimi-k2.6" in models
         assert "deepseek/deepseek-v4-flash-0731" in models
 
+    def test_runcrate_provider_is_openai_compatible(self, opencode_config: dict) -> None:
+        runcrate = opencode_config["provider"]["runcrate"]
+        assert runcrate["npm"] == "@ai-sdk/openai-compatible"
+        assert runcrate["options"]["baseURL"] == "https://api.runcrate.ai/v1"
+        assert runcrate["options"]["apiKey"] == "{env:RUNCRATE_API_KEY}"
+
+    def test_runcrate_declares_default_model(self, opencode_config: dict) -> None:
+        """The auto default (runcrate/<id>) must resolve in OpenCode, so its id
+        has to be listed explicitly like every openai-compatible model."""
+        models = opencode_config["provider"]["runcrate"]["models"]
+        assert "deepseek-ai/DeepSeek-V4.1-Flash" in models
+
 
 def test_docker_requirements_pin_cryptography_below_sigill_version() -> None:
     """Docker image should avoid cryptography 48 SIGILL on Linux/aarch64."""
