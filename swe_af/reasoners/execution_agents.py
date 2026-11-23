@@ -1125,11 +1125,16 @@ async def run_qa(
             tags=["qa", "error"],
         )
 
-    return QAResult(
+    # QA never produced a verdict: say so, so the synthesizer does not read
+    # "passed=False" as failing tests. The flag is added after model_dump() so
+    # it never becomes part of the schema the QA agent is asked to fill.
+    out = QAResult(
         passed=False,
         summary=f"QA agent failed for {issue_name}",
         iteration_id=iteration_id,
     ).model_dump()
+    out["qa_unavailable"] = True
+    return out
 
 
 @internal_role(router, "coding")
@@ -1207,12 +1212,18 @@ async def run_code_reviewer(
             tags=["code_reviewer", "error"],
         )
 
-    return CodeReviewResult(
-        approved=True,  # don't block on reviewer failure
-        summary=f"Code reviewer agent failed for {issue_name} — not blocking",
+    # A reviewer that never ran must not read as an approval. It still does not
+    # block (an outage is not a finding): the coding loop records the work as
+    # accepted with debt. The flag is added after model_dump() so it never
+    # becomes part of the schema the reviewer is asked to fill.
+    out = CodeReviewResult(
+        approved=False,
+        summary=f"Code reviewer agent failed for {issue_name} — review unavailable",
         blocking=False,
         iteration_id=iteration_id,
     ).model_dump()
+    out["review_unavailable"] = True
+    return out
 
 
 @internal_role(router, "coding")
@@ -1302,11 +1313,20 @@ async def run_qa_synthesizer(
     tests_passed = qa_result.get("passed", False)
     review_approved = review_result.get("approved", False)
     review_blocking = review_result.get("blocking", False)
+    review_unavailable = bool(review_result.get("review_unavailable"))
 
     if tests_passed and review_approved and not review_blocking:
         fallback_action = "approve"
         fallback_summary = (
             "Synthesizer failed but QA passed and review approved — approving."
+        )
+    elif tests_passed and review_unavailable and not review_blocking:
+        # The reviewer never ran. Same call as before the outage was flagged
+        # (approve); the coding loop records it as accepted with debt.
+        fallback_action = "approve"
+        fallback_summary = (
+            "Synthesizer failed, QA passed and the reviewer was unavailable — "
+            "approving (recorded as debt)."
         )
     elif review_blocking:
         fallback_action = "block"

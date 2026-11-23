@@ -479,18 +479,24 @@ async def _run_default_path(
                 f"Reviewer failed: {issue_name}: {e}",
                 tags=["coding_loop", "review_error", issue_name],
             )
-        if previous_review and previous_review.get("blocking"):
-            review_result = previous_review
-        else:
-            # A reviewer that never ran cannot approve the work. Mark the call
-            # as unavailable so the loop records the issue as accepted-with-debt
-            # instead of reporting a clean approval that never happened.
-            review_result = {
-                "approved": False,
-                "blocking": False,
-                "review_unavailable": True,
-                "summary": f"Review unavailable: {e}",
-            }
+        # A reviewer that never ran cannot approve the work. Mark the call as
+        # unavailable so the loop records the issue as accepted-with-debt
+        # instead of reporting a clean approval that never happened.
+        review_result = {
+            "approved": False,
+            "blocking": False,
+            "review_unavailable": True,
+            "summary": f"Review unavailable: {e}",
+        }
+
+    # An outage (the call failed, or the reviewer reasoner reported it could not
+    # run) never erases a blocking finding from the previous iteration.
+    if (
+        review_result.get("review_unavailable")
+        and previous_review
+        and previous_review.get("blocking")
+    ):
+        review_result = previous_review
 
     if note_fn:
         note_fn(
@@ -1122,6 +1128,22 @@ async def run_coding_loop(
                     attempts=last_iteration,
                     iteration_history=iteration_history,
                     repo_name=last_entry.get("repo_name", ""),
+                )
+            if last_entry.get("action") == "approve_with_debt" and last_entry.get("review_unavailable") is True:
+                # Replay a checkpointed accept-with-debt decision (the reviewer
+                # never ran) instead of treating it as an unestablished one.
+                return IssueResult(
+                    issue_name=issue_name,
+                    outcome=IssueOutcome.COMPLETED_WITH_DEBT,
+                    result_summary=f"Accepted with debt (review unavailable): {last_entry.get('summary', '')}",
+                    files_changed=files_changed,
+                    branch_name=branch_name,
+                    attempts=last_iteration,
+                    iteration_history=iteration_history,
+                    repo_name=last_entry.get("repo_name", ""),
+                    debt_items=[_review_unavailable_debt_item(
+                        issue_name, last_iteration, str(last_entry.get("summary", "")), bool(files_changed),
+                    )],
                 )
             if last_entry.get("action") == "fix" and files_changed:
                 last_review = _review_from_history(last_entry)
