@@ -316,6 +316,28 @@ def _review_findings_key(review_result: dict | None) -> str:
     return " ".join(str(review_result.get("summary", "")).split()).lower()
 
 
+def _review_unavailable_debt_item(
+    issue_name: str,
+    iteration: int,
+    summary: str,
+    has_changes: bool,
+) -> dict:
+    """Debt item for work accepted because the reviewer never produced a verdict."""
+    return {
+        "type": "review_unavailable",
+        "issue_name": issue_name,
+        "severity": "should_fix",
+        "title": "Code review did not run",
+        "description": (
+            f"{summary} The accepted work was never reviewed"
+            + ("." if has_changes else " (the coder also produced no file changes).")
+        ),
+        "file_path": "",
+        "iteration": iteration,
+        "reason": "review_unavailable",
+    }
+
+
 def _debt_items_from_review(
     review_result: dict | None,
     issue_name: str,
@@ -457,10 +479,24 @@ async def _run_default_path(
                 f"Reviewer failed: {issue_name}: {e}",
                 tags=["coding_loop", "review_error", issue_name],
             )
-        if previous_review and previous_review.get("blocking"):
-            review_result = previous_review
-        else:
-            review_result = {"approved": True, "blocking": False, "summary": f"Review unavailable: {e}"}
+        # A reviewer that never ran cannot approve the work. Mark the call as
+        # unavailable so the loop records the issue as accepted-with-debt
+        # instead of reporting a clean approval that never happened.
+        review_result = {
+            "approved": False,
+            "blocking": False,
+            "review_unavailable": True,
+            "summary": f"Review unavailable: {e}",
+        }
+
+    # An outage (the call failed, or the reviewer reasoner reported it could not
+    # run) never erases a blocking finding from the previous iteration.
+    if (
+        review_result.get("review_unavailable")
+        and previous_review
+        and previous_review.get("blocking")
+    ):
+        review_result = previous_review
 
     if note_fn:
         note_fn(
@@ -479,7 +515,9 @@ async def _run_default_path(
     blocking = review_result.get("blocking", False)
     summary = review_result.get("summary", "")
 
-    if approved and not blocking:
+    if review_result.get("review_unavailable"):
+        action = "approve_with_debt"
+    elif approved and not blocking:
         action = "approve"
     else:
         action = "fix"
@@ -561,14 +599,23 @@ async def _run_flagged_path(
                     f"QA agent failed: {issue_name}: {qa_result}",
                     tags=["coding_loop", "qa_error", issue_name],
                 )
-            qa_result = {"passed": False, "summary": f"QA agent failed: {qa_result}"}
+            qa_result = {
+                "passed": False,
+                "qa_unavailable": True,
+                "summary": f"QA agent failed: {qa_result}",
+            }
         if isinstance(review_result, Exception):
             if note_fn:
                 note_fn(
                     f"Review agent failed: {issue_name}: {review_result}",
                     tags=["coding_loop", "review_error", issue_name],
                 )
-            review_result = {"approved": True, "blocking": False, "summary": f"Review unavailable: {review_result}"}
+            review_result = {
+                "approved": False,
+                "blocking": False,
+                "review_unavailable": True,
+                "summary": f"Review unavailable: {review_result}",
+            }
     except FatalHarnessError:
         raise
     except Exception as e:
@@ -577,8 +624,13 @@ async def _run_flagged_path(
                 f"QA+Review both failed: {issue_name}: {e}",
                 tags=["coding_loop", "qa_review_error", issue_name],
             )
-        qa_result = {"passed": False, "summary": f"QA unavailable: {e}"}
-        review_result = {"approved": True, "blocking": False, "summary": "Review unavailable"}
+        qa_result = {"passed": False, "qa_unavailable": True, "summary": f"QA unavailable: {e}"}
+        review_result = {
+            "approved": False,
+            "blocking": False,
+            "review_unavailable": True,
+            "summary": "Review unavailable",
+        }
 
     if note_fn:
         note_fn(
@@ -624,7 +676,16 @@ async def _run_flagged_path(
         qa_passed = qa_result.get("passed", False)
         review_approved = review_result.get("approved", False)
         review_blocking = review_result.get("blocking", False)
-        if qa_passed and review_approved and not review_blocking:
+        review_unavailable = review_result.get("review_unavailable", False)
+        if review_unavailable and not review_blocking and qa_passed:
+            # QA gave a real passing verdict and the reviewer never ran: accept
+            # as debt. Without a passing QA verdict (a real failure, or QA also
+            # unavailable) fall through to ``fix`` exactly like before.
+            synthesis_result = {
+                "action": "approve_with_debt",
+                "summary": "Accepted with debt (review unavailable, QA passed)",
+            }
+        elif qa_passed and review_approved and not review_blocking:
             synthesis_result = {"action": "approve", "summary": "Auto-approved (synthesizer unavailable)"}
         elif review_blocking:
             synthesis_result = {"action": "block", "summary": f"Blocked by review (synthesizer unavailable): {review_result.get('summary', '')}"}
@@ -633,6 +694,13 @@ async def _run_flagged_path(
 
     action = synthesis_result.get("action", "fix")
     summary = synthesis_result.get("summary", "")
+
+    # The synthesizer is an LLM: it can read "QA passed=False" as a real test
+    # failure, or approve despite a reviewer that never ran. The reviewer is
+    # the gatekeeper on the default path too, so an approval it did not grant
+    # is recorded as debt rather than as a clean pass.
+    if action == "approve" and review_result.get("review_unavailable"):
+        action = "approve_with_debt"
 
     return action, summary, review_result, qa_result, synthesis_result
 
@@ -859,8 +927,12 @@ async def run_coding_loop(
             "action": action,
             "summary": summary,
             "qa_passed": qa_result.get("passed", None) if qa_result else None,
+            "qa_unavailable": qa_result.get("qa_unavailable", False) if qa_result else False,
             "review_approved": review_result.get("approved", False) if review_result else False,
             "review_blocking": review_result.get("blocking", False) if review_result else False,
+            "review_unavailable": (
+                review_result.get("review_unavailable", False) if review_result else False
+            ),
             "review_findings": _review_findings_key(review_result),
             "review_debt_items": (review_result or {}).get("debt_items") or [],
             "repo_name": coder_result.get("repo_name", ""),
@@ -907,6 +979,32 @@ async def run_coding_loop(
                 attempts=iteration,
                 iteration_history=iteration_history,
                 repo_name=coder_result.get("repo_name", ""),
+            )
+
+        if action == "approve_with_debt":
+            # The reviewer never produced a verdict, so nothing gated the code.
+            # Accept what the coder produced as debt, never as a clean
+            # approval, and do not feed unverified code into the shared-memory
+            # convention store. COMPLETED_WITH_DEBT must record an item.
+            debt_items = [_review_unavailable_debt_item(
+                issue_name, iteration, summary, bool(files_changed),
+            )]
+            if note_fn:
+                note_fn(
+                    f"Coding loop ACCEPTED WITH DEBT (review unavailable): "
+                    f"{issue_name} after {iteration} iteration(s) — {summary[:100]}",
+                    tags=["coding_loop", "review_unavailable", "accept_debt", issue_name],
+                )
+            return IssueResult(
+                issue_name=issue_name,
+                outcome=IssueOutcome.COMPLETED_WITH_DEBT,
+                result_summary=f"Accepted with debt (review unavailable): {summary}",
+                files_changed=files_changed,
+                branch_name=branch_name,
+                attempts=iteration,
+                iteration_history=iteration_history,
+                repo_name=coder_result.get("repo_name", ""),
+                debt_items=debt_items,
             )
 
         if action == "block":
@@ -1030,6 +1128,22 @@ async def run_coding_loop(
                     attempts=last_iteration,
                     iteration_history=iteration_history,
                     repo_name=last_entry.get("repo_name", ""),
+                )
+            if last_entry.get("action") == "approve_with_debt" and last_entry.get("review_unavailable") is True:
+                # Replay a checkpointed accept-with-debt decision (the reviewer
+                # never ran) instead of treating it as an unestablished one.
+                return IssueResult(
+                    issue_name=issue_name,
+                    outcome=IssueOutcome.COMPLETED_WITH_DEBT,
+                    result_summary=f"Accepted with debt (review unavailable): {last_entry.get('summary', '')}",
+                    files_changed=files_changed,
+                    branch_name=branch_name,
+                    attempts=last_iteration,
+                    iteration_history=iteration_history,
+                    repo_name=last_entry.get("repo_name", ""),
+                    debt_items=[_review_unavailable_debt_item(
+                        issue_name, last_iteration, str(last_entry.get("summary", "")), bool(files_changed),
+                    )],
                 )
             if last_entry.get("action") == "fix" and files_changed:
                 last_review = _review_from_history(last_entry)

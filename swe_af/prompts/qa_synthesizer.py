@@ -97,6 +97,11 @@ def qa_synthesizer_task_prompt(
     # QA results
     sections.append("\n## QA Results")
     sections.append(f"- **Tests passed**: {qa_result.get('passed', False)}")
+    if qa_result.get("qa_unavailable"):
+        sections.append(
+            "- **QA unavailable**: the QA agent did not run (infrastructure failure). "
+            "This is NOT evidence that tests fail."
+        )
     sections.append(f"- **Summary**: {qa_result.get('summary', '(none)')}")
     test_failures = qa_result.get("test_failures", [])
     if test_failures:
@@ -111,6 +116,15 @@ def qa_synthesizer_task_prompt(
     # Code review results
     sections.append("\n## Code Review Results")
     sections.append(f"- **Approved**: {review_result.get('approved', False)}")
+    if review_result.get("review_unavailable"):
+        sections.append(
+            "- **Reviewer unavailable**: the code reviewer did not run "
+            "(infrastructure failure). It raised no objection and granted no "
+            "approval. Decide on the QA results and the code alone: do not "
+            "choose BLOCK or FIX only because the review is missing. If QA "
+            "passed, APPROVE; the loop records it as accepted with debt, "
+            "never as a clean review."
+        )
     sections.append(f"- **Blocking issues**: {review_result.get('blocking', False)}")
     sections.append(f"- **Summary**: {review_result.get('summary', '(none)')}")
     debt = review_result.get("debt_items", [])

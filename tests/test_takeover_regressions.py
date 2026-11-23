@@ -230,7 +230,9 @@ def test_reviewer_outage_preserves_blocker_across_resume(tmp_path, legacy):
 
 
 @pytest.mark.parametrize("cleared_blocker", [False, True])
-def test_reviewer_outage_without_unresolved_blocker_keeps_fail_open(tmp_path, cleared_blocker):
+def test_reviewer_outage_without_unresolved_blocker_is_accepted_with_debt(tmp_path, cleared_blocker):
+    # Fail-open still completes the issue, but an unrun reviewer is no longer
+    # reported as an approval: it is accepted with a recorded debt item.
     reviews = 0
 
     async def call_fn(target, **kwargs):
@@ -243,7 +245,8 @@ def test_reviewer_outage_without_unresolved_blocker_keeps_fail_open(tmp_path, cl
         raise RuntimeError("Reviewer unavailable")
 
     result = _run(tmp_path, call_fn, budget=3)
-    assert result.outcome == IssueOutcome.COMPLETED
+    assert result.outcome == IssueOutcome.COMPLETED_WITH_DEBT
+    assert [d["type"] for d in result.debt_items] == ["review_unavailable"]
     assert reviews == (3 if cleared_blocker else 1)
 
 
