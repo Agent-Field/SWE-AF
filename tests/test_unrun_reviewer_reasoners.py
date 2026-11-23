@@ -312,3 +312,22 @@ async def test_checkpointed_accept_with_debt_replays_as_debt(monkeypatch, tmp_pa
     assert replay.outcome == IssueOutcome.COMPLETED_WITH_DEBT
     assert [d["type"] for d in replay.debt_items] == ["review_unavailable"]
     assert replay.files_changed == first.files_changed
+
+
+def test_synthesizer_prompt_says_a_missing_review_is_neither_approval_nor_objection() -> None:
+    from swe_af.prompts.qa_synthesizer import qa_synthesizer_task_prompt
+
+    prompt = qa_synthesizer_task_prompt(
+        qa_result={"passed": True, "summary": "ok"},
+        review_result={"approved": False, "blocking": False, "review_unavailable": True},
+        iteration_history=[],
+    )
+    assert "Reviewer unavailable" in prompt
+    assert "do not choose BLOCK or FIX only because the review is missing" in prompt
+
+    normal = qa_synthesizer_task_prompt(
+        qa_result={"passed": True, "summary": "ok"},
+        review_result={"approved": True, "blocking": False},
+        iteration_history=[],
+    )
+    assert "Reviewer unavailable" not in normal

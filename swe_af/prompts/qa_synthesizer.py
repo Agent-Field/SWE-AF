@@ -119,8 +119,11 @@ def qa_synthesizer_task_prompt(
     if review_result.get("review_unavailable"):
         sections.append(
             "- **Reviewer unavailable**: the code reviewer did not run "
-            "(infrastructure failure). Approval is unknown, not granted — "
-            "do not treat this as an APPROVE."
+            "(infrastructure failure). It raised no objection and granted no "
+            "approval. Decide on the QA results and the code alone: do not "
+            "choose BLOCK or FIX only because the review is missing. If QA "
+            "passed, APPROVE; the loop records it as accepted with debt, "
+            "never as a clean review."
         )
     sections.append(f"- **Blocking issues**: {review_result.get('blocking', False)}")
     sections.append(f"- **Summary**: {review_result.get('summary', '(none)')}")
