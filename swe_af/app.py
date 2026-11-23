@@ -42,6 +42,7 @@ except ImportError:  # pragma: no cover - exercised only on older agentfield SDK
 from swe_af.execution.envelope import _ENVELOPE_KEYS, unwrap_call_result as _unwrap
 from swe_af.execution import ci_gate as _ci
 from swe_af.execution.fatal_error import FatalHarnessError
+from swe_af.runtime.async_config import SweAsyncConfig
 
 try:
     from agentfield.exceptions import ExecutionCancelledError
@@ -72,6 +73,10 @@ app = Agent(
     description="Autonomous SWE planning pipeline",
     agentfield_server=os.getenv("AGENTFIELD_SERVER", "http://localhost:8080"),
     api_key=os.getenv("AGENTFIELD_API_KEY"),
+    # ``plan`` and ``execute`` each run a whole phase inside one reasoner
+    # call; see swe_af/runtime/async_config.py for why the SDK's 2h default
+    # is too short for that shape.
+    async_config=SweAsyncConfig.from_environment(),
 )
 
 app.include_router(router)
