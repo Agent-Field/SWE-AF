@@ -104,6 +104,67 @@ func TestHappyPathRoundTripThroughDialer(t *testing.T) {
 	}
 }
 
+type firstWriteConn struct {
+	net.Conn
+	started chan struct{}
+}
+
+func (c *firstWriteConn) Write(p []byte) (int, error) {
+	select {
+	case <-c.started:
+	default:
+		close(c.started)
+	}
+	return c.Conn.Write(p)
+}
+
+func TestRunChildDrainsOutputForSlowClient(t *testing.T) {
+	helper := filepath.Join(t.TempDir(), "furrow-helper")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\nprintf 'MARKER:'; cat\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := server{cfg: config{furrowBin: helper}}
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	conn := &firstWriteConn{Conn: serverConn, started: make(chan struct{})}
+	input, writer := io.Pipe()
+	defer writer.Close()
+	done := make(chan error, 1)
+	go func() {
+		defer input.Close()
+		defer serverConn.Close()
+		done <- s.runChild(conn, input, registryRow{}, "workspace")
+	}()
+
+	select {
+	case <-conn.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("child did not write the marker")
+	}
+	if _, err := io.WriteString(writer, "ciphertext"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Give the child time to exit while the first output write is blocked.
+	time.Sleep(200 * time.Millisecond)
+	output, err := io.ReadAll(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "MARKER:ciphertext" {
+		t.Errorf("child output = %q, want %q", output, "MARKER:ciphertext")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 // furrow never puts the human workspace name on the wire: it sends a keyed
 // BLAKE3 digest of it, which the node has no way to predict or recompute. A
 // connection therefore has to be accepted on the strength of its token alone,
