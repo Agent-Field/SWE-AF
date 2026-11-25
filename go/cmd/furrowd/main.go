@@ -317,19 +317,31 @@ func (s *server) runChild(conn net.Conn, input io.Reader, entry registryRow, nam
 	cmd := exec.Command(s.cfg.furrowBin, "__remote", namespace)
 	cmd.Env = append(os.Environ(), "FURROW_REMOTE_DATA_DIR="+dataDir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("create child stdin: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
+	// Own the stdout pipe so Wait can reap the child without closing the
+	// reader while a slow client still has output to receive.
+	stdout, childOutput, err := os.Pipe()
 	if err != nil {
 		return fmt.Errorf("create child stdout: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
+	defer stdout.Close()
+	cmd.Stdout = childOutput
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		_ = childOutput.Close()
+		return fmt.Errorf("create child stdin: %w", err)
+	}
+	err = cmd.Start()
+	_ = childOutput.Close()
+	if err != nil {
 		return fmt.Errorf("start furrow: %w", err)
 	}
 	done := make(chan error, 1)
-	go func() { _, err := io.Copy(conn, stdout); done <- err }()
+	go func() {
+		_, err := io.Copy(conn, stdout)
+		_ = stdout.Close()
+		done <- err
+	}()
 	_, copyErr := io.Copy(stdin, input)
 	_ = stdin.Close()
 	wait := make(chan error, 1)
